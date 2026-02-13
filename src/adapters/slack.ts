@@ -92,6 +92,12 @@ export function createSlackAdapter(
       return;
     }
 
+    // Ignore non-standard message events (edits, deletes, file shares, etc.)
+    if (msg.subtype) {
+      log.debug({ subtype: msg.subtype }, "ignoring message with subtype");
+      return;
+    }
+
     // Ignore messages without text
     const text = msg.text;
     if (!text) {
