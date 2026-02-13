@@ -97,6 +97,12 @@ personal-assistant/                    # App code (agent cannot modify)
 │   │   ├── process-registry.ts       # In-memory process tracking (30min TTL)
 │   │   └── types.ts                   # ProcessSession, ExecOptions
 │   │
+│   ├── session/
+│   │   ├── store.ts                   # JSONL transcript read/write
+│   │   ├── manager.ts                # Session lifecycle, key routing, history loading
+│   │   ├── compactor.ts              # History compaction when over threshold
+│   │   └── types.ts                   # Session, SessionMessage, SessionKey types
+│   │
 │   ├── tools/
 │   │   ├── memory-server.ts          # SDK MCP server: memory_search tool
 │   │   └── assistant-server.ts       # SDK MCP server: cron, exec, process tools
@@ -120,13 +126,17 @@ personal-assistant/                    # App code (agent cannot modify)
 │   ├── USER.md                        # User profile (seeded from template)
 │   ├── MEMORY.md                      # Long-term memory (seeded from template)
 │   ├── HEARTBEAT.md                   # Heartbeat instructions (seeded from template)
-│   ├── daily/                         # Daily session logs (YYYY-MM-DD.md)
+│   ├── daily/                         # Audit logs (YYYY-MM-DD.jsonl) - infinite, with tool calls
 │   └── .claude/
 │       └── skills/                    # Agent's skills
 │
 └── data/
     ├── memory.sqlite                  # SQLite-vec + FTS5 database
-    └── cron-jobs.json                # Persisted cron jobs
+    ├── cron-jobs.json                # Persisted cron jobs
+    └── sessions/                      # JSONL session transcripts (per session key)
+        ├── terminal--default.jsonl
+        ├── telegram--123456.jsonl
+        └── slack--C123--thread_ts.jsonl
 ```
 
 ## Security
@@ -175,8 +185,8 @@ systemPrompt: {
 ```
 Static content cached across turns by Anthropic API.
 
-### Daily Session Logs
-Each interaction appends to `workspace/daily/YYYY-MM-DD.md` with timestamp, source adapter, user message, and assistant response.
+### Daily Audit Logs
+Each interaction appends to `workspace/daily/YYYY-MM-DD.jsonl` with structured entries including timestamp, source adapter, session key, user message, assistant response, tool calls (name + input + result), and errors. Agent does NOT read these by default. See Session Management section for details.
 
 ### Hybrid Search (RAG)
 
@@ -217,6 +227,52 @@ interface Adapter {
 - One agent turn at a time - serialized processing
 - Messages exceeding limit get "Messages limit reached" error response
 - Router delivers response back to source adapter using source + sourceId
+
+## Session Management
+
+Multi-turn conversation persistence following OpenClaw's pattern. Each adapter/sender combination maintains its own session with full conversation history.
+
+### Session Keys
+Per-adapter, per-sender routing:
+- Terminal: `terminal--default`
+- Telegram: `telegram--{userId}`
+- Slack: `slack--{channelId}--{threadTs}`
+
+File-safe separators (`--`) used in session key and JSONL filenames.
+
+### Session Transcripts (JSONL)
+Each session key maps to a JSONL file in `~/.personal-assistant/data/sessions/`:
+- One JSON object per line: `{ role, content, timestamp, toolName?, error? }`
+- Roles: `user`, `assistant`, `tool_use`, `tool_result`
+- Append-only during session; rewritten only during compaction
+- Session loaded on each new agent turn; recent history injected into SDK
+
+### History Loading & Injection
+Fresh SDK `query()` call per turn (no SDK session resume):
+1. Load JSONL transcript for session key
+2. Sanitize: strip large tool result payloads (`details`), usage/cost metadata
+3. Truncate: keep last N messages (configurable `maxHistoryMessages`, default 100)
+4. Pass truncated history as `messages` to SDK `query()` or via `replaceMessages()`
+5. After agent turn completes, append all new messages (user + assistant + tool calls) to JSONL
+
+This follows OpenClaw's approach: manually manage sessions rather than relying on SDK resume.
+
+### History Compaction
+When transcript exceeds `maxHistoryMessages` threshold:
+- Keep last N messages intact
+- Archive full transcript as `.bak` before rewriting
+- Append compaction metadata entry: `{ type: "compaction", timestamp, messagesBefore, messagesAfter }`
+- Compaction runs automatically before loading history when threshold exceeded
+
+### Audit Logs (Daily)
+Infinite append-only logs at `workspace/daily/YYYY-MM-DD.jsonl`:
+- Every interaction: timestamp, source adapter, session key, user message, assistant response
+- Tool calls: tool name, input, output/result, duration
+- Errors: error message, stack trace, context
+- Agent does NOT read audit logs by default (not in system prompt, not indexed)
+- Purpose: debugging, tuning, audit trail for all agent activity
+
+Separate from session transcripts: audit logs are per-day across all sessions, transcripts are per-session across all days.
 
 ## Heartbeat, Cron & Async Exec
 
@@ -301,6 +357,10 @@ All in-process SDK MCP servers. Passed to SDK alongside user-configured external
     "model": null,
     "maxTurns": 200
   },
+  "session": {
+    "maxHistoryMessages": 100,
+    "compactionEnabled": true
+  },
   "memory": {
     "search": {
       "enabled": true,
@@ -320,9 +380,9 @@ Config loaded from app installation directory at startup. Not hot-reloaded.
 
 ## Entry Points
 
-**Terminal** (`npm run terminal`): loadConfig → ensureWorkspace → readline loop → query() → stream to stdout
+**Terminal** (`npm run terminal`): loadConfig → ensureWorkspace → readline loop → load session("terminal--default") → query() with history → stream to stdout → append to session + audit log
 
-**Daemon** (`npm run daemon`): loadConfig → ensureWorkspace → start queue → start adapters → start cron → start heartbeat → process messages → graceful shutdown on SIGTERM/SIGINT
+**Daemon** (`npm run daemon`): loadConfig → ensureWorkspace → start queue → start adapters → start cron → start heartbeat → process messages (load session per key → query() with history → route response → append to session + audit log) → graceful shutdown on SIGTERM/SIGINT
 
 ## Key Dependencies
 

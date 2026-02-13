@@ -1348,6 +1348,315 @@ git commit -m "test: integration tests for core pipeline"
 
 ---
 
+## Phase 10: Session Management
+
+### Task 33: Session Types & JSONL Store
+
+**Files:**
+- Create: `src/session/types.ts`
+- Create: `src/session/store.ts`
+- Create: `src/session/store.test.ts`
+
+**Step 1: Write failing tests for JSONL store**
+
+Test cases:
+- `appendMessage(sessionPath, message)` appends one JSON line to file
+- Creates file if missing
+- `loadTranscript(sessionPath)` reads all messages from JSONL
+- Returns empty array for non-existent file
+- Handles corrupt lines gracefully (skip, log warning)
+- Messages have: `role`, `content`, `timestamp`, optional `toolName`, `error`
+- `rewriteTranscript(sessionPath, messages)` atomically replaces file content (tmp + rename)
+- Creates `.bak` backup before rewrite
+
+**Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run src/session/store.test.ts`
+
+**Step 3: Implement types.ts and store.ts**
+
+```typescript
+// types.ts
+export interface SessionMessage {
+  role: "user" | "assistant" | "tool_use" | "tool_result";
+  content: string | ContentBlock[];
+  timestamp: string; // ISO-8601
+  toolName?: string;
+  error?: string;
+}
+
+export interface CompactionEntry {
+  type: "compaction";
+  timestamp: string;
+  messagesBefore: number;
+  messagesAfter: number;
+}
+
+export type TranscriptLine = SessionMessage | CompactionEntry;
+
+export function sessionKeyToPath(dataDir: string, sessionKey: string): string {
+  return path.join(dataDir, "sessions", `${sessionKey}.jsonl`);
+}
+```
+
+```typescript
+// store.ts
+export async function appendMessage(sessionPath: string, message: SessionMessage): Promise<void>
+export async function appendMessages(sessionPath: string, messages: SessionMessage[]): Promise<void>
+export async function loadTranscript(sessionPath: string): Promise<SessionMessage[]>
+export async function rewriteTranscript(sessionPath: string, messages: SessionMessage[]): Promise<void>
+```
+
+Atomic rewrite: write to `${path}.tmp`, rename over original. Backup to `${path}.bak` before rewrite.
+
+**Step 4: Run tests, verify pass**
+
+**Step 5: Commit**
+
+```bash
+git add src/session/types.ts src/session/store.ts src/session/store.test.ts
+git commit -m "feat: session JSONL transcript store"
+```
+
+---
+
+### Task 34: Session Manager
+
+**Files:**
+- Create: `src/session/manager.ts`
+- Create: `src/session/manager.test.ts`
+
+**Step 1: Write failing tests**
+
+Test cases:
+- `resolveSessionKey(source, sourceId, threadId?)` returns correct key format:
+  - Terminal: `terminal--default`
+  - Telegram: `telegram--{userId}`
+  - Slack: `slack--{channelId}--{threadTs}`
+- `loadHistory(sessionKey, config)` loads transcript and returns sanitized messages
+- Sanitizes: strips large `details` fields from tool results
+- Truncates: returns only last `maxHistoryMessages` messages
+- `saveInteraction(sessionKey, messages)` appends all messages from one agent turn
+- Handles non-existent session (returns empty history)
+- Creates sessions directory if missing
+
+**Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run src/session/manager.test.ts`
+
+**Step 3: Implement manager.ts**
+
+```typescript
+export function resolveSessionKey(source: string, sourceId: string, threadId?: string): string
+
+export async function loadHistory(
+  sessionKey: string,
+  config: Config
+): Promise<SessionMessage[]>
+
+export async function saveInteraction(
+  sessionKey: string,
+  messages: SessionMessage[],
+  config: Config
+): Promise<void>
+```
+
+`loadHistory` flow:
+1. Resolve session key to file path
+2. Load JSONL transcript
+3. Filter to `SessionMessage` entries (skip compaction entries)
+4. Sanitize: strip large tool result details
+5. Truncate to last `maxHistoryMessages`
+6. Return messages array ready for SDK injection
+
+**Step 4: Run tests, verify pass**
+
+**Step 5: Commit**
+
+```bash
+git add src/session/manager.ts src/session/manager.test.ts
+git commit -m "feat: session manager with history loading and key routing"
+```
+
+---
+
+### Task 35: History Compaction
+
+**Files:**
+- Create: `src/session/compactor.ts`
+- Create: `src/session/compactor.test.ts`
+
+**Step 1: Write failing tests**
+
+Test cases:
+- `compactIfNeeded(sessionPath, threshold)` does nothing when under threshold
+- Compacts when over threshold: keeps last `threshold` messages, removes older ones
+- Creates `.bak` archive before rewriting
+- Appends compaction metadata entry with `messagesBefore` and `messagesAfter`
+- `compactIfNeeded` returns `{ compacted: boolean, messagesBefore?: number, messagesAfter?: number }`
+- Preserves message order after compaction
+- Handles empty transcript (no-op)
+
+**Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run src/session/compactor.test.ts`
+
+**Step 3: Implement compactor.ts**
+
+```typescript
+export async function compactIfNeeded(
+  sessionPath: string,
+  threshold: number
+): Promise<{ compacted: boolean; messagesBefore?: number; messagesAfter?: number }>
+```
+
+Flow:
+1. Load transcript
+2. Count messages (excluding compaction entries)
+3. If under threshold, return `{ compacted: false }`
+4. Keep last `threshold` messages
+5. Archive full transcript as `.bak`
+6. Rewrite with kept messages + compaction metadata entry
+7. Return stats
+
+**Step 4: Run tests, verify pass**
+
+**Step 5: Commit**
+
+```bash
+git add src/session/compactor.ts src/session/compactor.test.ts
+git commit -m "feat: session history compaction"
+```
+
+---
+
+### Task 36: Audit Log (Enhanced Daily Log)
+
+**Files:**
+- Modify: `src/memory/daily-log.ts` (from Task 9)
+- Modify: `src/memory/daily-log.test.ts`
+
+**Step 1: Write failing tests for enhanced audit log**
+
+Test cases:
+- `appendAuditEntry(workspaceDir, entry)` creates `daily/YYYY-MM-DD.jsonl` if missing
+- Appends JSONL entry with: timestamp, source, sessionKey, type
+- Type `"interaction"`: userMessage, assistantResponse
+- Type `"tool_call"`: toolName, toolInput, toolResult, durationMs
+- Type `"error"`: errorMessage, stack, context
+- Multiple entries on same day go to same file
+- Next day creates new file
+- Format is JSONL (one JSON per line), NOT markdown
+
+**Step 2: Run tests to verify they fail**
+
+**Step 3: Implement enhanced daily-log.ts**
+
+```typescript
+export interface AuditEntry {
+  timestamp: string;
+  source: string;
+  sessionKey: string;
+  type: "interaction" | "tool_call" | "error";
+  // Interaction fields
+  userMessage?: string;
+  assistantResponse?: string;
+  // Tool call fields
+  toolName?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
+  durationMs?: number;
+  // Error fields
+  errorMessage?: string;
+  stack?: string;
+  context?: string;
+}
+
+export async function appendAuditEntry(workspaceDir: string, entry: AuditEntry): Promise<void>
+```
+
+**Step 4: Run tests, verify pass**
+
+**Step 5: Commit**
+
+```bash
+git add src/memory/daily-log.ts src/memory/daily-log.test.ts
+git commit -m "feat: JSONL audit log with tool calls and errors"
+```
+
+---
+
+### Task 37: Session Integration with Agent Runner
+
+**Files:**
+- Modify: `src/core/agent-runner.ts` (from Task 15)
+- Modify: `src/core/agent-runner.test.ts`
+
+**Step 1: Write failing tests for session-aware agent runner**
+
+Test cases:
+- `runAgentTurn(message, sessionKey, options, config)` loads history before query
+- Passes loaded history as messages to SDK query
+- After agent turn, saves all new messages to session transcript
+- After agent turn, appends audit entries (interaction + tool calls)
+- Calls compaction check after saving
+- Empty history (new session) works correctly
+- Agent runner returns response text + all messages for audit logging
+
+**Step 2: Run tests to verify they fail**
+
+**Step 3: Update agent-runner.ts**
+
+Update `runAgent` to accept session key and config, integrate with session manager:
+
+```typescript
+export async function runAgentTurn(
+  message: string,
+  sessionKey: string,
+  options: AgentOptions,
+  config: Config
+): Promise<AgentTurnResult> {
+  // 1. Load session history
+  const history = await loadHistory(sessionKey, config);
+
+  // 2. Run SDK query with history
+  const result = await query({
+    prompt: message,
+    options: { ...options, messages: history }
+  });
+
+  // 3. Collect all messages from this turn (user + assistant + tool calls)
+  const turnMessages = collectTurnMessages(message, result);
+
+  // 4. Save to session transcript
+  await saveInteraction(sessionKey, turnMessages, config);
+
+  // 5. Compact if needed
+  const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+  await compactIfNeeded(sessionPath, config.session.maxHistoryMessages);
+
+  // 6. Append audit entries
+  await appendAuditEntries(config.security.workspace, sessionKey, turnMessages);
+
+  return { response: extractResponse(result), messages: turnMessages };
+}
+```
+
+**Step 4: Run tests, verify pass**
+
+**Step 5: Update terminal.ts and daemon.ts to use session-aware agent runner**
+
+Terminal uses session key `terminal--default`. Daemon derives session key from `AdapterMessage.source` and `AdapterMessage.sourceId`.
+
+**Step 6: Commit**
+
+```bash
+git add src/core/agent-runner.ts src/core/agent-runner.test.ts src/terminal.ts src/daemon.ts
+git commit -m "feat: session-aware agent runner with history and audit logging"
+```
+
+---
+
 ## Task Dependency Graph
 
 ```
@@ -1358,11 +1667,11 @@ Phase 2: Security
   Task 2 → Task 5 (path validator) → Task 6 (command validation) → Task 7 (bash hook)
 
 Phase 3: Memory
-  Task 4 → Task 8 (file reader) → Task 9 (daily log)
+  Task 4 → Task 8 (file reader) → Task 9 (daily log/audit)
   Task 8 → Task 10 (embeddings) → Task 11 (vector store) → Task 12 (indexer) → Task 13 (hybrid search) → Task 14 (memory MCP server)
 
 Phase 4: Agent & Terminal
-  Task 7 + Task 8 + Task 14 → Task 15 (agent runner) → Task 16 (terminal)
+  Task 7 + Task 8 + Task 14 + Task 37 → Task 15 (agent runner) → Task 16 (terminal)
 
 Phase 5: Heartbeat
   Task 15 → Task 17 (system events) → Task 18 (prompts) → Task 19 (scheduler)
@@ -1380,7 +1689,14 @@ Phase 8: Daemon
 
 Phase 9: Polish
   Task 29 → Task 30 (templates) → Task 31 (README) → Task 32 (integration tests)
+
+Phase 10: Session Management (can run in parallel with Phases 2-3)
+  Task 2 → Task 33 (session store) → Task 34 (session manager) → Task 35 (compaction)
+  Task 9 → Task 36 (audit log enhancement) — updates daily-log to JSONL with tool calls
+  Task 34 + Task 36 → Task 37 (session integration) — updates agent runner, terminal, daemon
 ```
+
+**Note:** Phase 10 tasks should ideally be implemented **before** Phase 4 (Agent Runner), as the agent runner depends on session management (Task 37). The phase numbering reflects when they were added to the plan, not execution order.
 
 ## Parallel Execution Opportunities
 
@@ -1389,3 +1705,4 @@ These tasks can run in parallel within their phase:
 - Tasks 10, 9 (embeddings + daily log - independent)
 - Tasks 27, 28 (telegram + slack - independent)
 - Tasks 20-22, 23 (cron + exec - independent, share system events)
+- Tasks 33, 36 (session store + audit log - independent, both from Phase 10)
