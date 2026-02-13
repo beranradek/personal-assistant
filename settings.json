@@ -1,0 +1,62 @@
+{
+  "security": {
+    "allowedCommands": [
+      "ls", "cat", "grep", "head", "tail", "wc", "sort", "uniq", "find",
+      "echo", "pwd", "date", "whoami", "env", "which", "file", "stat",
+      "du", "df", "diff", "tr", "cut", "sed", "awk", "xargs",
+      "node", "npm", "npx", "git",
+      "curl", "wget", "tar", "gzip", "gunzip", "zip", "unzip", "jq",
+      "python", "python3", "pip", "pip3", "make",
+      "mkdir", "rmdir", "touch", "cp", "mv", "rm", "chmod", "ln", "tee",
+      "kill", "pkill"
+    ],
+    "commandsNeedingExtraValidation": ["rm", "rmdir", "kill", "chmod", "curl"],
+    "workspace": "~/.personal-assistant/workspace",
+    "dataDir": "~/.personal-assistant/data",
+    "additionalReadDirs": [],
+    "additionalWriteDirs": []
+  },
+  "adapters": {
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "allowedUserIds": [],
+      "mode": "polling"
+    },
+    "slack": {
+      "enabled": false,
+      "botToken": "",
+      "appToken": "",
+      "socketMode": true
+    }
+  },
+  "heartbeat": {
+    "enabled": true,
+    "intervalMinutes": 30,
+    "activeHours": "8-21",
+    "deliverTo": "last"
+  },
+  "gateway": {
+    "maxQueueSize": 20
+  },
+  "agent": {
+    "model": null,
+    "maxTurns": 200
+  },
+  "session": {
+    "maxHistoryMessages": 50,
+    "compactionEnabled": true
+  },
+  "memory": {
+    "search": {
+      "enabled": true,
+      "hybridWeights": { "vector": 0.7, "keyword": 0.3 },
+      "minScore": 0.35,
+      "maxResults": 6,
+      "chunkTokens": 400,
+      "chunkOverlap": 80
+    },
+    "extraPaths": []
+  },
+  "mcpServers": {}
+}
