@@ -1,0 +1,74 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+A secured, sandboxed personal assistant powered by the Claude Agent SDK for TypeScript. Two modes:
+- **Terminal mode** (`npm run terminal`): Interactive readline REPL
+- **Daemon mode** (`npm run daemon`): Headless service with Telegram/Slack adapters, heartbeat scheduler, and message queue
+
+Node.js 22+ required. Uses ESM (`"type": "module"`).
+
+## Commands
+
+```bash
+npm run terminal         # Run interactive terminal mode
+npm run daemon           # Run headless daemon mode
+npm run build            # TypeScript compilation (tsc → dist/)
+npm test                 # Run tests (vitest, watch mode)
+npm run test:coverage    # Run tests with coverage (70% threshold on statements/branches/functions/lines)
+npx vitest run src/path/to/file.test.ts   # Run a single test file
+```
+
+No linter is configured.
+
+## Architecture
+
+### Message Flow
+
+```
+Adapters (Telegram/Slack/Terminal) → Gateway Queue (FIFO, serial) → Agent Runner (SDK query()) → Router → Adapter.sendResponse()
+```
+
+Daemon mode initializes subsystems in order: config → workspace → memory system → MCP servers → agent options → queue/router → adapters → heartbeat → cron timer → processing loop.
+
+### Source Layout (`src/`)
+
+| Directory | Purpose |
+|-----------|---------|
+| `core/` | Config loading (Zod-validated `settings.json`), agent runner (SDK orchestration + session lifecycle), workspace bootstrap, logger (pino), central types |
+| `adapters/` | Telegram (grammy) and Slack (@slack/bolt socket mode) integrations implementing the `Adapter` interface |
+| `gateway/` | FIFO message queue with serial processing loop; router dispatches responses back to originating adapter |
+| `session/` | JSONL-based conversation persistence per session key (`source--sourceId[--threadId]`), auto-compaction |
+| `memory/` | Hybrid search: local embeddings (node-llama-cpp), vector store (sqlite-vec), file indexer with chunking, daily JSONL audit log |
+| `security/` | Three-layer defense: SDK sandbox + filesystem path validation + bash command allowlist hook (PreToolUse) |
+| `heartbeat/` | Periodic scheduler (node-cron within active hours), system event buffer, prompt generation |
+| `cron/` | User-created scheduled jobs: CRUD tool, node-cron timer, JSON file persistence |
+| `exec/` | Background process spawning with in-memory registry and completion events |
+| `tools/` | MCP servers: `memory-server` (memory_search tool) and `assistant-server` (cron, exec, process tools) |
+| `templates/` | Workspace seed files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md) with Czech variants in `cs/` |
+
+### Key Entry Points
+
+- `terminal.ts` — Terminal mode: readline REPL, `handleLine()` + `createTerminalSession()` exported for testing
+- `daemon.ts` — Daemon mode: `startDaemon()` orchestrates all subsystems, graceful shutdown on SIGTERM/SIGINT
+- `core/agent-runner.ts` — `buildAgentOptions()` constructs SDK options; `runAgentTurn()` runs a single conversation turn with session load/save/compact/audit
+
+### Design Patterns
+
+- **Factory functions** everywhere (`createMessageQueue()`, `createVectorStore()`, `createIndexer()`, etc.) with dependency injection through parameters
+- **All types in `core/types.ts`** — Zod schemas for config validation with inferred TypeScript types; interfaces for adapters, messages, search results, cron jobs, sessions, audit entries
+- **Tests co-located** with source files (`foo.ts` → `foo.test.ts`), plus `integration.test.ts` at src root
+- **Conditional main execution**: entry points check `process.env["VITEST"]` to skip `main()` during tests
+
+## Configuration
+
+`settings.json` in project root. Loaded once at startup (no hot-reload). Deep-merged over defaults, validated with Zod.
+
+Key sections: `security` (command allowlist, workspace/data paths, additional read/write dirs), `adapters` (telegram/slack), `heartbeat`, `gateway`, `agent` (model, maxTurns), `session` (maxHistoryMessages, compaction), `memory` (hybrid search weights/thresholds), `mcpServers`.
+
+## Runtime Directories
+
+- `~/.personal-assistant/workspace/` — Agent workspace (memory files, skills, daily logs)
+- `~/.personal-assistant/data/` — Sessions (JSONL), vector DB (sqlite), cron jobs (JSON)
