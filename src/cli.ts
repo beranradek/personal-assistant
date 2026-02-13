@@ -13,12 +13,11 @@
  *   pa --config <path> ...   Override settings.json location
  */
 
-import * as fs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import { resolveConfigDir, loadConfig, DEFAULTS } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
-import { createTerminalSession, handleLine } from "./terminal.js";
+import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
 import { createLogger } from "./core/logger.js";
 
@@ -63,14 +62,17 @@ Environment:
 async function runInit(configDir: string): Promise<void> {
   const settingsPath = path.join(configDir, "settings.json");
 
-  if (fs.existsSync(settingsPath)) {
+  try {
+    await fs.access(settingsPath);
     console.log(`Settings file already exists: ${settingsPath}`);
     console.log("Edit it to customize your configuration.");
     return;
+  } catch {
+    // File doesn't exist, continue
   }
 
-  fs.mkdirSync(configDir, { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(DEFAULTS, null, 2) + "\n");
+  await fs.mkdir(configDir, { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(DEFAULTS, null, 2) + "\n");
   console.log(`Created default settings: ${settingsPath}`);
   console.log("Edit this file to customize your configuration.");
 
@@ -81,41 +83,17 @@ async function runInit(configDir: string): Promise<void> {
 }
 
 async function runTerminal(configDir: string): Promise<void> {
-  const { config, agentOptions, sessionKey } =
-    await createTerminalSession(configDir);
-
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
-  rl.setPrompt("You> ");
-  rl.prompt();
-
-  rl.on("line", async (input) => {
-    const result = await handleLine(input, sessionKey, agentOptions, config);
-
-    if (result === null) {
-      rl.prompt();
-      return;
-    }
-
-    if (result.error) {
-      console.error("Error:", result.error);
-    } else {
-      console.log(`\nAssistant: ${result.response}\n`);
-    }
-
-    rl.prompt();
-  });
-
-  rl.on("close", () => {
-    log.info("Terminal session ended");
-    process.exit(0);
-  });
+  const session = await createTerminalSession(configDir);
+  runTerminalRepl(session);
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    printUsage();
+    process.exit(0);
+  }
+
   const command = parseCommand(process.argv);
 
   if (!command) {

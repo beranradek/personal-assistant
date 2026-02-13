@@ -107,13 +107,15 @@ export async function createTerminalSession(
 }
 
 // ---------------------------------------------------------------------------
-// Main entry point (readline loop)
+// REPL loop (reusable by cli.ts)
 // ---------------------------------------------------------------------------
 
-async function main() {
-  const configDir = new URL("..", import.meta.url).pathname;
-  const { config, agentOptions, sessionKey } =
-    await createTerminalSession(configDir);
+/**
+ * Run the interactive terminal REPL loop.
+ * Separated from main() so it can be reused by cli.ts.
+ */
+export function runTerminalRepl(session: TerminalSession): void {
+  const { config, agentOptions, sessionKey } = session;
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -145,6 +147,16 @@ async function main() {
     log.info("Terminal session ended");
     process.exit(0);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
+async function main() {
+  const configDir = new URL("..", import.meta.url).pathname;
+  const session = await createTerminalSession(configDir);
+  runTerminalRepl(session);
 }
 
 // Only run main() when this file is the entry point (not when imported in tests).

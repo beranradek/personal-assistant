@@ -32,5 +32,10 @@ describe("cli", () => {
       const result = parseCommand(["node", "cli.js", "--config", "/path/settings.json", "terminal"]);
       expect(result).toBe("terminal");
     });
+
+    it("does not treat --help as a subcommand", () => {
+      const result = parseCommand(["node", "cli.js", "--help"]);
+      expect(result).toBeNull();
+    });
   });
 });
