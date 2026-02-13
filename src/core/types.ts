@@ -232,11 +232,11 @@ export interface AuditEntry {
   /** Session key (e.g. "telegram--123456"). */
   sessionKey: string;
   /** Entry type discriminator. */
-  type: "user_message" | "assistant_message" | "tool_call" | "error" | "compaction";
-  /** User message text (for user_message type). */
+  type: "interaction" | "tool_call" | "error";
+  /** User message text (for interaction type). */
   userMessage?: string;
-  /** Assistant response text (for assistant_message type). */
-  assistantMessage?: string;
+  /** Assistant response text (for interaction type). */
+  assistantResponse?: string;
   /** Tool name (for tool_call type). */
   toolName?: string;
   /** Tool input (for tool_call type). */
@@ -248,9 +248,7 @@ export interface AuditEntry {
   /** Error message (for error type). */
   errorMessage?: string;
   /** Error stack trace (for error type). */
-  errorStack?: string;
-  /** Messages before compaction (for compaction type). */
-  messagesBefore?: number;
-  /** Messages after compaction (for compaction type). */
-  messagesAfter?: number;
+  stack?: string;
+  /** Additional error context (for error type). */
+  context?: string;
 }
