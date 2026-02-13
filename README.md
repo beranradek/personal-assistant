@@ -14,34 +14,32 @@ Runs as a standalone terminal or as a headless daemon with Telegram and Slack ad
 git clone <repo-url> personal-assistant
 cd personal-assistant
 npm install
+npm run build
+npm link
 ```
+
+This installs the `pa` command globally.
 
 ## Quick Start
 
-### Terminal Mode
-
-Interactive terminal for direct conversation:
-
 ```bash
-npm run terminal
+pa init                  # Create default config at ~/.personal-assistant/settings.json
+pa terminal              # Start interactive terminal mode
+pa daemon                # Start headless daemon mode
+pa --config <path> ...   # Use a custom settings.json location
 ```
 
-Type messages and get responses. Press `Ctrl+C` to exit.
+### Terminal Mode
+
+Interactive terminal for direct conversation. Type messages and get responses. Press `Ctrl+C` to exit.
 
 ### Daemon Mode
 
-Headless mode with adapters and heartbeats (periodic checking of reminders, processes, tasks to be completed etc.):
-
-```bash
-npm run daemon
-```
-
-The daemon starts enabled adapters (Telegram/Slack), the heartbeat scheduler, 
-and processes messages through a serialized queue.
+Headless mode with adapters and heartbeats (periodic checking of reminders, processes, tasks to be completed etc.). The daemon starts enabled adapters (Telegram/Slack), the heartbeat scheduler, and processes messages through a serialized queue.
 
 ## Configuration
 
-Edit `settings.json` in the project root. The file is loaded at startup and not hot-reloaded.
+Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it to customize your setup. The file is loaded at startup and not hot-reloaded. Override the location with `--config <path>` or the `PA_CONFIG` env var.
 
 ### Key Sections
 
@@ -156,9 +154,11 @@ The agent can create new skills when it discovers useful patterns.
 ## Development
 
 ```bash
+npm run terminal      # Run terminal mode directly (via tsx, no build needed)
+npm run daemon        # Run daemon mode directly (via tsx)
 npm test              # Run tests (vitest watch mode)
 npm run test:coverage # Run tests with coverage
-npm run build         # TypeScript compilation
+npm run build         # TypeScript compilation + template copy
 ```
 
 ## License

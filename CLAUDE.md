@@ -5,17 +5,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A secured, sandboxed personal assistant powered by the Claude Agent SDK for TypeScript. Two modes:
-- **Terminal mode** (`npm run terminal`): Interactive readline REPL
-- **Daemon mode** (`npm run daemon`): Headless service with Telegram/Slack adapters, heartbeat scheduler, and message queue
+- **Terminal mode** (`pa terminal`): Interactive readline REPL
+- **Daemon mode** (`pa daemon`): Headless service with Telegram/Slack adapters, heartbeat scheduler, and message queue
+
+Installable globally via `npm run build && npm link`, providing the `pa` CLI command.
 
 Node.js 22+ required. Uses ESM (`"type": "module"`).
 
 ## Commands
 
 ```bash
-npm run terminal         # Run interactive terminal mode
-npm run daemon           # Run headless daemon mode
-npm run build            # TypeScript compilation (tsc → dist/)
+# Global CLI (after npm run build && npm link)
+pa terminal              # Interactive terminal mode
+pa daemon                # Headless daemon mode
+pa init                  # Create default ~/.personal-assistant/settings.json
+pa --config <path> ...   # Override settings.json location
+
+# Development (from source)
+npm run terminal         # Run interactive terminal mode (via tsx)
+npm run daemon           # Run headless daemon mode (via tsx)
+npm run build            # TypeScript compilation (tsc → dist/) + template copy
 npm test                 # Run tests (vitest, watch mode)
 npm run test:coverage    # Run tests with coverage (70% threshold on statements/branches/functions/lines)
 npx vitest run src/path/to/file.test.ts   # Run a single test file
@@ -51,7 +60,8 @@ Daemon mode initializes subsystems in order: config → workspace → memory sys
 
 ### Key Entry Points
 
-- `terminal.ts` — Terminal mode: readline REPL, `handleLine()` + `createTerminalSession()` exported for testing
+- `cli.ts` — Global CLI entry point: parses `pa <command>` subcommands, resolves config directory
+- `terminal.ts` — Terminal mode: readline REPL, `handleLine()` + `createTerminalSession()` + `runTerminalRepl()` exported for testing/reuse
 - `daemon.ts` — Daemon mode: `startDaemon()` orchestrates all subsystems, graceful shutdown on SIGTERM/SIGINT
 - `core/agent-runner.ts` — `buildAgentOptions()` constructs SDK options; `runAgentTurn()` runs a single conversation turn with session load/save/compact/audit
 
@@ -64,7 +74,7 @@ Daemon mode initializes subsystems in order: config → workspace → memory sys
 
 ## Configuration
 
-`settings.json` in project root. Loaded once at startup (no hot-reload). Deep-merged over defaults, validated with Zod.
+`~/.personal-assistant/settings.json` (create with `pa init`). Loaded once at startup (no hot-reload). Deep-merged over defaults, validated with Zod. Override location with `--config <path>` or `PA_CONFIG` env var.
 
 Key sections: `security` (command allowlist, workspace/data paths, additional read/write dirs), `adapters` (telegram/slack), `heartbeat`, `gateway`, `agent` (model, maxTurns), `session` (maxHistoryMessages, compaction), `memory` (hybrid search weights/thresholds), `mcpServers`.
 
