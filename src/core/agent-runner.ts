@@ -25,6 +25,7 @@ import { compactIfNeeded } from "../session/compactor.js";
 import { sessionKeyToPath } from "../session/types.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { bashSecurityHook } from "../security/bash-hook.js";
+import { fileToolSecurityHook } from "../security/file-tool-hook.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +102,17 @@ export function buildAgentOptions(
               ) as any,
           ],
         },
+        ...["Read", "Write", "Edit", "Glob", "Grep"].map((toolName) => ({
+          matcher: toolName,
+          hooks: [
+            async (input: any, toolUseId: string | undefined) =>
+              fileToolSecurityHook(
+                input as any,
+                toolUseId,
+                { workspaceDir, config },
+              ) as any,
+          ],
+        })),
       ],
     },
     mcpServers,

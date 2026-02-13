@@ -235,8 +235,13 @@ describe("Integration: Config -> Workspace -> Memory Files -> Agent Options", ()
     expect(agentOptions.allowedTools).toContain("Bash");
     expect(agentOptions.allowedTools).toContain("Read");
     expect(agentOptions.allowedTools).toContain("mcp__memory__memory_search");
-    expect(agentOptions.hooks.PreToolUse).toHaveLength(1);
+    expect(agentOptions.hooks.PreToolUse).toHaveLength(6);
     expect(agentOptions.hooks.PreToolUse![0].matcher).toBe("Bash");
+    expect(agentOptions.hooks.PreToolUse![1].matcher).toBe("Read");
+    expect(agentOptions.hooks.PreToolUse![2].matcher).toBe("Write");
+    expect(agentOptions.hooks.PreToolUse![3].matcher).toBe("Edit");
+    expect(agentOptions.hooks.PreToolUse![4].matcher).toBe("Glob");
+    expect(agentOptions.hooks.PreToolUse![5].matcher).toBe("Grep");
   });
 
   it("workspace bootstrapping is idempotent (safe to call twice)", async () => {
@@ -429,7 +434,7 @@ describe("Integration: Security hook blocks dangerous commands in full pipeline"
 
     // The hook should be wired into PreToolUse
     const hooks = agentOptions.hooks.PreToolUse!;
-    expect(hooks).toHaveLength(1);
+    expect(hooks).toHaveLength(6);
     expect(hooks[0].matcher).toBe("Bash");
 
     // Invoke the hook directly
