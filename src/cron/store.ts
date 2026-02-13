@@ -1,6 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { z } from "zod";
 import { createLogger } from "../core/logger.js";
+import { CronJobSchema } from "./types.js";
 import type { CronJob } from "./types.js";
 
 const log = createLogger("cron-store");
@@ -30,9 +32,9 @@ export async function loadCronStore(filePath: string): Promise<CronJob[]> {
       log.warn({ filePath }, "Cron store file does not contain an array, returning empty");
       return [];
     }
-    return parsed as CronJob[];
-  } catch {
-    log.warn({ filePath }, "Corrupt cron store file, returning empty");
+    return z.array(CronJobSchema).parse(parsed);
+  } catch (err) {
+    log.warn({ filePath, err }, "Corrupt or invalid cron store file, returning empty");
     return [];
   }
 }

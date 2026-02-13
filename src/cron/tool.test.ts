@@ -120,6 +120,79 @@ describe("handleCronAction", () => {
       expect(result.success).toBe(false);
       expect(result.message).toMatch(/payload/i);
     });
+
+    it("returns error for invalid cron expression", async () => {
+      const result = await handleCronAction(
+        "add",
+        {
+          label: "Bad cron",
+          schedule: { type: "cron", expression: "not a cron expression" },
+          payload: { text: "Hi" },
+        },
+        deps,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/invalid cron expression/i);
+    });
+
+    it("returns error for invalid schedule type", async () => {
+      const result = await handleCronAction(
+        "add",
+        {
+          label: "Bad schedule",
+          schedule: { type: "bogus", expression: "wat" },
+          payload: { text: "Hi" },
+        },
+        deps,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/invalid/i);
+    });
+
+    it("returns error for empty payload text", async () => {
+      const result = await handleCronAction(
+        "add",
+        {
+          label: "Empty payload",
+          schedule: { type: "cron", expression: "0 9 * * *" },
+          payload: { text: "" },
+        },
+        deps,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/invalid payload/i);
+    });
+
+    it("validates oneshot schedule with ISO date", async () => {
+      const result = await handleCronAction(
+        "add",
+        {
+          label: "One-shot",
+          schedule: { type: "oneshot", iso: "2030-12-25T00:00:00.000Z" },
+          payload: { text: "Merry Christmas" },
+        },
+        deps,
+      );
+
+      expect(result.success).toBe(true);
+    });
+
+    it("validates interval schedule", async () => {
+      const result = await handleCronAction(
+        "add",
+        {
+          label: "Interval",
+          schedule: { type: "interval", everyMs: 60000 },
+          payload: { text: "Check" },
+        },
+        deps,
+      );
+
+      expect(result.success).toBe(true);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -225,6 +298,34 @@ describe("handleCronAction", () => {
 
       expect(result.success).toBe(false);
       expect(result.message).toMatch(/not found/i);
+    });
+
+    it("returns error for invalid cron expression on update", async () => {
+      const jobs = [makeJob({ id: "u-cron" })];
+      await saveCronStore(storePath, jobs);
+
+      const result = await handleCronAction(
+        "update",
+        { id: "u-cron", schedule: { type: "cron", expression: "bad bad bad" } },
+        deps,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/invalid cron expression/i);
+    });
+
+    it("returns error for invalid payload on update", async () => {
+      const jobs = [makeJob({ id: "u-payload" })];
+      await saveCronStore(storePath, jobs);
+
+      const result = await handleCronAction(
+        "update",
+        { id: "u-payload", payload: { text: "" } },
+        deps,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/invalid payload/i);
     });
   });
 

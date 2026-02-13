@@ -54,6 +54,7 @@ function makeConfig() {
   return {
     botToken: "xoxb-test-bot-token",
     appToken: "xapp-test-app-token",
+    allowedUserIds: ["U_USER_1", "U_USER_2"],
     socketMode: true,
   };
 }
@@ -135,6 +136,48 @@ describe("Slack Adapter", () => {
       createSlackAdapter(makeConfig(), onMessage);
 
       expect(mocks.appMessage).toHaveBeenCalledWith(expect.any(Function));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Allowed user IDs filtering
+  // -------------------------------------------------------------------------
+  describe("allowedUserIds filtering", () => {
+    it("throws if allowedUserIds is empty", () => {
+      const onMessage = vi.fn();
+      const config = { ...makeConfig(), allowedUserIds: [] as string[] };
+
+      expect(() => createSlackAdapter(config, onMessage)).toThrow(
+        /requires at least one allowed user ID/,
+      );
+    });
+
+    it("accepts messages from allowed user IDs", async () => {
+      const onMessage = vi.fn();
+      createSlackAdapter(makeConfig(), onMessage);
+
+      const handler = mocks.appMessage.mock.calls[0][0];
+      const event = makeSlackMessageEvent({ user: "U_USER_1", text: "Hello" });
+
+      await handler({ message: event, say: makeSayFn() });
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects messages from unauthorized user IDs", async () => {
+      const onMessage = vi.fn();
+      createSlackAdapter(makeConfig(), onMessage);
+
+      const handler = mocks.appMessage.mock.calls[0][0];
+      const event = makeSlackMessageEvent({ user: "U_UNAUTHORIZED", text: "Hello" });
+
+      await handler({ message: event, say: makeSayFn() });
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(mockLog.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "U_UNAUTHORIZED" }),
+        expect.stringContaining("unauthorized"),
+      );
     });
   });
 

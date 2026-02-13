@@ -360,6 +360,93 @@ describe("bashSecurityHook", () => {
   });
 
   // -------------------------------------------------------------------------
+  // chmod, curl, and wget path validation
+  // -------------------------------------------------------------------------
+
+  describe("chmod, curl, and wget path validation", () => {
+    let extendedConfig: Config;
+
+    beforeEach(() => {
+      extendedConfig = makeTestConfig(workspaceDir);
+      extendedConfig.security.allowedCommands = [
+        ...extendedConfig.security.allowedCommands,
+        "chmod",
+        "curl",
+        "wget",
+      ];
+    });
+
+    it("blocks chmod when path is outside workspace", async () => {
+      const result = await bashSecurityHook(
+        bashInput("chmod 755 /etc/passwd"),
+        "tool-40",
+        { workspaceDir, config: extendedConfig },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+      expect((result as { reason: string }).reason).toBeDefined();
+    });
+
+    it("allows chmod when path is within workspace", async () => {
+      const filePath = path.join(workspaceDir, "script.sh");
+
+      const result = await bashSecurityHook(
+        bashInput(`chmod 755 ${filePath}`),
+        "tool-41",
+        { workspaceDir, config: extendedConfig },
+      );
+
+      expect(result).toEqual({});
+    });
+
+    it("blocks curl -o when output path is outside workspace", async () => {
+      const result = await bashSecurityHook(
+        bashInput("curl -o /etc/malicious http://example.com"),
+        "tool-42",
+        { workspaceDir, config: extendedConfig },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+      expect((result as { reason: string }).reason).toBeDefined();
+    });
+
+    it("allows curl -o when output path is within workspace", async () => {
+      const filePath = path.join(workspaceDir, "file.txt");
+
+      const result = await bashSecurityHook(
+        bashInput(`curl -o ${filePath} http://example.com`),
+        "tool-43",
+        { workspaceDir, config: extendedConfig },
+      );
+
+      expect(result).toEqual({});
+    });
+
+    it("blocks wget -O when output path is outside workspace", async () => {
+      const result = await bashSecurityHook(
+        bashInput("wget -O /tmp/evil http://example.com"),
+        "tool-44",
+        { workspaceDir, config: extendedConfig },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+      expect((result as { reason: string }).reason).toBeDefined();
+    });
+
+    it("allows wget -O when output path is within workspace", async () => {
+      const filePath = path.join(workspaceDir, "download.txt");
+
+      const result = await bashSecurityHook(
+        bashInput(`wget -O ${filePath} http://example.com`),
+        "tool-45",
+        { workspaceDir, config: extendedConfig },
+      );
+
+      expect(result).toEqual({});
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Output redirection validates target path
   // -------------------------------------------------------------------------
 

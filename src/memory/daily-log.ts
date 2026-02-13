@@ -1,6 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { AuditEntrySchema } from "../core/types.js";
 import type { AuditEntry } from "../core/types.js";
+import { createLogger } from "../core/logger.js";
+
+const log = createLogger("daily-log");
 
 /**
  * Extract the YYYY-MM-DD date portion from an ISO-8601 timestamp.
@@ -59,7 +63,11 @@ export async function readAuditEntries(
 
   for (const line of lines) {
     if (line.trim()) {
-      entries.push(JSON.parse(line) as AuditEntry);
+      try {
+        entries.push(AuditEntrySchema.parse(JSON.parse(line)));
+      } catch {
+        log.warn({ line }, "Skipping invalid audit entry");
+      }
     }
   }
 

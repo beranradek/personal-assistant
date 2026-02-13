@@ -61,6 +61,12 @@ export function createTelegramAdapter(
   config: TelegramAdapterConfig,
   onMessage: (message: AdapterMessage) => void,
 ): Adapter {
+  if (config.allowedUserIds.length === 0) {
+    throw new Error(
+      "Telegram adapter requires at least one allowed user ID in allowedUserIds",
+    );
+  }
+
   const bot = new Bot(config.botToken);
 
   // Register message handler
@@ -74,8 +80,8 @@ export function createTelegramAdapter(
     const userId = msg.from?.id;
     const chatId = msg.chat?.id;
 
-    // Filter by allowed user IDs (empty list = allow all)
-    if (config.allowedUserIds.length > 0 && !config.allowedUserIds.includes(userId)) {
+    // Filter by allowed user IDs
+    if (!config.allowedUserIds.includes(userId)) {
       log.warn({ userId }, "unauthorized user, ignoring message");
       return;
     }

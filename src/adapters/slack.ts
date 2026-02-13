@@ -23,6 +23,7 @@ const log = createLogger("slack-adapter");
 export interface SlackAdapterConfig {
   botToken: string;
   appToken: string;
+  allowedUserIds: string[];
   socketMode: boolean;
 }
 
@@ -67,6 +68,12 @@ export function createSlackAdapter(
   config: SlackAdapterConfig,
   onMessage: (message: AdapterMessage) => void,
 ): Adapter {
+  if (config.allowedUserIds.length === 0) {
+    throw new Error(
+      "Slack adapter requires at least one allowed user ID in allowedUserIds",
+    );
+  }
+
   const app = new App({
     token: config.botToken,
     appToken: config.appToken,
@@ -89,6 +96,12 @@ export function createSlackAdapter(
     // Ignore bot messages (including our own)
     if (msg.bot_id) {
       log.debug({ bot_id: msg.bot_id }, "ignoring bot message");
+      return;
+    }
+
+    // Filter by allowed user IDs
+    if (msg.user && !config.allowedUserIds.includes(msg.user)) {
+      log.warn({ userId: msg.user }, "unauthorized user, ignoring message");
       return;
     }
 

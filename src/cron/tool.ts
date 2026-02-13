@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { CronJob, CronSchedule, CronPayload } from "./types.js";
+import { CronExpressionParser } from "cron-parser";
+import type { CronJob } from "./types.js";
+import { CronScheduleSchema, CronPayloadSchema } from "./types.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { armTimer, type CronTimerHandle } from "./timer.js";
 import { enqueueSystemEvent } from "../heartbeat/system-events.js";
@@ -13,6 +15,15 @@ export interface CronToolResult {
   success: boolean;
   message: string;
   data?: unknown;
+}
+
+function validateCronExpression(expression: string): { valid: boolean; reason?: string } {
+  try {
+    CronExpressionParser.parse(expression, { tz: "UTC" });
+    return { valid: true };
+  } catch {
+    return { valid: false, reason: `Invalid cron expression: "${expression}"` };
+  }
 }
 
 export async function handleCronAction(
@@ -54,11 +65,31 @@ async function handleAdd(
     return { success: false, message: "Missing required field: payload" };
   }
 
+  // Validate schedule with Zod schema
+  const scheduleResult = CronScheduleSchema.safeParse(schedule);
+  if (!scheduleResult.success) {
+    return { success: false, message: `Invalid schedule: ${scheduleResult.error.issues[0]?.message ?? "unknown error"}` };
+  }
+
+  // Validate cron expressions are parseable
+  if (scheduleResult.data.type === "cron") {
+    const cronResult = validateCronExpression(scheduleResult.data.expression);
+    if (!cronResult.valid) {
+      return { success: false, message: cronResult.reason! };
+    }
+  }
+
+  // Validate payload with Zod schema
+  const payloadResult = CronPayloadSchema.safeParse(payload);
+  if (!payloadResult.success) {
+    return { success: false, message: `Invalid payload: ${payloadResult.error.issues[0]?.message ?? "unknown error"}` };
+  }
+
   const job: CronJob = {
     id: randomUUID(),
     label: label.trim(),
-    schedule: schedule as CronSchedule,
-    payload: payload as CronPayload,
+    schedule: scheduleResult.data,
+    payload: payloadResult.data,
     createdAt: new Date().toISOString(),
     lastFiredAt: null,
     enabled: true,
@@ -98,10 +129,24 @@ async function handleUpdate(
     job.label = label;
   }
   if (schedule !== undefined && typeof schedule === "object" && schedule !== null) {
-    job.schedule = schedule as CronSchedule;
+    const scheduleResult = CronScheduleSchema.safeParse(schedule);
+    if (!scheduleResult.success) {
+      return { success: false, message: `Invalid schedule: ${scheduleResult.error.issues[0]?.message ?? "unknown error"}` };
+    }
+    if (scheduleResult.data.type === "cron") {
+      const cronResult = validateCronExpression(scheduleResult.data.expression);
+      if (!cronResult.valid) {
+        return { success: false, message: cronResult.reason! };
+      }
+    }
+    job.schedule = scheduleResult.data;
   }
   if (payload !== undefined && typeof payload === "object" && payload !== null) {
-    job.payload = payload as CronPayload;
+    const payloadResult = CronPayloadSchema.safeParse(payload);
+    if (!payloadResult.success) {
+      return { success: false, message: `Invalid payload: ${payloadResult.error.issues[0]?.message ?? "unknown error"}` };
+    }
+    job.payload = payloadResult.data;
   }
   if (typeof enabled === "boolean") {
     job.enabled = enabled;

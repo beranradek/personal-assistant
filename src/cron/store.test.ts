@@ -77,6 +77,15 @@ describe("cron store", () => {
       const result = await loadCronStore(storePath);
       expect(result).toEqual([]);
     });
+
+    it("returns empty for array with invalid job objects", async () => {
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      const invalidJobs = [{ id: "x", label: "Broken" }]; // missing required fields
+      await fs.writeFile(storePath, JSON.stringify(invalidJobs), "utf-8");
+
+      const result = await loadCronStore(storePath);
+      expect(result).toEqual([]);
+    });
   });
 
   // -----------------------------------------------------------------------

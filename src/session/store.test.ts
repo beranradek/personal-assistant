@@ -198,6 +198,21 @@ describe("session JSONL store", () => {
       expect(transcript).toHaveLength(2);
     });
 
+    it("skips structurally invalid JSON (valid JSON but wrong schema)", async () => {
+      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+      const validLine = JSON.stringify(makeMessage());
+      const invalidStructure = JSON.stringify({ foo: "bar", baz: 123 });
+      await fs.writeFile(
+        sessionPath,
+        validLine + "\n" + invalidStructure + "\n",
+        "utf-8",
+      );
+
+      const result = await loadTranscript(sessionPath);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual(makeMessage());
+    });
+
     it("loads compaction entries alongside regular messages", async () => {
       const msg = makeMessage({ content: "Hello" });
       const compaction: CompactionEntry = {

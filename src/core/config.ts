@@ -27,7 +27,7 @@ export const DEFAULTS: Config = {
   },
   adapters: {
     telegram: { enabled: false, botToken: "", allowedUserIds: [], mode: "polling" },
-    slack: { enabled: false, botToken: "", appToken: "", socketMode: true },
+    slack: { enabled: false, botToken: "", appToken: "", allowedUserIds: [], socketMode: true },
   },
   heartbeat: {
     enabled: true,

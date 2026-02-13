@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createLogger } from "../core/logger.js";
 import type { SessionMessage } from "../core/types.js";
+import { TranscriptLineSchema } from "./types.js";
 import type { TranscriptLine } from "./types.js";
 
 const log = createLogger("session-store");
@@ -90,7 +91,7 @@ export async function loadTranscript(
     if (trimmed === "") continue;
 
     try {
-      result.push(JSON.parse(trimmed) as TranscriptLine);
+      result.push(TranscriptLineSchema.parse(JSON.parse(trimmed)));
     } catch {
       log.warn({ line: trimmed }, "Skipping corrupt transcript line");
     }

@@ -245,6 +245,28 @@ describe("daily audit log", () => {
       expect(entries).toEqual([]);
     });
 
+    it("skips structurally invalid audit entries", async () => {
+      const dailyDir = path.join(tmpDir, "daily");
+      await fs.mkdir(dailyDir, { recursive: true });
+      const validEntry = JSON.stringify({
+        timestamp: "2025-06-15T10:00:00.000Z",
+        source: "terminal",
+        sessionKey: "terminal--default",
+        type: "interaction",
+        userMessage: "Hello",
+      });
+      const invalidEntry = JSON.stringify({ foo: "bar" });
+      await fs.writeFile(
+        path.join(dailyDir, "2025-06-15.jsonl"),
+        validEntry + "\n" + invalidEntry + "\n",
+        "utf-8",
+      );
+
+      const entries = await readAuditEntries(tmpDir, "2025-06-15");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].source).toBe("terminal");
+    });
+
     it("reads all entries from a JSONL file for the given date", async () => {
       const entry1: AuditEntry = {
         timestamp: "2025-06-15T10:00:00.000Z",

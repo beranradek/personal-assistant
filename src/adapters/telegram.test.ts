@@ -160,17 +160,13 @@ describe("Telegram Adapter", () => {
       );
     });
 
-    it("accepts all users when allowedUserIds is empty", async () => {
+    it("throws if allowedUserIds is empty", () => {
       const onMessage = vi.fn();
-      const config = { ...makeConfig(), allowedUserIds: [] };
-      createTelegramAdapter(config, onMessage);
+      const config = { ...makeConfig(), allowedUserIds: [] as number[] };
 
-      const handler = mocks.botOn.mock.calls[0][1];
-      const ctx = makeMockContext({ userId: 999, text: "Hello" });
-
-      await handler(ctx);
-
-      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(() => createTelegramAdapter(config, onMessage)).toThrow(
+        /requires at least one allowed user ID/,
+      );
     });
   });
 
