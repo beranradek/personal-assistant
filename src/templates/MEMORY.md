@@ -1,7 +1,19 @@
-# Memory
+# Long-Term Memory
 
-Store important facts, decisions, and context here.
-The assistant will index this file and use it for future reference.
+This file is indexed for semantic search. Store important facts, decisions, and lessons learned here. The assistant will search this file (and any files in `memory/`) to provide contextual responses.
+
+## Decisions
+
+<!-- Record important decisions and their reasoning. -->
+
+## Preferences
+
+<!-- Things the user likes/dislikes that come up in conversation. -->
+
+## Lessons Learned
+
+<!-- Patterns, solutions, and insights worth remembering. -->
 
 ## Notes
-<!-- Add entries below as things come up -->
+
+<!-- Anything else worth keeping for future reference. -->
