@@ -24,6 +24,7 @@ export const SlackConfigSchema = z.object({
   enabled: z.boolean(),
   botToken: z.string(),
   appToken: z.string(),
+  allowedUserIds: z.array(z.string()),
   socketMode: z.boolean(),
 });
 
@@ -151,35 +152,37 @@ export interface SystemEvent {
 // Cron types
 // ---------------------------------------------------------------------------
 
+/** Zod schema for cron schedule types. */
+export const CronScheduleSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("cron"), expression: z.string().min(1) }),
+  z.object({ type: z.literal("oneshot"), iso: z.string().min(1) }),
+  z.object({ type: z.literal("interval"), everyMs: z.number().int().positive() }),
+]);
+
 /** Supported schedule types for a cron job. */
-export type CronSchedule =
-  | { type: "cron"; expression: string }
-  | { type: "oneshot"; iso: string }
-  | { type: "interval"; everyMs: number };
+export type CronSchedule = z.infer<typeof CronScheduleSchema>;
+
+/** Zod schema for cron payload. */
+export const CronPayloadSchema = z.object({
+  text: z.string().min(1),
+});
 
 /** Payload delivered when a cron job fires. */
-export interface CronPayload {
-  /** The text/instruction the agent associated with this job. */
-  text: string;
-}
+export type CronPayload = z.infer<typeof CronPayloadSchema>;
+
+/** Zod schema for a persisted cron job. */
+export const CronJobSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  schedule: CronScheduleSchema,
+  payload: CronPayloadSchema,
+  createdAt: z.string(),
+  lastFiredAt: z.string().nullable(),
+  enabled: z.boolean(),
+});
 
 /** A persisted cron job (stored in cron-jobs.json). */
-export interface CronJob {
-  /** Unique job identifier. */
-  id: string;
-  /** Human-readable label for the job. */
-  label: string;
-  /** When to fire. */
-  schedule: CronSchedule;
-  /** What to deliver on fire. */
-  payload: CronPayload;
-  /** ISO-8601 timestamp of creation. */
-  createdAt: string;
-  /** ISO-8601 timestamp of last fire, or null. */
-  lastFiredAt: string | null;
-  /** Whether the job is active. */
-  enabled: boolean;
-}
+export type CronJob = z.infer<typeof CronJobSchema>;
 
 // ---------------------------------------------------------------------------
 // Exec / process types
@@ -205,50 +208,38 @@ export interface ProcessSession {
 // Session types
 // ---------------------------------------------------------------------------
 
+/** Zod schema for a session message. */
+export const SessionMessageSchema = z.object({
+  role: z.enum(["user", "assistant", "tool_use", "tool_result"]),
+  content: z.string(),
+  timestamp: z.string(),
+  toolName: z.string().optional(),
+  error: z.string().optional(),
+});
+
 /** A single message in a session transcript (JSONL). */
-export interface SessionMessage {
-  /** Message role in the conversation. */
-  role: "user" | "assistant" | "tool_use" | "tool_result";
-  /** Text content of the message. */
-  content: string;
-  /** ISO-8601 timestamp. */
-  timestamp: string;
-  /** Tool name (for tool_use / tool_result roles). */
-  toolName?: string;
-  /** Error information if the tool call failed. */
-  error?: string;
-}
+export type SessionMessage = z.infer<typeof SessionMessageSchema>;
 
 // ---------------------------------------------------------------------------
 // Audit log types
 // ---------------------------------------------------------------------------
 
+/** Zod schema for an audit log entry. */
+export const AuditEntrySchema = z.object({
+  timestamp: z.string(),
+  source: z.string(),
+  sessionKey: z.string(),
+  type: z.enum(["interaction", "tool_call", "error"]),
+  userMessage: z.string().optional(),
+  assistantResponse: z.string().optional(),
+  toolName: z.string().optional(),
+  toolInput: z.unknown().optional(),
+  toolResult: z.unknown().optional(),
+  durationMs: z.number().optional(),
+  errorMessage: z.string().optional(),
+  stack: z.string().optional(),
+  context: z.string().optional(),
+});
+
 /** A single entry in the daily audit log (JSONL). */
-export interface AuditEntry {
-  /** ISO-8601 timestamp. */
-  timestamp: string;
-  /** Which adapter produced the interaction. */
-  source: string;
-  /** Session key (e.g. "telegram--123456"). */
-  sessionKey: string;
-  /** Entry type discriminator. */
-  type: "interaction" | "tool_call" | "error";
-  /** User message text (for interaction type). */
-  userMessage?: string;
-  /** Assistant response text (for interaction type). */
-  assistantResponse?: string;
-  /** Tool name (for tool_call type). */
-  toolName?: string;
-  /** Tool input (for tool_call type). */
-  toolInput?: unknown;
-  /** Tool result (for tool_call type). */
-  toolResult?: unknown;
-  /** Tool call duration in ms (for tool_call type). */
-  durationMs?: number;
-  /** Error message (for error type). */
-  errorMessage?: string;
-  /** Error stack trace (for error type). */
-  stack?: string;
-  /** Additional error context (for error type). */
-  context?: string;
-}
+export type AuditEntry = z.infer<typeof AuditEntrySchema>;

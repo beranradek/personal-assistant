@@ -109,14 +109,18 @@ export function createMessageQueue(config: Config): MessageQueue {
           config,
         );
 
-        // Route the response back to the source adapter
-        const response: AdapterMessage = {
-          source: message.source,
-          sourceId: message.sourceId,
-          text: result.response,
-          metadata: message.metadata,
-        };
-        await router.route(response);
+        // Route the response back to the source adapter (skip if empty)
+        if (result.response.trim()) {
+          const response: AdapterMessage = {
+            source: message.source,
+            sourceId: message.sourceId,
+            text: result.response,
+            metadata: message.metadata,
+          };
+          await router.route(response);
+        } else {
+          log.warn({ source: message.source, sessionKey }, "agent returned empty response, skipping");
+        }
       } catch (err) {
         log.error({ err, source: message.source }, "failed to process message");
 

@@ -124,6 +124,10 @@ export function createTelegramAdapter(
         log.error({ sourceId: message.sourceId }, "invalid chat ID");
         return;
       }
+      if (!message.text.trim()) {
+        log.warn({ chatId }, "skipping empty message");
+        return;
+      }
       const chunks = chunkText(message.text, TELEGRAM_MAX_MESSAGE_LENGTH);
 
       for (const chunk of chunks) {
