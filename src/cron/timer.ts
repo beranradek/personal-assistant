@@ -1,5 +1,11 @@
 import { CronExpressionParser } from "cron-parser";
+import { createLogger } from "../core/logger.js";
 import type { CronJob } from "./types.js";
+
+const log = createLogger("cron-timer");
+
+/** Max safe setTimeout delay (~24.8 days). Values above this overflow to 1ms in Node. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
  * Calculate the next fire time for a cron job.
@@ -66,11 +72,14 @@ export function armTimer(
     return { disarm() {} };
   }
 
-  const delay = Math.max(0, earliest.runAt.getTime() - Date.now());
+  const rawDelay = Math.max(0, earliest.runAt.getTime() - Date.now());
+  const delay = Math.min(rawDelay, MAX_TIMEOUT_MS);
   const { job } = earliest;
 
   const timer = setTimeout(() => {
-    Promise.resolve(onFire(job)).catch(() => {});
+    Promise.resolve(onFire(job)).catch((err) => {
+      log.error({ err, jobId: job.id, label: job.label }, "Cron job onFire callback failed");
+    });
   }, delay);
 
   return {

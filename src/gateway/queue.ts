@@ -119,6 +119,19 @@ export function createMessageQueue(config: Config): MessageQueue {
         await router.route(response);
       } catch (err) {
         log.error({ err, source: message.source }, "failed to process message");
+
+        // Notify the user that something went wrong
+        try {
+          const errorResponse: AdapterMessage = {
+            source: message.source,
+            sourceId: message.sourceId,
+            text: "Sorry, something went wrong while processing your message. Please try again.",
+            metadata: message.metadata,
+          };
+          await router.route(errorResponse);
+        } catch (routeErr) {
+          log.error({ err: routeErr }, "failed to send error response");
+        }
       }
 
       return true;

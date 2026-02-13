@@ -322,10 +322,12 @@ describe("MessageQueue", () => {
   // Error handling
   // -------------------------------------------------------------------------
   describe("error handling", () => {
-    it("logs error and continues when runAgentTurn throws", async () => {
+    it("logs error and sends error response when runAgentTurn throws", async () => {
       const config = makeConfig();
       const agentOptions = makeAgentOptions();
       const router = createRouter();
+      const adapter = makeAdapter("telegram");
+      router.register(adapter);
 
       vi.mocked(runAgentTurn).mockRejectedValue(new Error("agent failure"));
 
@@ -338,6 +340,14 @@ describe("MessageQueue", () => {
       expect(mockLog.error).toHaveBeenCalledWith(
         expect.objectContaining({ err: expect.any(Error) }),
         expect.stringContaining("failed to process"),
+      );
+      // Should have sent an error response to the user
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "123456",
+          text: expect.stringContaining("something went wrong"),
+        }),
       );
     });
   });

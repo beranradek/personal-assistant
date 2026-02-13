@@ -64,7 +64,7 @@ export function createAssistantServer(deps: AssistantServerDeps) {
             .enum(["add", "list", "update", "remove"])
             .describe("Action to perform"),
           params: z
-            .record(z.unknown())
+            .record(z.string(), z.unknown())
             .optional()
             .describe(
               "Action parameters (label, schedule, payload, id, enabled)",

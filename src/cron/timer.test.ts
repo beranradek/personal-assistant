@@ -1,4 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../core/logger.js", () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    debug: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+  }),
+}));
+
 import type { CronJob } from "./types.js";
 import { nextRunAt, armTimer } from "./timer.js";
 
@@ -209,5 +219,38 @@ describe("armTimer", () => {
 
     // Disarm should be safe on no-op handle
     expect(() => handle.disarm()).not.toThrow();
+  });
+
+  it("clamps very large delay to avoid setTimeout overflow", () => {
+    // Set a job 30 days from now (exceeds 2^31-1 ms)
+    const farFuture = new Date("2025-07-15T08:00:00.000Z"); // 30 days from now
+    const job = makeJob({
+      schedule: { type: "oneshot", iso: farFuture.toISOString() },
+    });
+
+    const onFire = vi.fn();
+    const handle = armTimer([job], onFire);
+
+    // Should not throw or fire immediately (the delay is clamped, not overflowed)
+    expect(onFire).not.toHaveBeenCalled();
+
+    handle.disarm();
+  });
+
+  it("catches and logs onFire errors instead of swallowing", async () => {
+    const job = makeJob({
+      schedule: { type: "oneshot", iso: "2025-06-15T08:01:00.000Z" },
+    });
+
+    const onFire = vi.fn().mockRejectedValue(new Error("fire failed"));
+    armTimer([job], onFire);
+
+    vi.advanceTimersByTime(60 * 1000);
+
+    // Flush microtasks so the .catch handler runs
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onFire).toHaveBeenCalledTimes(1);
+    // Error is logged, not swallowed — no unhandled rejection
   });
 });

@@ -81,7 +81,9 @@ export async function startDaemon(appDir: string): Promise<void> {
   const memoryServer = createMemoryServer({
     search: async (query: string, maxResults?: number) =>
       hybridSearch(query, store, embedder, {
-        ...config.memory.search,
+        vectorWeight: config.memory.search.hybridWeights.vector,
+        keywordWeight: config.memory.search.hybridWeights.keyword,
+        minScore: config.memory.search.minScore,
         maxResults: maxResults ?? config.memory.search.maxResults,
       }),
   });
@@ -160,8 +162,23 @@ export async function startDaemon(appDir: string): Promise<void> {
   log.info("Daemon started");
 
   // 11. Graceful shutdown
+  const SHUTDOWN_TIMEOUT_MS = 10_000;
+  let shuttingDown = false;
+
   const shutdown = async () => {
+    if (shuttingDown) {
+      log.warn("Shutdown already in progress, ignoring duplicate signal");
+      return;
+    }
+    shuttingDown = true;
     log.info("Shutting down daemon...");
+
+    // Force exit if graceful shutdown takes too long
+    const forceTimer = setTimeout(() => {
+      log.error("Graceful shutdown timed out, forcing exit");
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceTimer.unref();
 
     // Stop the queue processing loop (waits for current turn to finish)
     queue.stop();
@@ -185,12 +202,18 @@ export async function startDaemon(appDir: string): Promise<void> {
     store.close();
     await embedder.close();
 
+    clearTimeout(forceTimer);
     log.info("Daemon shut down cleanly");
     process.exit(0);
   };
 
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
+
+  // Catch unhandled rejections to prevent silent crashes
+  process.on("unhandledRejection", (reason) => {
+    log.error({ err: reason }, "Unhandled promise rejection");
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,12 @@ export function parseActiveHours(spec: string): { start: number; end: number } {
 export function isWithinActiveHours(spec: string, now?: Date): boolean {
   const { start, end } = parseActiveHours(spec);
   const hour = (now ?? new Date()).getHours();
-  return hour >= start && hour < end;
+  if (start <= end) {
+    // Normal range: e.g. "8-21"
+    return hour >= start && hour < end;
+  }
+  // Overnight range: e.g. "22-6" means 22,23,0,1,2,3,4,5
+  return hour >= start || hour < end;
 }
 
 export interface HeartbeatScheduler {

@@ -6,6 +6,32 @@ import type { TranscriptLine } from "./types.js";
 
 const log = createLogger("session-store");
 
+// ---------------------------------------------------------------------------
+// Per-path write lock to prevent concurrent file corruption
+// ---------------------------------------------------------------------------
+
+const locks = new Map<string, Promise<void>>();
+
+async function withLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = locks.get(filePath) ?? Promise.resolve();
+  let release: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  locks.set(filePath, next);
+
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release!();
+    // Clean up if we're the last in line
+    if (locks.get(filePath) === next) {
+      locks.delete(filePath);
+    }
+  }
+}
+
 /**
  * Append a single message to a session JSONL file.
  * Creates parent directories and the file if they don't exist.
@@ -14,8 +40,10 @@ export async function appendMessage(
   sessionPath: string,
   message: SessionMessage,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-  await fs.appendFile(sessionPath, JSON.stringify(message) + "\n", "utf-8");
+  return withLock(sessionPath, async () => {
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.appendFile(sessionPath, JSON.stringify(message) + "\n", "utf-8");
+  });
 }
 
 /**
@@ -28,9 +56,11 @@ export async function appendMessages(
   messages: SessionMessage[],
 ): Promise<void> {
   if (messages.length === 0) return;
-  await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-  const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-  await fs.appendFile(sessionPath, data, "utf-8");
+  return withLock(sessionPath, async () => {
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+    await fs.appendFile(sessionPath, data, "utf-8");
+  });
 }
 
 /**
@@ -80,23 +110,25 @@ export async function rewriteTranscript(
   sessionPath: string,
   lines: TranscriptLine[],
 ): Promise<void> {
-  await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+  return withLock(sessionPath, async () => {
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
 
-  // Step 1: backup existing file if it exists
-  try {
-    await fs.copyFile(sessionPath, sessionPath + ".bak");
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
+    // Step 1: backup existing file if it exists
+    try {
+      await fs.copyFile(sessionPath, sessionPath + ".bak");
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+      // No existing file to backup — that's fine
     }
-    // No existing file to backup — that's fine
-  }
 
-  // Step 2: write to tmp file
-  const tmpPath = sessionPath + ".tmp";
-  const data = lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
-  await fs.writeFile(tmpPath, data, "utf-8");
+    // Step 2: write to tmp file
+    const tmpPath = sessionPath + ".tmp";
+    const data = lines.map((l) => JSON.stringify(l)).join("\n") + "\n";
+    await fs.writeFile(tmpPath, data, "utf-8");
 
-  // Step 3: atomic rename
-  await fs.rename(tmpPath, sessionPath);
+    // Step 3: atomic rename
+    await fs.rename(tmpPath, sessionPath);
+  });
 }

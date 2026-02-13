@@ -7,8 +7,18 @@ import {
 import { validatePath } from "../security/path-validator.js";
 import { enqueueSystemEvent } from "../heartbeat/system-events.js";
 import { addSession, getSession, markExited } from "./process-registry.js";
+import { createLogger } from "../core/logger.js";
 import type { Config } from "../core/types.js";
 import type { ExecOptions, ExecResult } from "./types.js";
+
+const log = createLogger("exec");
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Maximum combined stdout+stderr buffer size (1 MB). */
+const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // handleExec
@@ -71,10 +81,19 @@ export async function handleExec(
   const pid = child.pid ?? 0;
 
   let output = "";
+  let outputCapped = false;
 
-  child.stdout?.on("data", (data: Buffer) => {
-    output += data.toString();
-    // Also update process registry if session exists
+  const appendOutput = (data: Buffer) => {
+    if (outputCapped) return;
+    const chunk = data.toString();
+    if (output.length + chunk.length > MAX_OUTPUT_BYTES) {
+      output += chunk.slice(0, MAX_OUTPUT_BYTES - output.length);
+      output += "\n... [output truncated at 1 MB]";
+      outputCapped = true;
+      log.warn({ command, pid }, "Output exceeded 1 MB, truncating");
+    } else {
+      output += chunk;
+    }
     const sessionId = (child as any).__sessionId as string | undefined;
     if (sessionId) {
       const session = getSession(sessionId);
@@ -82,18 +101,10 @@ export async function handleExec(
         session.output = output;
       }
     }
-  });
+  };
 
-  child.stderr?.on("data", (data: Buffer) => {
-    output += data.toString();
-    const sessionId = (child as any).__sessionId as string | undefined;
-    if (sessionId) {
-      const session = getSession(sessionId);
-      if (session) {
-        session.output = output;
-      }
-    }
-  });
+  child.stdout?.on("data", appendOutput);
+  child.stderr?.on("data", appendOutput);
 
   // ---- Step 6: Background mode ----
 

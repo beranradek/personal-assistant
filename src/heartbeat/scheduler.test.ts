@@ -100,6 +100,32 @@ describe("heartbeat scheduler", () => {
       expect(isWithinActiveHours("8-21", late)).toBe(false);
     });
 
+    // Overnight range tests
+    it("returns true at night for overnight range '22-6'", () => {
+      const lateNight = new Date(2026, 0, 15, 23, 0, 0);
+      expect(isWithinActiveHours("22-6", lateNight)).toBe(true);
+    });
+
+    it("returns true at start boundary for overnight range '22-6'", () => {
+      const start = new Date(2026, 0, 15, 22, 0, 0);
+      expect(isWithinActiveHours("22-6", start)).toBe(true);
+    });
+
+    it("returns true early morning for overnight range '22-6'", () => {
+      const earlyMorning = new Date(2026, 0, 15, 3, 0, 0);
+      expect(isWithinActiveHours("22-6", earlyMorning)).toBe(true);
+    });
+
+    it("returns false at end boundary for overnight range '22-6'", () => {
+      const endBoundary = new Date(2026, 0, 15, 6, 0, 0);
+      expect(isWithinActiveHours("22-6", endBoundary)).toBe(false);
+    });
+
+    it("returns false during daytime for overnight range '22-6'", () => {
+      const noon = new Date(2026, 0, 15, 12, 0, 0);
+      expect(isWithinActiveHours("22-6", noon)).toBe(false);
+    });
+
     it("uses current time when no date is provided", () => {
       // Set fake time to 10:00 (within 8-21)
       vi.setSystemTime(new Date(2026, 0, 15, 10, 0, 0));
