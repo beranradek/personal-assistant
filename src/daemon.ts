@@ -20,6 +20,7 @@
  */
 
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
@@ -225,8 +226,14 @@ async function main() {
   await startDaemon(configDir);
 }
 
-// Only run main() when this file is the entry point (not when imported in tests).
-if (!process.env["VITEST"]) {
+// Only run main() when this file is the direct entry point (not when imported).
+const __filename = fileURLToPath(import.meta.url);
+const isDirectEntry =
+  !process.env["VITEST"] &&
+  process.argv[1] &&
+  __filename === path.resolve(process.argv[1]);
+
+if (isDirectEntry) {
   main().catch((err) => {
     log.error({ err }, "Fatal error");
     console.error("Fatal:", err);
