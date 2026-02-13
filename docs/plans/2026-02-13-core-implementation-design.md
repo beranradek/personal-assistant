@@ -251,7 +251,7 @@ Each session key maps to a JSONL file in `~/.personal-assistant/data/sessions/`:
 Fresh SDK `query()` call per turn (no SDK session resume):
 1. Load JSONL transcript for session key
 2. Sanitize: strip large tool result payloads (`details`), usage/cost metadata
-3. Truncate: keep last N messages (configurable `maxHistoryMessages`, default 100)
+3. Truncate: keep last N messages (configurable `maxHistoryMessages`, default 50)
 4. Pass truncated history as `messages` to SDK `query()` or via `replaceMessages()`
 5. After agent turn completes, append all new messages (user + assistant + tool calls) to JSONL
 
@@ -358,7 +358,7 @@ All in-process SDK MCP servers. Passed to SDK alongside user-configured external
     "maxTurns": 200
   },
   "session": {
-    "maxHistoryMessages": 100,
+    "maxHistoryMessages": 50,
     "compactionEnabled": true
   },
   "memory": {
