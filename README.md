@@ -1,6 +1,7 @@
 # Personal Assistant
 
-A secure, sandboxed personal assistant powered by the Claude Agent SDK for TypeScript. Runs as a standalone terminal REPL or as a headless daemon with Telegram and Slack adapters.
+A secured, sandboxed personal assistant powered by the Claude Agent SDK for TypeScript. 
+Runs as a standalone terminal or as a headless daemon with Telegram and Slack adapters.
 
 ## Prerequisites
 
@@ -19,7 +20,7 @@ npm install
 
 ### Terminal Mode
 
-Interactive REPL for direct conversation:
+Interactive terminal for direct conversation:
 
 ```bash
 npm run terminal
@@ -29,13 +30,14 @@ Type messages and get responses. Press `Ctrl+C` to exit.
 
 ### Daemon Mode
 
-Headless mode with adapters and heartbeat:
+Headless mode with adapters and heartbeats (periodic checking of reminders, processes, tasks to be completed etc.):
 
 ```bash
 npm run daemon
 ```
 
-The daemon starts enabled adapters (Telegram/Slack), the heartbeat scheduler, and processes messages through a serialized queue.
+The daemon starts enabled adapters (Telegram/Slack), the heartbeat scheduler, 
+and processes messages through a serialized queue.
 
 ## Configuration
 
@@ -128,7 +130,7 @@ Three layers of defense:
 
 1. **SDK Sandbox** - Claude Agent SDK sandbox mode restricts the agent's environment
 2. **Filesystem Permissions** - Agent restricted to workspace directory, with configurable additional read/write directories
-3. **Bash Command Hook** - Every shell command is validated against the allowlist in `settings.json`, with path validation ensuring all file operations stay within allowed directories
+3. **Bash Command Hook** - Every shell command is validated against the allowlist in `settings.json`, with path validation ensuring all file operations stay within the allowed directories
 
 The agent cannot modify its own source code or configuration.
 
@@ -147,7 +149,9 @@ Plus standard Claude Code tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, 
 
 ## Skills
 
-The agent can create and use `.claude/skills/` in its workspace. Skills are markdown files that describe reusable workflows. The agent can create new skills when it discovers useful patterns.
+The agent can create and use `.claude/skills/` in its workspace.
+Skills are markdown files that describe reusable workflows (know-hows). 
+The agent can create new skills when it discovers useful patterns.
 
 ## Development
 
