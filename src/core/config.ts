@@ -68,6 +68,28 @@ export function resolveUserPath(p: string): string {
   return p;
 }
 
+/**
+ * Resolve the configuration directory from CLI args, env var, or default.
+ *
+ * Priority:
+ * 1. `--config <path>` flag → parent directory of the specified file
+ * 2. `PA_CONFIG` env var → that directory
+ * 3. Default → `~/.personal-assistant/`
+ */
+export function resolveConfigDir(argv: string[]): string {
+  const configIdx = argv.indexOf("--config");
+  if (configIdx !== -1 && configIdx + 1 < argv.length) {
+    return path.dirname(argv[configIdx + 1]);
+  }
+
+  const envConfig = process.env["PA_CONFIG"];
+  if (envConfig) {
+    return envConfig;
+  }
+
+  return path.join(os.homedir(), ".personal-assistant");
+}
+
 // ---------------------------------------------------------------------------
 // Deep merge utility
 // ---------------------------------------------------------------------------

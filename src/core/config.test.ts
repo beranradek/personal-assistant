@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { loadConfig, resolveUserPath, DEFAULTS } from "./config.js";
+import { loadConfig, resolveUserPath, resolveConfigDir, DEFAULTS } from "./config.js";
 
 describe("config", () => {
   let tmpDir: string;
@@ -155,6 +155,45 @@ describe("config", () => {
     it("handles bare ~ (home directory itself)", () => {
       const result = resolveUserPath("~");
       expect(result).toBe(os.homedir());
+    });
+  });
+
+  describe("resolveConfigDir", () => {
+    let savedPaConfig: string | undefined;
+
+    beforeEach(() => {
+      savedPaConfig = process.env["PA_CONFIG"];
+      delete process.env["PA_CONFIG"];
+    });
+
+    afterEach(() => {
+      if (savedPaConfig !== undefined) {
+        process.env["PA_CONFIG"] = savedPaConfig;
+      } else {
+        delete process.env["PA_CONFIG"];
+      }
+    });
+
+    it("returns parent directory of --config path", () => {
+      const result = resolveConfigDir(["node", "app.js", "--config", "/etc/myapp/settings.json"]);
+      expect(result).toBe("/etc/myapp");
+    });
+
+    it("returns PA_CONFIG env var when set and no --config flag", () => {
+      process.env["PA_CONFIG"] = "/custom/config/dir";
+      const result = resolveConfigDir(["node", "app.js"]);
+      expect(result).toBe("/custom/config/dir");
+    });
+
+    it("returns ~/.personal-assistant as default when no flag or env", () => {
+      const result = resolveConfigDir(["node", "app.js"]);
+      expect(result).toBe(path.join(os.homedir(), ".personal-assistant"));
+    });
+
+    it("--config flag takes precedence over PA_CONFIG env var", () => {
+      process.env["PA_CONFIG"] = "/from/env";
+      const result = resolveConfigDir(["node", "app.js", "--config", "/from/flag/settings.json"]);
+      expect(result).toBe("/from/flag");
     });
   });
 });
