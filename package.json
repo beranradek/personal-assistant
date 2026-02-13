@@ -17,6 +17,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.41",
     "@slack/bolt": "^4.6.0",
     "better-sqlite3": "^12.6.2",
+    "cron-parser": "^5.5.0",
     "grammy": "^1.40.0",
     "node-cron": "^4.2.1",
     "node-llama-cpp": "^3.15.1",
