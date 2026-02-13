@@ -42,6 +42,8 @@ export interface VectorStore {
     mtime: number,
     size: number,
   ): void;
+  getTrackedFilePaths(): string[];
+  deleteFileHash(filePath: string): void;
   close(): void;
 }
 
@@ -192,6 +194,14 @@ export function createVectorStore(
       size = excluded.size
   `);
 
+  const getAllFilePathsStmt = db.prepare(
+    `SELECT path FROM files`,
+  );
+
+  const deleteFileHashStmt = db.prepare(
+    `DELETE FROM files WHERE path = ?`,
+  );
+
   // ── Transactional upsert ────────────────────────────────────────
 
   const upsertChunkTx = db.transaction((chunk: ChunkRecord) => {
@@ -313,6 +323,15 @@ export function createVectorStore(
       size: number,
     ): void {
       upsertFileHashStmt.run({ path: filePath, hash, mtime, size });
+    },
+
+    getTrackedFilePaths(): string[] {
+      const rows = getAllFilePathsStmt.all() as Array<{ path: string }>;
+      return rows.map((r) => r.path);
+    },
+
+    deleteFileHash(filePath: string): void {
+      deleteFileHashStmt.run(filePath);
     },
 
     close(): void {
