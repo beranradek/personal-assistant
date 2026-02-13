@@ -309,7 +309,7 @@ describe("daemon", () => {
     signalHandlers = new Map();
     // Capture signal handlers without actually registering them on process
     originalProcessOn = process.on;
-    vi.spyOn(process, "on").mockImplementation((event: string, handler: any) => {
+    vi.spyOn(process, "once").mockImplementation((event: string, handler: any) => {
       signalHandlers.set(event, handler);
       return process;
     });

@@ -66,6 +66,12 @@ export async function startDaemon(appDir: string): Promise<void> {
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
+  // Sync memory files into the vector store on startup
+  const memoryFiles = ["MEMORY.md", ...config.memory.extraPaths].map((f) =>
+    f.startsWith("/") ? f : path.join(config.security.workspace, f),
+  );
+  await indexer.syncFiles(memoryFiles);
+
   // 3. Read memory files for system prompt
   const memoryContent = await readMemoryFiles(config.security.workspace, {
     includeHeartbeat: true,
@@ -183,8 +189,8 @@ export async function startDaemon(appDir: string): Promise<void> {
     process.exit(0);
   };
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
 
 // ---------------------------------------------------------------------------
