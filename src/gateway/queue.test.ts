@@ -5,13 +5,15 @@ import type { AdapterMessage, Adapter, Config } from "../core/types.js";
 // Mocks
 // ---------------------------------------------------------------------------
 
+const mockLog = vi.hoisted(() => ({
+  info: vi.fn(),
+  debug: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+}));
+
 vi.mock("../core/logger.js", () => ({
-  createLogger: () => ({
-    info: vi.fn(),
-    debug: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-  }),
+  createLogger: () => mockLog,
 }));
 
 vi.mock("../core/agent-runner.js", () => ({
@@ -161,7 +163,7 @@ describe("MessageQueue", () => {
       queue.enqueue(makeMessage({ text: "two" }));
       const result = queue.enqueue(makeMessage({ text: "three" }));
 
-      expect(result).toEqual({ accepted: false });
+      expect(result).toEqual({ accepted: false, reason: "Queue full" });
     });
   });
 
@@ -238,37 +240,105 @@ describe("MessageQueue", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Serial processing
+  // processLoop and stop
   // -------------------------------------------------------------------------
-  describe("serial processing", () => {
-    it("only processes one message at a time", async () => {
+  describe("processLoop / stop", () => {
+    it("processes enqueued messages via the loop", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeAdapter("telegram");
+      router.register(adapter);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "reply",
+        messages: [],
+      });
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ text: "hello" }));
+
+      // Start the loop in the background
+      const loopDone = queue.processLoop(agentOptions, config, router);
+
+      // Wait for processing to happen
+      await vi.waitFor(() => {
+        expect(runAgentTurn).toHaveBeenCalledTimes(1);
+      });
+
+      queue.stop();
+      await loopDone;
+
+      expect(adapter.sendResponse).toHaveBeenCalledTimes(1);
+    });
+
+    it("stop() causes processLoop to resolve", async () => {
       const config = makeConfig();
       const agentOptions = makeAgentOptions();
       const router = createRouter();
 
-      let concurrentCount = 0;
-      let maxConcurrent = 0;
+      const queue = createMessageQueue(config);
+      const loopDone = queue.processLoop(agentOptions, config, router);
 
-      vi.mocked(runAgentTurn).mockImplementation(async (message: string) => {
-        concurrentCount++;
-        maxConcurrent = Math.max(maxConcurrent, concurrentCount);
-        // Simulate async work
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        concurrentCount--;
-        return { response: `reply to ${message}`, messages: [] };
+      // Stop immediately (no messages to process)
+      queue.stop();
+      await loopDone;
+      // If we get here, the loop resolved successfully
+    });
+
+    it("wakes up the loop when a message is enqueued while waiting", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "reply",
+        messages: [],
       });
 
       const queue = createMessageQueue(config);
-      queue.enqueue(makeMessage({ text: "a" }));
-      queue.enqueue(makeMessage({ text: "b" }));
+      const loopDone = queue.processLoop(agentOptions, config, router);
 
-      // Start both processNext calls concurrently
-      const p1 = queue.processNext(agentOptions, config, router);
-      const p2 = queue.processNext(agentOptions, config, router);
+      // Enqueue after loop has started (it should be waiting for a message)
+      queue.enqueue(makeMessage({ text: "late arrival" }));
 
-      await Promise.all([p1, p2]);
+      await vi.waitFor(() => {
+        expect(runAgentTurn).toHaveBeenCalledTimes(1);
+      });
 
-      expect(maxConcurrent).toBe(1);
+      queue.stop();
+      await loopDone;
+
+      expect(runAgentTurn).toHaveBeenCalledWith(
+        "late arrival",
+        "telegram--123456",
+        agentOptions,
+        config,
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Error handling
+  // -------------------------------------------------------------------------
+  describe("error handling", () => {
+    it("logs error and continues when runAgentTurn throws", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+
+      vi.mocked(runAgentTurn).mockRejectedValue(new Error("agent failure"));
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ text: "boom" }));
+
+      const result = await queue.processNext(agentOptions, config, router);
+
+      expect(result).toBe(true);
+      expect(mockLog.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        expect.stringContaining("failed to process"),
+      );
     });
   });
 
@@ -342,7 +412,7 @@ describe("Router", () => {
   // Unknown adapter
   // -------------------------------------------------------------------------
   describe("unknown adapter", () => {
-    it("handles unknown adapter gracefully (does not throw)", async () => {
+    it("handles unknown adapter gracefully (logs warning)", async () => {
       const router = createRouter();
 
       const response: AdapterMessage = {
@@ -353,6 +423,12 @@ describe("Router", () => {
 
       // Should not throw
       await expect(router.route(response)).resolves.toBeUndefined();
+
+      // Should log a warning about the missing adapter
+      expect(mockLog.warn).toHaveBeenCalledWith(
+        { source: "unknown_adapter" },
+        expect.stringContaining("no adapter"),
+      );
     });
   });
 

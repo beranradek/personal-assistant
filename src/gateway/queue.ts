@@ -19,9 +19,9 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("gateway-queue");
 
-export interface EnqueueResult {
-  accepted: boolean;
-}
+export type EnqueueResult =
+  | { accepted: true }
+  | { accepted: false; reason: string };
 
 export interface MessageQueue {
   /** Add a message to the queue. Returns whether it was accepted. */
@@ -55,9 +55,6 @@ export function createMessageQueue(config: Config): MessageQueue {
   const messages: AdapterMessage[] = [];
   let running = false;
 
-  // Mutex for serial processing: only one processNext runs at a time.
-  let processingPromise: Promise<void> | null = null;
-
   // For the continuous process loop: a resolver that is called when
   // a new message is enqueued (to wake up the loop).
   let wakeUp: (() => void) | null = null;
@@ -69,7 +66,7 @@ export function createMessageQueue(config: Config): MessageQueue {
           { queueSize: messages.length, maxSize },
           "queue full, rejecting message",
         );
-        return { accepted: false };
+        return { accepted: false, reason: "Queue full" };
       }
       messages.push(message);
       log.debug(
@@ -84,52 +81,45 @@ export function createMessageQueue(config: Config): MessageQueue {
       return { accepted: true };
     },
 
+    /**
+     * Process the next message in the queue.
+     * Not safe for concurrent use — use `processLoop()` for serial processing.
+     */
     async processNext(
       agentOptions: AgentOptions,
       config: Config,
       router: Router,
     ): Promise<boolean> {
-      // Wait for any in-progress processing to complete (serial guarantee)
-      if (processingPromise) {
-        await processingPromise;
-      }
-
       const message = messages.shift();
       if (!message) {
         return false;
       }
 
-      const doProcess = async (): Promise<void> => {
-        const sessionKey = resolveSessionKey(message.source, message.sourceId);
-        log.info(
-          { source: message.source, sessionKey },
-          "processing message",
+      const sessionKey = resolveSessionKey(message.source, message.sourceId);
+      log.info(
+        { source: message.source, sessionKey },
+        "processing message",
+      );
+
+      try {
+        const result: AgentTurnResult = await runAgentTurn(
+          message.text,
+          sessionKey,
+          agentOptions,
+          config,
         );
 
-        try {
-          const result: AgentTurnResult = await runAgentTurn(
-            message.text,
-            sessionKey,
-            agentOptions,
-            config,
-          );
-
-          // Route the response back to the source adapter
-          const response: AdapterMessage = {
-            source: message.source,
-            sourceId: message.sourceId,
-            text: result.response,
-            metadata: message.metadata,
-          };
-          await router.route(response);
-        } catch (err) {
-          log.error({ err, source: message.source }, "failed to process message");
-        }
-      };
-
-      processingPromise = doProcess();
-      await processingPromise;
-      processingPromise = null;
+        // Route the response back to the source adapter
+        const response: AdapterMessage = {
+          source: message.source,
+          sourceId: message.sourceId,
+          text: result.response,
+          metadata: message.metadata,
+        };
+        await router.route(response);
+      } catch (err) {
+        log.error({ err, source: message.source }, "failed to process message");
+      }
 
       return true;
     },
