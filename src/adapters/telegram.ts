@@ -92,7 +92,11 @@ export function createTelegramAdapter(
       },
     );
 
-    onMessage(adapterMessage);
+    try {
+      onMessage(adapterMessage);
+    } catch (err) {
+      log.error({ err }, "onMessage callback failed");
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -116,10 +120,19 @@ export function createTelegramAdapter(
 
     async sendResponse(message: AdapterMessage): Promise<void> {
       const chatId = Number(message.sourceId);
+      if (Number.isNaN(chatId)) {
+        log.error({ sourceId: message.sourceId }, "invalid chat ID");
+        return;
+      }
       const chunks = chunkText(message.text, TELEGRAM_MAX_MESSAGE_LENGTH);
 
       for (const chunk of chunks) {
-        await bot.api.sendMessage(chatId, chunk);
+        try {
+          await bot.api.sendMessage(chatId, chunk);
+        } catch (err) {
+          log.error({ chatId, err }, "failed to send message chunk");
+          throw err;
+        }
       }
     },
   };

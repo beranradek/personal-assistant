@@ -330,7 +330,7 @@ describe("Telegram Adapter", () => {
       expect(chunks[0]).toHaveLength(4096);
     });
 
-    it("returns empty array for empty string", () => {
+    it("returns array with empty string for empty input", () => {
       const chunks = chunkText("", 4096);
       expect(chunks).toEqual([""]);
     });
