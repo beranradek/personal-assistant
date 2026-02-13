@@ -20,6 +20,12 @@ npm link
 
 This installs the `pa` command globally.
 
+To uninstall:
+
+```bash
+npm unlink -g personal-assistant
+```
+
 ## Quick Start
 
 ```bash
