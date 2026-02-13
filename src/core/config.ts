@@ -79,12 +79,12 @@ export function resolveUserPath(p: string): string {
 export function resolveConfigDir(argv: string[]): string {
   const configIdx = argv.indexOf("--config");
   if (configIdx !== -1 && configIdx + 1 < argv.length) {
-    return path.dirname(argv[configIdx + 1]);
+    return path.resolve(path.dirname(argv[configIdx + 1]));
   }
 
   const envConfig = process.env["PA_CONFIG"];
   if (envConfig) {
-    return envConfig;
+    return path.resolve(resolveUserPath(envConfig));
   }
 
   return path.join(os.homedir(), ".personal-assistant");

@@ -195,5 +195,21 @@ describe("config", () => {
       const result = resolveConfigDir(["node", "app.js", "--config", "/from/flag/settings.json"]);
       expect(result).toBe("/from/flag");
     });
+
+    it("resolves relative --config path to absolute", () => {
+      const result = resolveConfigDir(["node", "cli.js", "--config", "config/settings.json"]);
+      expect(path.isAbsolute(result)).toBe(true);
+    });
+
+    it("ignores --config when it is the last argument with no value", () => {
+      const original = process.env["PA_CONFIG"];
+      delete process.env["PA_CONFIG"];
+      try {
+        const result = resolveConfigDir(["node", "cli.js", "--config"]);
+        expect(result).toBe(path.join(os.homedir(), ".personal-assistant"));
+      } finally {
+        if (original !== undefined) process.env["PA_CONFIG"] = original;
+      }
+    });
   });
 });
