@@ -80,9 +80,9 @@ export async function handleLine(
  * Returns the session object containing config, agentOptions, and sessionKey.
  */
 export async function createTerminalSession(
-  appDir: string,
+  configDir: string,
 ): Promise<TerminalSession> {
-  const config = loadConfig(appDir);
+  const config = loadConfig(configDir);
   await ensureWorkspace(config);
 
   const memoryContent = await readMemoryFiles(config.security.workspace, {
@@ -111,9 +111,9 @@ export async function createTerminalSession(
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const appDir = new URL("..", import.meta.url).pathname;
+  const configDir = new URL("..", import.meta.url).pathname;
   const { config, agentOptions, sessionKey } =
-    await createTerminalSession(appDir);
+    await createTerminalSession(configDir);
 
   const rl = readline.createInterface({
     input: process.stdin,

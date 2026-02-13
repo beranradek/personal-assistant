@@ -118,8 +118,8 @@ function deepMerge<T extends Record<string, unknown>>(
  * 3. Validate with Zod schema (throws on invalid)
  * 4. Resolve `~` in workspace and dataDir paths
  */
-export function loadConfig(appDir: string): Config {
-  const settingsPath = path.join(appDir, "settings.json");
+export function loadConfig(configDir: string): Config {
+  const settingsPath = path.join(configDir, "settings.json");
 
   let userSettings: Record<string, unknown> = {};
   if (fs.existsSync(settingsPath)) {

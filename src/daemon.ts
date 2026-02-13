@@ -53,11 +53,11 @@ const log = createLogger("daemon");
  * Start the daemon. Initializes all subsystems, starts adapters, and begins
  * processing the message queue.
  *
- * @param appDir - Path to the application directory (contains settings.json)
+ * @param configDir - Path to the directory containing settings.json
  */
-export async function startDaemon(appDir: string): Promise<void> {
+export async function startDaemon(configDir: string): Promise<void> {
   // 1. Load config & ensure workspace
-  const config = loadConfig(appDir);
+  const config = loadConfig(configDir);
   await ensureWorkspace(config);
 
   // 2. Initialize memory system
@@ -221,8 +221,8 @@ export async function startDaemon(appDir: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const appDir = new URL("..", import.meta.url).pathname;
-  await startDaemon(appDir);
+  const configDir = new URL("..", import.meta.url).pathname;
+  await startDaemon(configDir);
 }
 
 // Only run main() when this file is the entry point (not when imported in tests).
