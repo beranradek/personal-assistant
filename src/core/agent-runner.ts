@@ -4,12 +4,13 @@
  *
  * Orchestrates the lifecycle of a single agent turn:
  *   1. Build SDK options from config + memory + MCP servers
- *   2. Load session history
+ *   2. Resume the SDK session if a previous session ID exists
  *   3. Call the Claude Agent SDK `query()` function
- *   4. Collect the response from the async generator
- *   5. Save the interaction to the session transcript
- *   6. Run compaction if needed
- *   7. Append an audit entry to the daily log
+ *   4. Capture the SDK session ID for future resumption
+ *   5. Collect the response from the async generator
+ *   6. Save the interaction to the session transcript
+ *   7. Run compaction if needed
+ *   8. Append an audit entry to the daily log
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -20,12 +21,31 @@ import type {
   SDKAssistantMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Config, SessionMessage } from "./types.js";
-import { loadHistory, saveInteraction } from "../session/manager.js";
+import { saveInteraction } from "../session/manager.js";
 import { compactIfNeeded } from "../session/compactor.js";
 import { sessionKeyToPath } from "../session/types.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { bashSecurityHook } from "../security/bash-hook.js";
 import { fileToolSecurityHook } from "../security/file-tool-hook.js";
+
+// ---------------------------------------------------------------------------
+// SDK session ID cache
+// ---------------------------------------------------------------------------
+
+/**
+ * In-memory cache mapping session keys (e.g. "terminal--default",
+ * "telegram--123456") to SDK session IDs. When a session ID exists for a
+ * given key, the next `runAgentTurn` call will use the SDK's `resume` option
+ * so the model sees the full conversation history.
+ */
+const sdkSessionIds = new Map<string, string>();
+
+/**
+ * Clear the SDK session ID cache. Exposed for testing and daemon restart.
+ */
+export function clearSdkSessionIds(): void {
+  sdkSessionIds.clear();
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,12 +150,13 @@ export function buildAgentOptions(
  * Execute a single agent turn within the context of a session.
  *
  * Lifecycle:
- * 1. Load session history for context
+ * 1. Resume the SDK session if a previous session ID exists for this key
  * 2. Call the SDK `query()` with the user message
- * 3. Collect the response text from assistant messages in the stream
- * 4. Save the user + assistant messages to the session transcript
- * 5. Run compaction if enabled and threshold is exceeded
- * 6. Append an audit entry to the daily log
+ * 3. Capture the SDK session ID for future resumption
+ * 4. Collect the response text from assistant messages in the stream
+ * 5. Save the user + assistant messages to the session transcript
+ * 6. Run compaction if enabled and threshold is exceeded
+ * 7. Append an audit entry to the daily log
  */
 export async function runAgentTurn(
   message: string,
@@ -143,21 +164,22 @@ export async function runAgentTurn(
   agentOptions: AgentOptions,
   config: Config,
 ): Promise<AgentTurnResult> {
-  // 1. Load session history
-  const _history = await loadHistory(sessionKey, config);
-
-  // 2. Build the user message
+  // 1. Build the user message
   const userMsg: SessionMessage = {
     role: "user",
     content: message,
     timestamp: new Date().toISOString(),
   };
 
-  // 3. Call SDK query
+  // 2. Check for existing SDK session to resume
+  const sdkSessionId = sdkSessionIds.get(sessionKey);
+
+  // 3. Call SDK query (with resume if we have a previous session)
   const result = query({
     prompt: message,
     options: {
       ...agentOptions,
+      ...(sdkSessionId ? { resume: sdkSessionId } : {}),
     } as unknown as Options,
   });
 
@@ -166,6 +188,15 @@ export async function runAgentTurn(
   const turnMessages: SessionMessage[] = [userMsg];
 
   for await (const msg of result) {
+    // Capture SDK session ID for future resumption
+    if (
+      !sdkSessionIds.has(sessionKey) &&
+      "session_id" in msg &&
+      msg.session_id
+    ) {
+      sdkSessionIds.set(sessionKey, msg.session_id as string);
+    }
+
     if (
       msg.type === "assistant" &&
       (msg as SDKAssistantMessage).message?.content

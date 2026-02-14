@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Config, SessionMessage } from "./types.js";
+import type { Config } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Mocks – must be declared before importing the module under test
@@ -12,7 +12,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 
 // Mock session manager
 vi.mock("../session/manager.js", () => ({
-  loadHistory: vi.fn(),
   saveInteraction: vi.fn(),
 }));
 
@@ -35,9 +34,13 @@ vi.mock("../security/bash-hook.js", () => ({
 // Imports – after mocks are registered
 // ---------------------------------------------------------------------------
 
-import { buildAgentOptions, runAgentTurn } from "./agent-runner.js";
+import {
+  buildAgentOptions,
+  runAgentTurn,
+  clearSdkSessionIds,
+} from "./agent-runner.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { loadHistory, saveInteraction } from "../session/manager.js";
+import { saveInteraction } from "../session/manager.js";
 import { compactIfNeeded } from "../session/compactor.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 
@@ -111,6 +114,7 @@ async function* mockQueryGenerator(messages: Array<Record<string, unknown>>) {
 describe("agent-runner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearSdkSessionIds();
     vi.useFakeTimers({ now: new Date("2025-06-15T12:00:00.000Z") });
   });
 
@@ -284,28 +288,15 @@ describe("agent-runner", () => {
   // runAgentTurn
   // -----------------------------------------------------------------------
   describe("runAgentTurn", () => {
-    it("loads history before query", async () => {
+    it("first call for a session key does not use resume", async () => {
       const config = makeConfig();
       const sessionKey = "telegram--123456";
 
-      const existingHistory: SessionMessage[] = [
-        {
-          role: "user",
-          content: "Previous question",
-          timestamp: "2025-06-15T10:00:00.000Z",
-        },
-        {
-          role: "assistant",
-          content: "Previous answer",
-          timestamp: "2025-06-15T10:01:00.000Z",
-        },
-      ];
-
-      vi.mocked(loadHistory).mockResolvedValue(existingHistory);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
             type: "assistant",
+            session_id: "sdk-session-abc",
             message: {
               content: [{ type: "text", text: "Response text" }],
             },
@@ -313,6 +304,7 @@ describe("agent-runner", () => {
           {
             type: "result",
             subtype: "success",
+            session_id: "sdk-session-abc",
             result: "Response text",
           },
         ]) as any,
@@ -324,14 +316,149 @@ describe("agent-runner", () => {
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
       await runAgentTurn("Hello", sessionKey, agentOptions, config);
 
-      expect(loadHistory).toHaveBeenCalledWith(sessionKey, config);
+      // First call should NOT have resume
+      const callArgs = vi.mocked(query).mock.calls[0][0];
+      expect(callArgs.options).not.toHaveProperty("resume");
+    });
+
+    it("second call for the same session key uses resume with captured session ID", async () => {
+      const config = makeConfig();
+      const sessionKey = "telegram--123456";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-session-abc",
+            message: {
+              content: [{ type: "text", text: "First response" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-session-abc",
+            result: "First response",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+
+      // First call - captures session ID
+      await runAgentTurn("Hello", sessionKey, agentOptions, config);
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-session-abc",
+            message: {
+              content: [{ type: "text", text: "Second response" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-session-abc",
+            result: "Second response",
+          },
+        ]) as any,
+      );
+
+      // Second call - should resume
+      await runAgentTurn("Follow up", sessionKey, agentOptions, config);
+
+      const secondCallArgs = vi.mocked(query).mock.calls[1][0];
+      expect(secondCallArgs.options).toHaveProperty(
+        "resume",
+        "sdk-session-abc",
+      );
+    });
+
+    it("different session keys get independent SDK sessions", async () => {
+      const config = makeConfig();
+
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+
+      // First session
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-session-111",
+            message: {
+              content: [{ type: "text", text: "Response A" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-session-111",
+            result: "Response A",
+          },
+        ]) as any,
+      );
+      await runAgentTurn("Hello", "telegram--111", agentOptions, config);
+
+      // Second session (different key)
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-session-222",
+            message: {
+              content: [{ type: "text", text: "Response B" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-session-222",
+            result: "Response B",
+          },
+        ]) as any,
+      );
+      await runAgentTurn("Hello", "slack--222", agentOptions, config);
+
+      // Resume first session
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-session-111",
+            message: {
+              content: [{ type: "text", text: "Response A2" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-session-111",
+            result: "Response A2",
+          },
+        ]) as any,
+      );
+      await runAgentTurn("Follow up", "telegram--111", agentOptions, config);
+
+      const thirdCallArgs = vi.mocked(query).mock.calls[2][0];
+      expect(thirdCallArgs.options).toHaveProperty(
+        "resume",
+        "sdk-session-111",
+      );
     });
 
     it("after agent turn, saves messages to session transcript", async () => {
       const config = makeConfig();
       const sessionKey = "terminal--default";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -373,7 +500,6 @@ describe("agent-runner", () => {
       });
       const sessionKey = "telegram--123456";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -412,7 +538,6 @@ describe("agent-runner", () => {
       });
       const sessionKey = "terminal--default";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -441,7 +566,6 @@ describe("agent-runner", () => {
       const config = makeConfig();
       const sessionKey = "slack--C123--thread1";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -469,7 +593,6 @@ describe("agent-runner", () => {
         config,
       );
 
-      expect(loadHistory).toHaveBeenCalledWith(sessionKey, config);
       expect(result.response).toBe("Welcome!");
       expect(result.messages).toHaveLength(2);
       expect(result.messages[0]).toMatchObject({
@@ -486,7 +609,6 @@ describe("agent-runner", () => {
       const config = makeConfig();
       const sessionKey = "terminal--default";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -526,7 +648,6 @@ describe("agent-runner", () => {
       const config = makeConfig();
       const sessionKey = "telegram--123456";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -565,7 +686,6 @@ describe("agent-runner", () => {
       const config = makeConfig();
       const sessionKey = "terminal--default";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -602,7 +722,6 @@ describe("agent-runner", () => {
       const config = makeConfig();
       const sessionKey = "terminal--default";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
@@ -637,7 +756,6 @@ describe("agent-runner", () => {
       const config = makeConfig();
       const sessionKey = "terminal--default";
 
-      vi.mocked(loadHistory).mockResolvedValue([]);
       vi.mocked(query).mockReturnValue(
         mockQueryGenerator([
           {
