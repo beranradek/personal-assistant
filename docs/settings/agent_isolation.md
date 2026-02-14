@@ -48,6 +48,26 @@ VirusTotal has since partnered with OpenClaw to scan skills automatically, but t
 
 Reference: https://medium.com/@rentierdigital/i-deployed-my-own-openclaw-ai-agent-in-4-minutes-it-now-runs-my-life-from-a-5-server-8159e6cb41cc
 
+Important security note from Volker Kohl:
+
+The article correctly highlights the advantages and an obvious mistake - exposing OpenClaw 
+to the public internet - but it stops there. Running an autonomous AI agent with filesystem 
+access, shell execution, API tokens to Gmail and GitHub, and persistent memory requires more 
+than binding to localhost and enabling UFW.
+There’s no discussion of least-privilege API scopes, token rotation, container hardening, 
+rootless Docker, egress filtering, secret management, MFA for SSH, runtime monitoring, 
+or prompt injection defenses.
+And while running a local LLM eliminates API costs, it does not materially improve 
+your security posture.
+The core risk isn’t the model endpoint - it’s the agent’s privilege level. If the agent is compromised, 
+local or remote makes little difference. It still has access to your credentials, filesystem, 
+and integrations. If an attacker compromises this agent, they don’t just get a bot - they 
+get your credential store, your repositories, your email, and potentially your server.
+Security for AI agents isn’t just about closing port 18789. It’s about identity isolation, 
+privilege boundaries, supply-chain integrity, and runtime observability.
+A self-hosted AI agent is effectively a programmable sysadmin with API keys 
+(if not run locall)y. Treat it accordingly.
+
 ### Good news with Personal Assistant
 
 **Our personal assistant is architecturally immune to the headline OpenClaw vulnerabilities.** 
