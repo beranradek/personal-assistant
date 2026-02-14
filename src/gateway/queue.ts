@@ -59,6 +59,27 @@ export function createMessageQueue(config: Config): MessageQueue {
   // a new message is enqueued (to wake up the loop).
   let wakeUp: (() => void) | null = null;
 
+  // Track last adapter interaction for heartbeat response routing.
+  // When a heartbeat fires, the response needs to be delivered to an actual
+  // adapter (telegram/slack) based on config.heartbeat.deliverTo.
+  const lastSourceByAdapter = new Map<string, string>();
+  let lastAdapterName: string | null = null;
+
+  function resolveRouteTarget(
+    message: AdapterMessage,
+    cfg: Config,
+  ): { source: string; sourceId: string } | null {
+    if (message.source !== "heartbeat") {
+      return { source: message.source, sourceId: message.sourceId };
+    }
+    const { deliverTo } = cfg.heartbeat;
+    const targetAdapter = deliverTo === "last" ? lastAdapterName : deliverTo;
+    if (!targetAdapter) return null;
+    const targetSourceId = lastSourceByAdapter.get(targetAdapter);
+    if (!targetSourceId) return null;
+    return { source: targetAdapter, sourceId: targetSourceId };
+  }
+
   return {
     enqueue(message: AdapterMessage): EnqueueResult {
       if (messages.length >= maxSize) {
@@ -95,6 +116,12 @@ export function createMessageQueue(config: Config): MessageQueue {
         return false;
       }
 
+      // Track adapter interactions for heartbeat routing
+      if (message.source !== "heartbeat") {
+        lastAdapterName = message.source;
+        lastSourceByAdapter.set(message.source, message.sourceId);
+      }
+
       const sessionKey = resolveSessionKey(message.source, message.sourceId);
       log.info(
         { source: message.source, sessionKey },
@@ -128,13 +155,21 @@ export function createMessageQueue(config: Config): MessageQueue {
 
         // Route the response back to the source adapter (skip if empty)
         if (result.response.trim()) {
-          const response: AdapterMessage = {
-            source: message.source,
-            sourceId: message.sourceId,
-            text: result.response,
-            metadata: message.metadata,
-          };
-          await router.route(response);
+          const routeTarget = resolveRouteTarget(message, config);
+          if (routeTarget) {
+            const response: AdapterMessage = {
+              source: routeTarget.source,
+              sourceId: routeTarget.sourceId,
+              text: result.response,
+              metadata: message.metadata,
+            };
+            await router.route(response);
+          } else {
+            log.warn(
+              { deliverTo: config.heartbeat.deliverTo },
+              "no adapter target for heartbeat, dropping response",
+            );
+          }
         } else {
           log.warn({ source: message.source, sessionKey }, "agent returned empty response, skipping");
         }
@@ -142,16 +177,19 @@ export function createMessageQueue(config: Config): MessageQueue {
         log.error({ err, source: message.source }, "failed to process message");
 
         // Notify the user that something went wrong
-        try {
-          const errorResponse: AdapterMessage = {
-            source: message.source,
-            sourceId: message.sourceId,
-            text: "Sorry, something went wrong while processing your message. Please try again.",
-            metadata: message.metadata,
-          };
-          await router.route(errorResponse);
-        } catch (routeErr) {
-          log.error({ err: routeErr }, "failed to send error response");
+        const errorTarget = resolveRouteTarget(message, config);
+        if (errorTarget) {
+          try {
+            const errorResponse: AdapterMessage = {
+              source: errorTarget.source,
+              sourceId: errorTarget.sourceId,
+              text: "Sorry, something went wrong while processing your message. Please try again.",
+              metadata: message.metadata,
+            };
+            await router.route(errorResponse);
+          } catch (routeErr) {
+            log.error({ err: routeErr }, "failed to send error response");
+          }
         }
       }
 

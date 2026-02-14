@@ -353,6 +353,177 @@ describe("MessageQueue", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Heartbeat routing
+  // -------------------------------------------------------------------------
+  describe("heartbeat routing", () => {
+    it("routes heartbeat response to last adapter when deliverTo is 'last'", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "heartbeat reply",
+        messages: [],
+      });
+
+      const queue = createMessageQueue(config);
+
+      // First, a user message from telegram to establish "last" adapter
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+
+      // Now process a heartbeat message
+      queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "heartbeat reply",
+        messages: [],
+      });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "42",
+          text: "heartbeat reply",
+        }),
+      );
+    });
+
+    it("routes heartbeat response directly to named adapter when deliverTo is 'telegram'", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "telegram" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "heartbeat reply",
+        messages: [],
+      });
+
+      const queue = createMessageQueue(config);
+
+      // A telegram message first so the queue knows the sourceId
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "heartbeat reply",
+        messages: [],
+      });
+
+      queue.enqueue({ source: "heartbeat", sourceId: "telegram", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "42",
+          text: "heartbeat reply",
+        }),
+      );
+    });
+
+    it("drops heartbeat response when deliverTo is 'last' and no adapter has been used", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "heartbeat reply",
+        messages: [],
+      });
+
+      const queue = createMessageQueue(config);
+      queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(mockLog.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ deliverTo: "last" }),
+        expect.stringContaining("no adapter target"),
+      );
+    });
+
+    it("drops heartbeat response when target adapter has no recorded sourceId", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "slack" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "reply",
+        messages: [],
+      });
+
+      const queue = createMessageQueue(config);
+
+      // Only telegram has been used, but deliverTo is slack
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "heartbeat reply",
+        messages: [],
+      });
+
+      queue.enqueue({ source: "heartbeat", sourceId: "slack", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).not.toHaveBeenCalled();
+      expect(mockLog.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ deliverTo: "slack" }),
+        expect.stringContaining("no adapter target"),
+      );
+    });
+
+    it("routes heartbeat error response to correct adapter", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      const queue = createMessageQueue(config);
+
+      // Establish last adapter
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+      vi.mocked(runAgentTurn).mockRejectedValue(new Error("agent failure"));
+
+      queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "42",
+          text: expect.stringContaining("something went wrong"),
+        }),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // size
   // -------------------------------------------------------------------------
   describe("size", () => {
