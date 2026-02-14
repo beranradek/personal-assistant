@@ -17,7 +17,6 @@ export const TelegramConfigSchema = z.object({
   enabled: z.boolean(),
   botToken: z.string(),
   allowedUserIds: z.array(z.number()),
-  mode: z.enum(["polling", "webhook"]),
 });
 
 export const SlackConfigSchema = z.object({

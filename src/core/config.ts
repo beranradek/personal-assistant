@@ -26,7 +26,7 @@ export const DEFAULTS: Config = {
     additionalWriteDirs: [],
   },
   adapters: {
-    telegram: { enabled: false, botToken: "", allowedUserIds: [], mode: "polling" },
+    telegram: { enabled: false, botToken: "", allowedUserIds: [] },
     slack: { enabled: false, botToken: "", appToken: "", allowedUserIds: [], socketMode: true },
   },
   heartbeat: {
