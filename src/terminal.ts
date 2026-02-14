@@ -18,7 +18,11 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
-import { buildAgentOptions, runAgentTurn } from "./core/agent-runner.js";
+import {
+  buildAgentOptions,
+  runAgentTurn,
+  clearSdkSession,
+} from "./core/agent-runner.js";
 import type { AgentOptions } from "./core/agent-runner.js";
 import type { Config } from "./core/types.js";
 import { createLogger } from "./core/logger.js";
@@ -63,6 +67,12 @@ export async function handleLine(
   const trimmed = input.trim();
   if (!trimmed) {
     return null;
+  }
+
+  // Handle /clear command — reset conversation history
+  if (trimmed === "/clear") {
+    clearSdkSession(sessionKey);
+    return { response: "Conversation cleared. Starting fresh.", error: null };
   }
 
   try {

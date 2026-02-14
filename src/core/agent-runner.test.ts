@@ -15,11 +15,6 @@ vi.mock("../session/manager.js", () => ({
   saveInteraction: vi.fn(),
 }));
 
-// Mock session compactor
-vi.mock("../session/compactor.js", () => ({
-  compactIfNeeded: vi.fn(),
-}));
-
 // Mock daily audit log
 vi.mock("../memory/daily-log.js", () => ({
   appendAuditEntry: vi.fn(),
@@ -41,7 +36,6 @@ import {
 } from "./agent-runner.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { saveInteraction } from "../session/manager.js";
-import { compactIfNeeded } from "../session/compactor.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 
 // ---------------------------------------------------------------------------
@@ -310,7 +304,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -343,7 +337,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -383,7 +377,7 @@ describe("agent-runner", () => {
       const config = makeConfig();
 
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -475,7 +469,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -494,75 +488,7 @@ describe("agent-runner", () => {
       );
     });
 
-    it("calls compaction check after saving", async () => {
-      const config = makeConfig({
-        session: { maxHistoryMessages: 50, compactionEnabled: true },
-      });
-      const sessionKey = "telegram--123456";
-
-      vi.mocked(query).mockReturnValue(
-        mockQueryGenerator([
-          {
-            type: "assistant",
-            message: {
-              content: [{ type: "text", text: "Done" }],
-            },
-          },
-          {
-            type: "result",
-            subtype: "success",
-            result: "Done",
-          },
-        ]) as any,
-      );
-      vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
-      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
-
-      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
-      await runAgentTurn("Compact me", sessionKey, agentOptions, config);
-
-      // Verify compactIfNeeded was called
-      expect(compactIfNeeded).toHaveBeenCalled();
-
-      // Verify it was called after saveInteraction
-      const saveOrder = vi.mocked(saveInteraction).mock.invocationCallOrder[0];
-      const compactOrder =
-        vi.mocked(compactIfNeeded).mock.invocationCallOrder[0];
-      expect(compactOrder).toBeGreaterThan(saveOrder);
-    });
-
-    it("does not call compaction when compactionEnabled is false", async () => {
-      const config = makeConfig({
-        session: { maxHistoryMessages: 50, compactionEnabled: false },
-      });
-      const sessionKey = "terminal--default";
-
-      vi.mocked(query).mockReturnValue(
-        mockQueryGenerator([
-          {
-            type: "assistant",
-            message: {
-              content: [{ type: "text", text: "No compact" }],
-            },
-          },
-          {
-            type: "result",
-            subtype: "success",
-            result: "No compact",
-          },
-        ]) as any,
-      );
-      vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
-
-      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
-      await runAgentTurn("Hello", sessionKey, agentOptions, config);
-
-      expect(compactIfNeeded).not.toHaveBeenCalled();
-    });
-
-    it("empty history (new session) works correctly", async () => {
+    it("new session works correctly", async () => {
       const config = makeConfig();
       const sessionKey = "slack--C123--thread1";
 
@@ -582,7 +508,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -628,7 +554,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -664,7 +590,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -702,7 +628,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -738,7 +664,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
@@ -777,7 +703,7 @@ describe("agent-runner", () => {
         ]) as any,
       );
       vi.mocked(saveInteraction).mockResolvedValue(undefined);
-      vi.mocked(compactIfNeeded).mockResolvedValue({ compacted: false });
+
       vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
 
       const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});

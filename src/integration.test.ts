@@ -47,7 +47,6 @@ vi.mock("./session/manager.js", () => ({
   resolveSessionKey: vi.fn(
     (source: string, sourceId: string) => `${source}--${sourceId}`,
   ),
-  loadHistory: vi.fn().mockResolvedValue([]),
   saveInteraction: vi.fn().mockResolvedValue(undefined),
 }));
 

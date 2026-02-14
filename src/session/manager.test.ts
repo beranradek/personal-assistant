@@ -2,9 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { resolveSessionKey, loadHistory, saveInteraction } from "./manager.js";
+import { resolveSessionKey, saveInteraction } from "./manager.js";
 import type { SessionMessage, Config } from "../core/types.js";
-import type { CompactionEntry } from "./types.js";
 
 function makeMessage(
   overrides: Partial<SessionMessage> = {},
@@ -17,7 +16,7 @@ function makeMessage(
   };
 }
 
-function makeConfig(dataDir: string, maxHistoryMessages = 50): Config {
+function makeConfig(dataDir: string): Config {
   return {
     security: {
       allowedCommands: [],
@@ -55,7 +54,7 @@ function makeConfig(dataDir: string, maxHistoryMessages = 50): Config {
       maxTurns: 10,
     },
     session: {
-      maxHistoryMessages,
+      maxHistoryMessages: 50,
       compactionEnabled: false,
     },
     memory: {
@@ -90,142 +89,6 @@ describe("session manager", () => {
       expect(resolveSessionKey("slack", "C123", "thread_ts")).toBe(
         "slack--C123--thread_ts",
       );
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // loadHistory
-  // -----------------------------------------------------------------------
-  describe("loadHistory", () => {
-    let tmpDir: string;
-
-    beforeEach(async () => {
-      tmpDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), "session-manager-test-"),
-      );
-    });
-
-    afterEach(async () => {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    });
-
-    it("loads transcript and returns sanitized messages", async () => {
-      const config = makeConfig(tmpDir);
-      const sessionKey = "terminal--default";
-      const sessionPath = path.join(tmpDir, "sessions", `${sessionKey}.jsonl`);
-
-      // Write some messages to disk
-      const messages: SessionMessage[] = [
-        makeMessage({ content: "Hi", role: "user" }),
-        makeMessage({ content: "Hello there!", role: "assistant" }),
-      ];
-      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-      const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-      await fs.writeFile(sessionPath, data);
-
-      const history = await loadHistory(sessionKey, config);
-      expect(history).toHaveLength(2);
-      expect(history[0].content).toBe("Hi");
-      expect(history[1].content).toBe("Hello there!");
-    });
-
-    it("sanitizes: truncates tool_result content over 500 chars", async () => {
-      const config = makeConfig(tmpDir);
-      const sessionKey = "terminal--default";
-      const sessionPath = path.join(tmpDir, "sessions", `${sessionKey}.jsonl`);
-
-      const longContent = "x".repeat(600);
-      const messages: SessionMessage[] = [
-        makeMessage({ content: "run it", role: "user" }),
-        makeMessage({
-          content: longContent,
-          role: "tool_result",
-          toolName: "bash",
-        }),
-      ];
-      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-      const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-      await fs.writeFile(sessionPath, data);
-
-      const history = await loadHistory(sessionKey, config);
-      expect(history).toHaveLength(2);
-      // The tool_result with >500 chars should be truncated
-      expect(history[1].content.length).toBeLessThan(longContent.length);
-      expect(history[1].content).toBe("x".repeat(500) + "... [truncated]");
-    });
-
-    it("does not truncate tool_result content that is 500 chars or less", async () => {
-      const config = makeConfig(tmpDir);
-      const sessionKey = "terminal--default";
-      const sessionPath = path.join(tmpDir, "sessions", `${sessionKey}.jsonl`);
-
-      const shortContent = "y".repeat(500);
-      const messages: SessionMessage[] = [
-        makeMessage({
-          content: shortContent,
-          role: "tool_result",
-          toolName: "bash",
-        }),
-      ];
-      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-      const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-      await fs.writeFile(sessionPath, data);
-
-      const history = await loadHistory(sessionKey, config);
-      expect(history[0].content).toBe(shortContent);
-    });
-
-    it("truncates: returns only last maxHistoryMessages messages", async () => {
-      const maxMessages = 3;
-      const config = makeConfig(tmpDir, maxMessages);
-      const sessionKey = "terminal--default";
-      const sessionPath = path.join(tmpDir, "sessions", `${sessionKey}.jsonl`);
-
-      // Write 5 messages, but only last 3 should be returned
-      const messages: SessionMessage[] = [];
-      for (let i = 0; i < 5; i++) {
-        messages.push(makeMessage({ content: `Message ${i}` }));
-      }
-      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-      const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-      await fs.writeFile(sessionPath, data);
-
-      const history = await loadHistory(sessionKey, config);
-      expect(history).toHaveLength(3);
-      expect(history[0].content).toBe("Message 2");
-      expect(history[1].content).toBe("Message 3");
-      expect(history[2].content).toBe("Message 4");
-    });
-
-    it("handles non-existent session (returns empty history)", async () => {
-      const config = makeConfig(tmpDir);
-      const sessionKey = "nonexistent--session";
-
-      const history = await loadHistory(sessionKey, config);
-      expect(history).toEqual([]);
-    });
-
-    it("filters out compaction entries from transcript", async () => {
-      const config = makeConfig(tmpDir);
-      const sessionKey = "terminal--default";
-      const sessionPath = path.join(tmpDir, "sessions", `${sessionKey}.jsonl`);
-
-      const compaction: CompactionEntry = {
-        type: "compaction",
-        timestamp: "2025-06-15T12:00:00.000Z",
-        messagesBefore: 100,
-        messagesAfter: 10,
-      };
-      const msg = makeMessage({ content: "After compaction" });
-
-      await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-      const data =
-        JSON.stringify(compaction) + "\n" + JSON.stringify(msg) + "\n";
-      await fs.writeFile(sessionPath, data);
-
-      const history = await loadHistory(sessionKey, config);
-      expect(history).toHaveLength(1);
-      expect(history[0].content).toBe("After compaction");
     });
   });
 

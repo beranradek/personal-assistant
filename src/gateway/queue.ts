@@ -13,7 +13,7 @@
 import type { AdapterMessage, Config } from "../core/types.js";
 import type { AgentOptions, AgentTurnResult } from "../core/agent-runner.js";
 import type { Router } from "./router.js";
-import { runAgentTurn } from "../core/agent-runner.js";
+import { runAgentTurn, clearSdkSession } from "../core/agent-runner.js";
 import { resolveSessionKey } from "../session/manager.js";
 import { createLogger } from "../core/logger.js";
 
@@ -100,6 +100,23 @@ export function createMessageQueue(config: Config): MessageQueue {
         { source: message.source, sessionKey },
         "processing message",
       );
+
+      // Handle /clear command — reset conversation history
+      if (message.text.trim() === "/clear") {
+        clearSdkSession(sessionKey);
+        log.info({ sessionKey }, "session cleared via /clear");
+        try {
+          await router.route({
+            source: message.source,
+            sourceId: message.sourceId,
+            text: "Conversation cleared. Starting fresh.",
+            metadata: message.metadata,
+          });
+        } catch (routeErr) {
+          log.error({ err: routeErr }, "failed to send /clear confirmation");
+        }
+        return true;
+      }
 
       try {
         const result: AgentTurnResult = await runAgentTurn(

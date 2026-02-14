@@ -138,6 +138,14 @@ Three layers of defense:
 
 The agent cannot modify its own source code or configuration.
 
+## Conversation History
+
+The assistant remembers previous messages within a session using the SDK's built-in session resumption.
+Each adapter/user/thread gets an independent conversation.
+The SDK auto-compacts old context when the context window fills up.
+
+Type `/clear` (in terminal, Telegram, or Slack) to reset the conversation and start fresh.
+
 ## Agent Tools
 
 Built-in tools available to the agent:

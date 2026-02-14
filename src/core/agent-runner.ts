@@ -8,9 +8,8 @@
  *   3. Call the Claude Agent SDK `query()` function
  *   4. Capture the SDK session ID for future resumption
  *   5. Collect the response from the async generator
- *   6. Save the interaction to the session transcript
- *   7. Run compaction if needed
- *   8. Append an audit entry to the daily log
+ *   6. Save the interaction to the session transcript (audit)
+ *   7. Append an audit entry to the daily log
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -22,8 +21,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Config, SessionMessage } from "./types.js";
 import { saveInteraction } from "../session/manager.js";
-import { compactIfNeeded } from "../session/compactor.js";
-import { sessionKeyToPath } from "../session/types.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { bashSecurityHook } from "../security/bash-hook.js";
 import { fileToolSecurityHook } from "../security/file-tool-hook.js";
@@ -45,6 +42,15 @@ const sdkSessionIds = new Map<string, string>();
  */
 export function clearSdkSessionIds(): void {
   sdkSessionIds.clear();
+}
+
+/**
+ * Clear a single SDK session by its session key.
+ * The next `runAgentTurn` call for this key will start a fresh conversation.
+ * Used by the `/clear` command.
+ */
+export function clearSdkSession(sessionKey: string): void {
+  sdkSessionIds.delete(sessionKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,9 +160,8 @@ export function buildAgentOptions(
  * 2. Call the SDK `query()` with the user message
  * 3. Capture the SDK session ID for future resumption
  * 4. Collect the response text from assistant messages in the stream
- * 5. Save the user + assistant messages to the session transcript
- * 6. Run compaction if enabled and threshold is exceeded
- * 7. Append an audit entry to the daily log
+ * 5. Save the user + assistant messages to the session transcript (audit)
+ * 6. Append an audit entry to the daily log
  */
 export async function runAgentTurn(
   message: string,
@@ -225,16 +230,10 @@ export async function runAgentTurn(
     timestamp: new Date().toISOString(),
   });
 
-  // 5. Save to session transcript
+  // 5. Save to session transcript (audit trail)
   await saveInteraction(sessionKey, turnMessages, config);
 
-  // 6. Compact if needed
-  if (config.session.compactionEnabled) {
-    const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
-    await compactIfNeeded(sessionPath, config.session.maxHistoryMessages);
-  }
-
-  // 7. Append audit entry
+  // 6. Append audit entry
   await appendAuditEntry(config.security.workspace, {
     timestamp: new Date().toISOString(),
     source: sessionKey.split("--")[0],
