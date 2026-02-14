@@ -3,7 +3,7 @@
 ## About You
 
 - **Name:** <!-- Your name -->
-- **Pronouns:** <!-- e.g., he/him, she/her, they/them -->
+- **Sex:** <!-- e.g., Male/Female, he/him, she/her, they/them -->
 - **Time zone:** UTC
 - **Language:** English
 
