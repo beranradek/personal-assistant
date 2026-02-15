@@ -649,6 +649,73 @@ describe("bashSecurityHook", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Sudo (privilege escalation) blocked
+  // -------------------------------------------------------------------------
+
+  describe("sudo privilege escalation", () => {
+    it("blocks direct sudo usage", async () => {
+      const result = await bashSecurityHook(
+        bashInput("sudo rm -rf /"),
+        "tool-50",
+        { workspaceDir, config },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+      expect((result as { reason: string }).reason).toContain("sudo");
+    });
+
+    it("blocks sudo in a pipeline", async () => {
+      const result = await bashSecurityHook(
+        bashInput("echo password | sudo tee /etc/shadow"),
+        "tool-51",
+        { workspaceDir, config },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+    });
+
+    it("blocks sudo in chained commands", async () => {
+      const result = await bashSecurityHook(
+        bashInput("ls && sudo apt update"),
+        "tool-52",
+        { workspaceDir, config },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+    });
+
+    it("blocks sudo hidden inside $() substitution", async () => {
+      const result = await bashSecurityHook(
+        bashInput("$(echo sudo) rm -rf /"),
+        "tool-53",
+        { workspaceDir, config },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+    });
+
+    it("blocks sudo hidden inside backtick substitution", async () => {
+      const result = await bashSecurityHook(
+        bashInput("`echo sudo` rm -rf /"),
+        "tool-54",
+        { workspaceDir, config },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+    });
+
+    it("does not false-positive on words containing 'sudo' substring", async () => {
+      const result = await bashSecurityHook(
+        bashInput("echo pseudocode"),
+        "tool-55",
+        { workspaceDir, config },
+      );
+
+      expect(result).toEqual({});
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Edge case: undefined toolUseId
   // -------------------------------------------------------------------------
 

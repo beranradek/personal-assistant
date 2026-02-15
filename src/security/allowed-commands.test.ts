@@ -1,11 +1,61 @@
 import { describe, it, expect } from "vitest";
 import {
+  containsSudo,
   extractCommands,
   validateCommand,
   validateRmCommand,
   validateKillCommand,
   extractFilePathsFromCommand,
 } from "./allowed-commands.js";
+
+// ---------------------------------------------------------------------------
+// containsSudo
+// ---------------------------------------------------------------------------
+
+describe("containsSudo", () => {
+  it("detects direct sudo usage", () => {
+    expect(containsSudo("sudo rm -rf /").found).toBe(true);
+  });
+
+  it("detects sudo in a pipeline", () => {
+    expect(containsSudo("echo hello | sudo tee /etc/file").found).toBe(true);
+  });
+
+  it("detects sudo in chained commands", () => {
+    expect(containsSudo("ls && sudo apt update").found).toBe(true);
+  });
+
+  it("detects sudo inside $() substitution (bypass attempt)", () => {
+    expect(containsSudo("$(echo sudo) rm -rf /").found).toBe(true);
+  });
+
+  it("detects sudo inside backtick substitution (bypass attempt)", () => {
+    expect(containsSudo("`echo sudo` rm -rf /").found).toBe(true);
+  });
+
+  it("detects sudo with absolute path", () => {
+    expect(containsSudo("/usr/bin/sudo rm -rf /").found).toBe(true);
+  });
+
+  it("does not false-positive on 'pseudocode'", () => {
+    expect(containsSudo("echo pseudocode").found).toBe(false);
+  });
+
+  it("does not false-positive on 'sudoku'", () => {
+    expect(containsSudo("echo sudoku").found).toBe(false);
+  });
+
+  it("returns false for commands without sudo", () => {
+    expect(containsSudo("ls -la").found).toBe(false);
+  });
+
+  it("returns a reason when sudo is found", () => {
+    const result = containsSudo("sudo ls");
+    expect(result.found).toBe(true);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain("sudo");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // extractCommands

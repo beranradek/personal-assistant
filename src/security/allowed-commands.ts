@@ -40,6 +40,35 @@ const SHELL_KEYWORDS = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// Privilege escalation detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect `sudo` anywhere in a raw command string.
+ *
+ * Checks the **original** command text (before substitution stripping) so
+ * that bypass attempts like `$(echo sudo) rm -rf /` are caught.
+ * Uses word-boundary matching to avoid false positives on substrings
+ * (e.g. "pseudocode" won't match).
+ *
+ * @param commandString - The raw, unprocessed shell command string
+ * @returns Object with `found` boolean and `reason` when found
+ */
+export function containsSudo(commandString: string): {
+  found: boolean;
+  reason?: string;
+} {
+  if (/\bsudo\b/.test(commandString)) {
+    return {
+      found: true,
+      reason:
+        "Use of 'sudo' is not allowed. The assistant must operate without elevated privileges.",
+    };
+  }
+  return { found: false };
+}
+
+// ---------------------------------------------------------------------------
 // Dangerous rm targets
 // ---------------------------------------------------------------------------
 

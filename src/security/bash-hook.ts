@@ -23,6 +23,7 @@
  */
 
 import {
+  containsSudo,
   extractCommands,
   validateCommand,
   validateRmCommand,
@@ -269,13 +270,19 @@ export async function bashSecurityHook(
     return {};
   }
 
+  // Step 3: Reject any command containing sudo (privilege escalation)
+  const sudoCheck = containsSudo(trimmedCommand);
+  if (sudoCheck.found) {
+    return { decision: "block", reason: sudoCheck.reason };
+  }
+
   const { config, workspaceDir } = context;
   const allowlist = new Set(config.security.allowedCommands);
   const extraValidationSet = new Set(
     config.security.commandsNeedingExtraValidation,
   );
 
-  // Step 3: Extract all command names and validate against allowlist
+  // Step 4: Extract all command names and validate against allowlist
   const commands = extractCommands(trimmedCommand);
 
   for (const cmd of commands) {
@@ -288,7 +295,7 @@ export async function bashSecurityHook(
     }
   }
 
-  // Step 4: Run extra validation for commands that need it
+  // Step 5: Run extra validation for commands that need it
   const segments = extractSegments(trimmedCommand);
 
   for (const segment of segments) {
@@ -309,7 +316,7 @@ export async function bashSecurityHook(
     }
   }
 
-  // Step 5: Extract file paths and validate each one
+  // Step 6: Extract file paths and validate each one
   for (const segment of segments) {
     // Paths from file-operation commands (cp, mv, rm, mkdir, etc.)
     // and output redirections
