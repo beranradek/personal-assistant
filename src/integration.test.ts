@@ -233,7 +233,7 @@ describe("Integration: Config -> Workspace -> Memory Files -> Agent Options", ()
     expect(agentOptions.mcpServers).toEqual(mcpServers);
     expect(agentOptions.allowedTools).toContain("Bash");
     expect(agentOptions.allowedTools).toContain("Read");
-    expect(agentOptions.allowedTools).toContain("mcp__memory__memory_search");
+    expect(agentOptions.allowedTools).toContain("mcp__memory__*");
     expect(agentOptions.hooks.PreToolUse).toHaveLength(6);
     expect(agentOptions.hooks.PreToolUse![0].matcher).toBe("Bash");
     expect(agentOptions.hooks.PreToolUse![1].matcher).toBe("Read");

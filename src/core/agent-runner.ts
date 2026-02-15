@@ -92,6 +92,11 @@ export function buildAgentOptions(
   memoryContent: string,
   mcpServers: Record<string, unknown>,
 ): AgentOptions {
+  // Auto-allow all tools from every registered MCP server
+  const mcpToolPatterns = Object.keys(mcpServers).map(
+    (name) => `mcp__${name}__*`,
+  );
+
   return {
     systemPrompt: {
       type: "preset",
@@ -109,10 +114,7 @@ export function buildAgentOptions(
       "Bash",
       "WebFetch",
       "WebSearch",
-      "mcp__memory__memory_search",
-      "mcp__assistant__cron",
-      "mcp__assistant__exec",
-      "mcp__assistant__process",
+      ...mcpToolPatterns,
     ],
     sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
     hooks: {

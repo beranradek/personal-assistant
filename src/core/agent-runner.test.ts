@@ -193,14 +193,38 @@ describe("agent-runner", () => {
       }
     });
 
-    it("allowedTools includes MCP tool names", () => {
+    it("allowedTools includes wildcard patterns for provided MCP servers", () => {
+      const config = makeConfig();
+      const mcpServers = {
+        memory: { command: "node", args: ["./memory-server.js"] },
+        assistant: { command: "node", args: ["./assistant-server.js"] },
+      };
+      const opts = buildAgentOptions(config, "/tmp/workspace", "", mcpServers);
+
+      expect(opts.allowedTools).toContain("mcp__memory__*");
+      expect(opts.allowedTools).toContain("mcp__assistant__*");
+    });
+
+    it("allowedTools includes wildcard patterns for user-configured MCP servers", () => {
+      const config = makeConfig();
+      const mcpServers = {
+        memory: {},
+        assistant: {},
+        "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@latest"] },
+        context7: { command: "npx", args: ["-y", "@upstash/context7-mcp@latest"] },
+      };
+      const opts = buildAgentOptions(config, "/tmp/workspace", "", mcpServers);
+
+      expect(opts.allowedTools).toContain("mcp__chrome-devtools__*");
+      expect(opts.allowedTools).toContain("mcp__context7__*");
+    });
+
+    it("allowedTools has no MCP patterns when no MCP servers provided", () => {
       const config = makeConfig();
       const opts = buildAgentOptions(config, "/tmp/workspace", "", {});
 
-      expect(opts.allowedTools).toContain("mcp__memory__memory_search");
-      expect(opts.allowedTools).toContain("mcp__assistant__cron");
-      expect(opts.allowedTools).toContain("mcp__assistant__exec");
-      expect(opts.allowedTools).toContain("mcp__assistant__process");
+      const mcpPatterns = opts.allowedTools.filter((t) => t.startsWith("mcp__"));
+      expect(mcpPatterns).toHaveLength(0);
     });
 
     it("mcpServers includes provided servers", () => {

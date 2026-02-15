@@ -19,9 +19,47 @@ vi.mock("./memory/files.js", () => ({
   readMemoryFiles: vi.fn(),
 }));
 
+vi.mock("./memory/embeddings.js", () => ({
+  createEmbeddingProvider: vi.fn(),
+}));
+
+vi.mock("./memory/vector-store.js", () => ({
+  createVectorStore: vi.fn(),
+}));
+
+vi.mock("./memory/indexer.js", () => ({
+  createIndexer: vi.fn(),
+}));
+
+vi.mock("./memory/hybrid-search.js", () => ({
+  hybridSearch: vi.fn(),
+}));
+
+vi.mock("./tools/memory-server.js", () => ({
+  createMemoryServer: vi.fn(),
+}));
+
+vi.mock("./tools/assistant-server.js", () => ({
+  createAssistantServer: vi.fn(),
+}));
+
+vi.mock("./cron/tool.js", () => ({
+  createCronToolManager: vi.fn(),
+}));
+
+vi.mock("./exec/tool.js", () => ({
+  handleExec: vi.fn(),
+}));
+
+vi.mock("./exec/process-registry.js", () => ({
+  getSession: vi.fn(),
+  listSessions: vi.fn(),
+}));
+
 vi.mock("./core/agent-runner.js", () => ({
   buildAgentOptions: vi.fn(),
   runAgentTurn: vi.fn(),
+  clearSdkSession: vi.fn(),
 }));
 
 vi.mock("./core/logger.js", () => ({
@@ -41,6 +79,12 @@ import { handleLine, TERMINAL_SESSION_KEY, createTerminalSession } from "./termi
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
+import { createEmbeddingProvider } from "./memory/embeddings.js";
+import { createVectorStore } from "./memory/vector-store.js";
+import { createIndexer } from "./memory/indexer.js";
+import { createMemoryServer } from "./tools/memory-server.js";
+import { createAssistantServer } from "./tools/assistant-server.js";
+import { createCronToolManager } from "./cron/tool.js";
 import { buildAgentOptions, runAgentTurn } from "./core/agent-runner.js";
 
 // ---------------------------------------------------------------------------
@@ -132,11 +176,53 @@ describe("terminal", () => {
   // createTerminalSession
   // -----------------------------------------------------------------------
   describe("createTerminalSession", () => {
-    it("creates a terminal session with config and agent options", async () => {
-      const config = makeConfig();
+    function setupSessionMocks(config: Config) {
+      const mockEmbedder = {
+        embed: vi.fn(),
+        embedBatch: vi.fn(),
+        dimensions: 768,
+        close: vi.fn(),
+      };
+      const mockStore = {
+        upsertChunk: vi.fn(),
+        searchVector: vi.fn(),
+        searchKeyword: vi.fn(),
+        deleteChunksForFile: vi.fn(),
+        getFileHash: vi.fn(),
+        setFileHash: vi.fn(),
+        getTrackedFilePaths: vi.fn(() => []),
+        deleteFileHash: vi.fn(),
+        close: vi.fn(),
+      };
+      const mockIndexer = {
+        syncFiles: vi.fn(),
+        markDirty: vi.fn(),
+        isDirty: vi.fn(() => false),
+        syncIfDirty: vi.fn(),
+        close: vi.fn(),
+      };
+      const mockCronManager = {
+        handleAction: vi.fn(),
+        rearmTimer: vi.fn(),
+        stop: vi.fn(),
+      };
+
       vi.mocked(loadConfig).mockReturnValue(config);
       vi.mocked(ensureWorkspace).mockResolvedValue(undefined);
+      vi.mocked(createEmbeddingProvider).mockResolvedValue(mockEmbedder);
+      vi.mocked(createVectorStore).mockReturnValue(mockStore as any);
+      vi.mocked(createIndexer).mockReturnValue(mockIndexer);
       vi.mocked(readMemoryFiles).mockResolvedValue("memory content");
+      vi.mocked(createMemoryServer).mockReturnValue({} as any);
+      vi.mocked(createAssistantServer).mockReturnValue({} as any);
+      vi.mocked(createCronToolManager).mockReturnValue(mockCronManager);
+
+      return { mockEmbedder, mockStore, mockIndexer, mockCronManager };
+    }
+
+    it("creates a terminal session with config and agent options", async () => {
+      const config = makeConfig();
+      setupSessionMocks(config);
       const agentOpts = makeAgentOptions();
       vi.mocked(buildAgentOptions).mockReturnValue(agentOpts);
 
@@ -147,15 +233,80 @@ describe("terminal", () => {
       expect(readMemoryFiles).toHaveBeenCalledWith(config.security.workspace, {
         includeHeartbeat: false,
       });
+      expect(session.config).toBe(config);
+      expect(session.agentOptions).toBe(agentOpts);
+      expect(session.sessionKey).toBe("terminal--default");
+    });
+
+    it("initializes memory system and MCP servers", async () => {
+      const config = makeConfig();
+      setupSessionMocks(config);
+      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+
+      await createTerminalSession("/app");
+
+      expect(createEmbeddingProvider).toHaveBeenCalled();
+      expect(createVectorStore).toHaveBeenCalled();
+      expect(createIndexer).toHaveBeenCalled();
+      expect(createMemoryServer).toHaveBeenCalled();
+      expect(createAssistantServer).toHaveBeenCalled();
+      expect(createCronToolManager).toHaveBeenCalled();
+    });
+
+    it("passes memory and assistant MCP servers to buildAgentOptions", async () => {
+      const config = makeConfig();
+      setupSessionMocks(config);
+      const mockMemoryServer = { name: "memory" };
+      const mockAssistantServer = { name: "assistant" };
+      vi.mocked(createMemoryServer).mockReturnValue(mockMemoryServer as any);
+      vi.mocked(createAssistantServer).mockReturnValue(mockAssistantServer as any);
+      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+
+      await createTerminalSession("/app");
+
       expect(buildAgentOptions).toHaveBeenCalledWith(
         config,
         config.security.workspace,
         "memory content",
-        {},
+        expect.objectContaining({
+          memory: mockMemoryServer,
+          assistant: mockAssistantServer,
+        }),
       );
-      expect(session.config).toBe(config);
-      expect(session.agentOptions).toBe(agentOpts);
-      expect(session.sessionKey).toBe("terminal--default");
+    });
+
+    it("merges user-configured MCP servers with built-in ones", async () => {
+      const config = makeConfig({
+        mcpServers: { "chrome-devtools": { command: "npx", args: [] } },
+      });
+      setupSessionMocks(config);
+      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+
+      await createTerminalSession("/app");
+
+      expect(buildAgentOptions).toHaveBeenCalledWith(
+        config,
+        config.security.workspace,
+        "memory content",
+        expect.objectContaining({
+          "chrome-devtools": { command: "npx", args: [] },
+          memory: expect.anything(),
+          assistant: expect.anything(),
+        }),
+      );
+    });
+
+    it("cleanup releases resources", async () => {
+      const config = makeConfig();
+      const { mockStore, mockEmbedder, mockCronManager } = setupSessionMocks(config);
+      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+
+      const session = await createTerminalSession("/app");
+      await session.cleanup();
+
+      expect(mockCronManager.stop).toHaveBeenCalled();
+      expect(mockStore.close).toHaveBeenCalled();
+      expect(mockEmbedder.close).toHaveBeenCalled();
     });
   });
 

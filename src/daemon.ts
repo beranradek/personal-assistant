@@ -101,8 +101,9 @@ export async function startDaemon(configDir: string): Promise<void> {
     listProcessSessions: listSessions,
   });
 
-  // 5. Build agent options
+  // 5. Build agent options (built-in + user-configured MCP servers)
   const mcpServers: Record<string, unknown> = {
+    ...config.mcpServers,
     memory: memoryServer,
     assistant: assistantServer,
   };
