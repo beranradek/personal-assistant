@@ -22,6 +22,8 @@
     "better-sqlite3": "^12.6.2",
     "cron-parser": "^5.5.0",
     "grammy": "^1.40.0",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
     "node-cron": "^4.2.1",
     "node-llama-cpp": "^3.15.1",
     "pino": "^10.3.1",
