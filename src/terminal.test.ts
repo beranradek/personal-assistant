@@ -323,6 +323,7 @@ describe("terminal", () => {
           { role: "user", content: "Hello", timestamp: "2025-06-15T12:00:00.000Z" },
           { role: "assistant", content: "Hello back!", timestamp: "2025-06-15T12:00:01.000Z" },
         ],
+        partial: false,
       };
       vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
 
@@ -366,6 +367,7 @@ describe("terminal", () => {
           { role: "user", content: "  hello  ", timestamp: "2025-06-15T12:00:00.000Z" },
           { role: "assistant", content: "Trimmed!", timestamp: "2025-06-15T12:00:01.000Z" },
         ],
+        partial: false,
       };
       vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
 
@@ -414,6 +416,7 @@ describe("terminal", () => {
           { role: "user", content: "What is the answer?", timestamp: "2025-06-15T12:00:00.000Z" },
           { role: "assistant", content: "The answer is 42", timestamp: "2025-06-15T12:00:01.000Z" },
         ],
+        partial: false,
       };
       vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
 

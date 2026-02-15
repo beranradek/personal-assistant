@@ -124,7 +124,18 @@ export async function startDaemon(configDir: string): Promise<void> {
   if (config.adapters.telegram.enabled) {
     const telegram = createTelegramAdapter(
       config.adapters.telegram,
-      (msg) => queue.enqueue(msg),
+      (msg) => {
+        const result = queue.enqueue(msg);
+        if (!result.accepted) {
+          log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
+          telegram.sendResponse({
+            source: msg.source,
+            sourceId: msg.sourceId,
+            text: "I'm currently busy processing other messages. Please try again in a moment.",
+            metadata: msg.metadata,
+          }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
+        }
+      },
     );
     router.register(telegram);
     await telegram.start();
@@ -135,7 +146,18 @@ export async function startDaemon(configDir: string): Promise<void> {
   if (config.adapters.slack.enabled) {
     const slack = createSlackAdapter(
       config.adapters.slack,
-      (msg) => queue.enqueue(msg),
+      (msg) => {
+        const result = queue.enqueue(msg);
+        if (!result.accepted) {
+          log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
+          slack.sendResponse({
+            source: msg.source,
+            sourceId: msg.sourceId,
+            text: "I'm currently busy processing other messages. Please try again in a moment.",
+            metadata: msg.metadata,
+          }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
+        }
+      },
     );
     router.register(slack);
     await slack.start();

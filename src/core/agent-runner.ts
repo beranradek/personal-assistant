@@ -73,6 +73,8 @@ export interface AgentOptions {
 export interface AgentTurnResult {
   response: string;
   messages: SessionMessage[];
+  /** True when the SDK subprocess exited mid-response (transport race). */
+  partial: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +194,7 @@ export async function runAgentTurn(
 
   // 4. Collect response from async generator
   let responseText = "";
+  let partial = false;
   const turnMessages: SessionMessage[] = [userMsg];
 
   try {
@@ -229,12 +232,24 @@ export async function runAgentTurn(
     // The SDK can throw "ProcessTransport is not ready for writing" when the
     // Claude Code subprocess exits while a hook callback (e.g. PreToolUse) is
     // still being processed. If we already collected a response, treat the
-    // turn as successful; otherwise re-throw.
+    // turn as successful but mark it as partial; otherwise re-throw.
     const isTransportError =
       err instanceof Error &&
       err.message.includes("ProcessTransport is not ready");
     if (!isTransportError || !responseText) {
       throw err;
+    }
+    partial = true;
+  } finally {
+    // Ensure the SDK transport is closed and its process "exit" listener is
+    // removed. Without this, each query() leaks a listener on `process`,
+    // triggering MaxListenersExceededWarning after ~11 calls.
+    if (typeof (result as any).close === "function") {
+      try {
+        (result as any).close();
+      } catch {
+        // Already closed or process already exited — safe to ignore.
+      }
     }
   }
 
@@ -258,5 +273,5 @@ export async function runAgentTurn(
     assistantResponse: responseText,
   });
 
-  return { response: responseText, messages: turnMessages };
+  return { response: responseText, messages: turnMessages, partial };
 }

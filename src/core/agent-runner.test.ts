@@ -740,5 +740,75 @@ describe("agent-runner", () => {
 
       expect(result.response).toBe("Actual response");
     });
+
+    it("returns partial: false on successful turn", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            message: {
+              content: [{ type: "text", text: "Complete" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            result: "Complete",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const result = await runAgentTurn("Hi", sessionKey, agentOptions, config);
+
+      expect(result.partial).toBe(false);
+    });
+
+    it("returns partial: true when transport error occurs after collecting response", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      async function* transportErrorGenerator() {
+        yield {
+          type: "assistant",
+          message: {
+            content: [{ type: "text", text: "Partial response" }],
+          },
+        };
+        throw new Error("ProcessTransport is not ready for writing");
+      }
+
+      vi.mocked(query).mockReturnValue(transportErrorGenerator() as any);
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const result = await runAgentTurn("Hi", sessionKey, agentOptions, config);
+
+      expect(result.partial).toBe(true);
+      expect(result.response).toBe("Partial response");
+    });
+
+    it("re-throws transport error when no response was collected", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      async function* transportErrorGenerator() {
+        throw new Error("ProcessTransport is not ready for writing");
+      }
+
+      vi.mocked(query).mockReturnValue(transportErrorGenerator() as any);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+
+      await expect(
+        runAgentTurn("Hi", sessionKey, agentOptions, config),
+      ).rejects.toThrow("ProcessTransport is not ready");
+    });
   });
 });

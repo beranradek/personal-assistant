@@ -705,7 +705,7 @@ describe("Integration: Queue processes messages in order", () => {
   it("queue + router work together in processLoop", async () => {
     // runAgentTurn is mocked at the top level via vi.mock
     vi.mocked(runAgentTurn).mockImplementation(async (message: string) => {
-      return { response: `reply to: ${message}`, messages: [] };
+      return { response: `reply to: ${message}`, messages: [], partial: false };
     });
 
     const router = createRouter();

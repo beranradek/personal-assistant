@@ -154,10 +154,16 @@ export function createMessageQueue(config: Config): MessageQueue {
           config,
         );
 
-        // Route the response back to the source adapter (skip if empty)
-        if (result.response.trim()) {
+        // Build the response text, appending a notice if the response is partial
+        let responseText = result.response;
+        if (result.partial) {
+          responseText += "\n\n[Note: This response may be incomplete due to an internal interruption.]";
+        }
+
+        // Route the response back to the source adapter
+        if (responseText.trim()) {
           // Suppress heartbeat responses that contain HEARTBEAT_OK
-          if (message.source === "heartbeat" && isHeartbeatOk(result.response)) {
+          if (message.source === "heartbeat" && isHeartbeatOk(responseText)) {
             log.debug({ sessionKey }, "heartbeat OK, no notification needed");
           } else {
             const routeTarget = resolveRouteTarget(message, config);
@@ -165,7 +171,7 @@ export function createMessageQueue(config: Config): MessageQueue {
               const response: AdapterMessage = {
                 source: routeTarget.source,
                 sourceId: routeTarget.sourceId,
-                text: result.response,
+                text: responseText,
                 metadata: message.metadata,
               };
               await router.route(response);
@@ -177,7 +183,21 @@ export function createMessageQueue(config: Config): MessageQueue {
             }
           }
         } else {
-          log.warn({ source: message.source, sessionKey }, "agent returned empty response, skipping");
+          // Notify the user when the agent returns an empty response
+          log.warn({ source: message.source, sessionKey }, "agent returned empty response");
+          const emptyTarget = resolveRouteTarget(message, config);
+          if (emptyTarget) {
+            try {
+              await router.route({
+                source: emptyTarget.source,
+                sourceId: emptyTarget.sourceId,
+                text: "I processed your message but had nothing to respond with. Could you try rephrasing?",
+                metadata: message.metadata,
+              });
+            } catch (routeErr) {
+              log.error({ err: routeErr }, "failed to send empty-response notice");
+            }
+          }
         }
       } catch (err) {
         log.error({ err, source: message.source }, "failed to process message");

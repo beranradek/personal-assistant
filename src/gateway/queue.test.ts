@@ -179,6 +179,7 @@ describe("MessageQueue", () => {
       const turnResult: AgentTurnResult = {
         response: "Hi there!",
         messages: [],
+        partial: false,
       };
       vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
 
@@ -222,7 +223,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockImplementation(
         async (message: string) => {
           processedTexts.push(message);
-          return { response: `reply to ${message}`, messages: [] };
+          return { response: `reply to ${message}`, messages: [], partial: false };
         },
       );
 
@@ -253,6 +254,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "reply",
         messages: [],
+        partial: false,
       });
 
       const queue = createMessageQueue(config);
@@ -294,6 +296,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "reply",
         messages: [],
+        partial: false,
       });
 
       const queue = createMessageQueue(config);
@@ -350,6 +353,64 @@ describe("MessageQueue", () => {
         }),
       );
     });
+
+    it("notifies user when agent returns empty response", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeAdapter("telegram");
+      router.register(adapter);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "",
+        messages: [],
+        partial: false,
+      });
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ text: "Hello" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "123456",
+          text: expect.stringContaining("nothing to respond with"),
+        }),
+      );
+    });
+
+    it("appends partial notice when response is marked partial", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeAdapter("telegram");
+      router.register(adapter);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "Partial answer here",
+        messages: [],
+        partial: true,
+      });
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ text: "Hello" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("incomplete"),
+        }),
+      );
+      // Original response text should still be present
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("Partial answer here"),
+        }),
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -368,6 +429,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
+        partial: false,
       });
 
       const queue = createMessageQueue(config);
@@ -383,6 +445,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
+        partial: false,
       });
       await queue.processNext(agentOptions, config, router);
 
@@ -407,6 +470,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
+        partial: false,
       });
 
       const queue = createMessageQueue(config);
@@ -419,6 +483,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
+        partial: false,
       });
 
       queue.enqueue({ source: "heartbeat", sourceId: "telegram", text: "heartbeat prompt" });
@@ -443,6 +508,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
+        partial: false,
       });
 
       const queue = createMessageQueue(config);
@@ -467,6 +533,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "reply",
         messages: [],
+        partial: false,
       });
 
       const queue = createMessageQueue(config);
@@ -479,6 +546,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
+        partial: false,
       });
 
       queue.enqueue({ source: "heartbeat", sourceId: "slack", text: "heartbeat prompt" });
@@ -503,7 +571,7 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
       await queue.processNext(agentOptions, config, router);
 
@@ -513,6 +581,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "HEARTBEAT_OK",
         messages: [],
+        partial: false,
       });
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
       await queue.processNext(agentOptions, config, router);
@@ -536,7 +605,7 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
       await queue.processNext(agentOptions, config, router);
 
@@ -546,6 +615,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "Nothing needs attention. HEARTBEAT_OK.",
         messages: [],
+        partial: false,
       });
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
       await queue.processNext(agentOptions, config, router);
@@ -565,7 +635,7 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
       await queue.processNext(agentOptions, config, router);
 
@@ -575,6 +645,7 @@ describe("MessageQueue", () => {
       vi.mocked(runAgentTurn).mockResolvedValue({
         response: "Your build failed! Check the logs.",
         messages: [],
+        partial: false,
       });
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
       await queue.processNext(agentOptions, config, router);
@@ -600,7 +671,7 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
       await queue.processNext(agentOptions, config, router);
 
