@@ -117,6 +117,20 @@ async function main(): Promise<void> {
 }
 
 if (!process.env["VITEST"]) {
+  // The Claude Agent SDK fires hook callbacks (handleControlRequest) without
+  // awaiting them. When the Claude Code subprocess exits while a hook is still
+  // being processed, the SDK tries to write the response to the dead process
+  // and throws "ProcessTransport is not ready for writing" as an unhandled
+  // rejection. This is harmless — the turn already completed — so suppress it.
+  process.on("unhandledRejection", (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    if (msg.includes("ProcessTransport is not ready")) {
+      log.debug("Suppressed SDK transport race condition (process already exited)");
+      return;
+    }
+    log.error({ err: reason }, "Unhandled promise rejection");
+  });
+
   main().catch((err) => {
     log.error({ err }, "Fatal error");
     console.error("Fatal:", err);

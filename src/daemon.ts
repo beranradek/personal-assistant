@@ -214,6 +214,12 @@ export async function startDaemon(configDir: string): Promise<void> {
 
   // Catch unhandled rejections to prevent silent crashes
   process.on("unhandledRejection", (reason) => {
+    // Suppress harmless SDK transport race condition (see cli.ts for details)
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    if (msg.includes("ProcessTransport is not ready")) {
+      log.debug("Suppressed SDK transport race condition (process already exited)");
+      return;
+    }
     log.error({ err: reason }, "Unhandled promise rejection");
   });
 }
