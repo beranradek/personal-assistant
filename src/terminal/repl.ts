@@ -26,15 +26,24 @@ export function runTerminalRepl(session: TerminalSession): void {
   const isTTY = process.stdin.isTTY ?? false;
 
   let pendingPaste: string | null = null;
+  let pasteInsertPos = 0;
+  let processing = false;
   let cleaned = false;
+
+  // Declared as `let` so the onPaste callback can reference `rl` via closure
+  // (rl is assigned after pasteStream is created, but onPaste runs later).
+  // eslint-disable-next-line prefer-const
+  let rl: readline.Interface;
 
   // Set up paste interceptor Transform stream
   const pasteStream = createPasteInterceptor({
     onPaste: (text) => {
       pendingPaste = text;
-      // Push a synthetic newline through the transform to trigger readline's
-      // "line" event. The handler will pick up pendingPaste instead.
-      pasteStream.push("\n");
+      // Capture cursor position so we can insert the paste at the right spot
+      // when the user eventually presses Enter.
+      pasteInsertPos = (rl as any).cursor ?? 0;
+      // Don't push a synthetic \n — let the user press Enter naturally.
+      // This allows combining text typed before/after the paste into one message.
     },
   });
 
@@ -45,7 +54,7 @@ export function runTerminalRepl(session: TerminalSession): void {
   process.stdin.setEncoding("utf-8");
   process.stdin.pipe(pasteStream);
 
-  const rl = readline.createInterface({
+  rl = readline.createInterface({
     input: pasteStream,
     output: process.stdout,
     prompt: colors.prompt("You> "),
@@ -72,9 +81,25 @@ export function runTerminalRepl(session: TerminalSession): void {
   rl.prompt();
 
   rl.on("line", async (input) => {
-    // If we have a pending paste, use that instead of the line content
-    const userInput = pendingPaste ?? input;
-    pendingPaste = null;
+    // Guard against concurrent processing (e.g. user presses Enter twice quickly)
+    if (processing) return;
+
+    // Combine typed text with pending paste content.
+    // When the user types before pasting, pastes, then types after — we merge
+    // all three parts: text-before + paste + text-after, using the cursor
+    // position captured at paste time.
+    let userInput: string;
+    if (pendingPaste !== null) {
+      const paste = pendingPaste;
+      const pos = pasteInsertPos;
+      pendingPaste = null;
+
+      const before = input.slice(0, pos).trimEnd();
+      const after = input.slice(pos).trimStart();
+      userInput = [before, paste, after].filter(Boolean).join("\n");
+    } else {
+      userInput = input;
+    }
 
     // Show a preview for multiline pastes
     if (userInput.includes("\n")) {
@@ -82,12 +107,14 @@ export function runTerminalRepl(session: TerminalSession): void {
       console.log(colors.dim(`(pasted ${lineCount} lines)`));
     }
 
+    processing = true;
     spinner.start();
     let result;
     try {
       result = await handleLine(userInput, sessionKey, agentOptions, config);
     } finally {
       spinner.stop();
+      processing = false;
     }
 
     if (result === null) {
