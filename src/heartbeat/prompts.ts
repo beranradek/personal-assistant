@@ -38,9 +38,9 @@ export function resolveHeartbeatPrompt(events: SystemEvent[]): string {
 }
 
 /**
- * Returns `true` when the agent response is just "HEARTBEAT_OK"
- * (case-insensitive, allowing surrounding whitespace).
+ * Returns `true` when the agent response contains "HEARTBEAT_OK"
+ * anywhere in the text (case-insensitive).
  */
 export function isHeartbeatOk(response: string): boolean {
-  return /^\s*HEARTBEAT_OK\s*$/i.test(response.trim());
+  return /HEARTBEAT_OK/i.test(response);
 }

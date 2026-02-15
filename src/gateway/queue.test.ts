@@ -491,6 +491,103 @@ describe("MessageQueue", () => {
       );
     });
 
+    it("suppresses heartbeat response containing HEARTBEAT_OK", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      const queue = createMessageQueue(config);
+
+      // Establish last adapter
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+
+      // Heartbeat where agent responds with HEARTBEAT_OK
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "HEARTBEAT_OK",
+        messages: [],
+      });
+      queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).not.toHaveBeenCalled();
+      expect(mockLog.debug).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: expect.any(String) }),
+        expect.stringContaining("heartbeat OK"),
+      );
+    });
+
+    it("suppresses heartbeat response when HEARTBEAT_OK is embedded in text", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      const queue = createMessageQueue(config);
+
+      // Establish last adapter
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+
+      // Heartbeat where agent embeds HEARTBEAT_OK in a longer response
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "Nothing needs attention. HEARTBEAT_OK.",
+        messages: [],
+      });
+      queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).not.toHaveBeenCalled();
+    });
+
+    it("delivers heartbeat response when it does NOT contain HEARTBEAT_OK", async () => {
+      const config = makeConfig({
+        heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const telegram = makeAdapter("telegram");
+      router.register(telegram);
+
+      const queue = createMessageQueue(config);
+
+      // Establish last adapter
+      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [] });
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+
+      // Heartbeat where agent has something important to say
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "Your build failed! Check the logs.",
+        messages: [],
+      });
+      queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(telegram.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "42",
+          text: "Your build failed! Check the logs.",
+        }),
+      );
+    });
+
     it("routes heartbeat error response to correct adapter", async () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },

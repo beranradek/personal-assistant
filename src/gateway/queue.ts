@@ -16,6 +16,7 @@ import type { Router } from "./router.js";
 import { runAgentTurn, clearSdkSession } from "../core/agent-runner.js";
 import { resolveSessionKey } from "../session/manager.js";
 import { createLogger } from "../core/logger.js";
+import { isHeartbeatOk } from "../heartbeat/prompts.js";
 
 const log = createLogger("gateway-queue");
 
@@ -155,20 +156,25 @@ export function createMessageQueue(config: Config): MessageQueue {
 
         // Route the response back to the source adapter (skip if empty)
         if (result.response.trim()) {
-          const routeTarget = resolveRouteTarget(message, config);
-          if (routeTarget) {
-            const response: AdapterMessage = {
-              source: routeTarget.source,
-              sourceId: routeTarget.sourceId,
-              text: result.response,
-              metadata: message.metadata,
-            };
-            await router.route(response);
+          // Suppress heartbeat responses that contain HEARTBEAT_OK
+          if (message.source === "heartbeat" && isHeartbeatOk(result.response)) {
+            log.debug({ sessionKey }, "heartbeat OK, no notification needed");
           } else {
-            log.warn(
-              { deliverTo: config.heartbeat.deliverTo },
-              "no adapter target for heartbeat, dropping response",
-            );
+            const routeTarget = resolveRouteTarget(message, config);
+            if (routeTarget) {
+              const response: AdapterMessage = {
+                source: routeTarget.source,
+                sourceId: routeTarget.sourceId,
+                text: result.response,
+                metadata: message.metadata,
+              };
+              await router.route(response);
+            } else {
+              log.warn(
+                { deliverTo: config.heartbeat.deliverTo },
+                "no adapter target for heartbeat, dropping response",
+              );
+            }
           }
         } else {
           log.warn({ source: message.source, sessionKey }, "agent returned empty response, skipping");

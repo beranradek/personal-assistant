@@ -125,9 +125,10 @@ describe("isHeartbeatOk", () => {
     expect(isHeartbeatOk("\tHEARTBEAT_OK\t")).toBe(true);
   });
 
-  it("returns false when extra text is present", () => {
-    expect(isHeartbeatOk("HEARTBEAT_OK and something else")).toBe(false);
-    expect(isHeartbeatOk("prefix HEARTBEAT_OK")).toBe(false);
+  it("returns true when extra text is present (contains match)", () => {
+    expect(isHeartbeatOk("HEARTBEAT_OK and something else")).toBe(true);
+    expect(isHeartbeatOk("prefix HEARTBEAT_OK")).toBe(true);
+    expect(isHeartbeatOk("Nothing to report. HEARTBEAT_OK.")).toBe(true);
   });
 
   it("returns false for empty string", () => {
