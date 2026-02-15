@@ -194,34 +194,47 @@ export async function runAgentTurn(
   let responseText = "";
   const turnMessages: SessionMessage[] = [userMsg];
 
-  for await (const msg of result) {
-    // Capture SDK session ID for future resumption
-    if (
-      !sdkSessionIds.has(sessionKey) &&
-      "session_id" in msg &&
-      msg.session_id
-    ) {
-      sdkSessionIds.set(sessionKey, msg.session_id as string);
-    }
+  try {
+    for await (const msg of result) {
+      // Capture SDK session ID for future resumption
+      if (
+        !sdkSessionIds.has(sessionKey) &&
+        "session_id" in msg &&
+        msg.session_id
+      ) {
+        sdkSessionIds.set(sessionKey, msg.session_id as string);
+      }
 
-    if (
-      msg.type === "assistant" &&
-      (msg as SDKAssistantMessage).message?.content
-    ) {
-      const assistantMsg = msg as SDKAssistantMessage;
-      for (const block of assistantMsg.message.content) {
-        if (typeof block === "string") {
-          responseText += block;
-        } else if (
-          typeof block === "object" &&
-          block !== null &&
-          "type" in block &&
-          (block as { type: string }).type === "text" &&
-          "text" in block
-        ) {
-          responseText += (block as { type: "text"; text: string }).text;
+      if (
+        msg.type === "assistant" &&
+        (msg as SDKAssistantMessage).message?.content
+      ) {
+        const assistantMsg = msg as SDKAssistantMessage;
+        for (const block of assistantMsg.message.content) {
+          if (typeof block === "string") {
+            responseText += block;
+          } else if (
+            typeof block === "object" &&
+            block !== null &&
+            "type" in block &&
+            (block as { type: string }).type === "text" &&
+            "text" in block
+          ) {
+            responseText += (block as { type: "text"; text: string }).text;
+          }
         }
       }
+    }
+  } catch (err) {
+    // The SDK can throw "ProcessTransport is not ready for writing" when the
+    // Claude Code subprocess exits while a hook callback (e.g. PreToolUse) is
+    // still being processed. If we already collected a response, treat the
+    // turn as successful; otherwise re-throw.
+    const isTransportError =
+      err instanceof Error &&
+      err.message.includes("ProcessTransport is not ready");
+    if (!isTransportError || !responseText) {
+      throw err;
     }
   }
 
