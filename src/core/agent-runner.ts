@@ -146,7 +146,7 @@ export function buildAgentOptions(
       ],
     },
     mcpServers,
-    settingSources: ["project"],
+    settingSources: ["user", "project", "local"],
     model: config.agent.model ?? undefined,
     maxTurns: config.agent.maxTurns,
   };
