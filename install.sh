@@ -50,7 +50,7 @@ NVM_VERSION="v0.40.1"
 
 source_nvm() {
   # shellcheck source=/dev/null
-  [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh"
+  [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh" || true
 }
 
 node_version_ok() {
