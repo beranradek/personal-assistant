@@ -236,10 +236,26 @@ export async function runAgentTurn(
     const isTransportError =
       err instanceof Error &&
       err.message.includes("ProcessTransport is not ready");
-    if (!isTransportError || !responseText) {
+    if (isTransportError && responseText) {
+      partial = true;
+    } else {
+      // Enhance process exit errors with actionable guidance
+      if (err instanceof Error) {
+        const exitMatch = err.message.match(
+          /Claude Code process exited with code (\d+)/,
+        );
+        if (exitMatch) {
+          const code = exitMatch[1];
+          const hint =
+            code === "1"
+              ? "This usually means an authentication error or a crash in the Claude Code subprocess. " +
+                "Check that your ANTHROPIC_API_KEY is set and valid, or run `claude` directly to diagnose."
+              : `Exit code ${code} from the Claude Code subprocess. Run \`claude\` directly to diagnose.`;
+          throw new Error(`${err.message}\n${hint}`);
+        }
+      }
       throw err;
     }
-    partial = true;
   } finally {
     // Ensure the SDK transport is closed and its process "exit" listener is
     // removed. Without this, each query() leaks a listener on `process`,

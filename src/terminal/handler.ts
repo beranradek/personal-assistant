@@ -39,8 +39,17 @@ export async function handleLine(
     const result = await runAgentTurn(trimmed, sessionKey, agentOptions, config);
     return { response: result.response, error: null };
   } catch (err) {
-    log.error({ err }, "Agent turn failed");
     const errorMessage = err instanceof Error ? err.message : String(err);
+    // For process exit errors the message already contains the actionable hint;
+    // log without the stack trace to avoid noise in the terminal.
+    const isProcessExit =
+      err instanceof Error &&
+      /Claude Code process exited with code/.test(err.message);
+    if (isProcessExit) {
+      log.error("Agent turn failed: %s", errorMessage);
+    } else {
+      log.error({ err }, "Agent turn failed");
+    }
     return { response: null, error: errorMessage };
   }
 }

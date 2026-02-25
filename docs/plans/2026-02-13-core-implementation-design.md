@@ -11,31 +11,31 @@ Two modes, shared core:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Shared Core                          │
-│  ┌─────────┐ ┌──────────┐ ┌────────┐ ┌──────────────┐  │
-│  │ Security │ │  Memory  │ │ Skills │ │    Config     │  │
-│  │ (hooks)  │ │ (files + │ │(.claude│ │ (settings.json│  │
-│  │          │ │  SQLite) │ │/skills)│ │   + MCP)     │  │
-│  └─────────┘ └──────────┘ └────────┘ └──────────────┘  │
+│  ┌─────────┐ ┌──────────┐ ┌────────┐ ┌──────────────┐   │
+│  │ Security│ │  Memory  │ │ Skills │ │   Config     │   │
+│  │ (hooks) │ │ (files + │ │(.claude│ │(settings.json│   │
+│  │         │ │  SQLite) │ │/skills)│ │   + MCP)     │   │
+│  └─────────┘ └──────────┘ └────────┘ └──────────────┘   │
 │  ┌─────────────────────────────────────────────────┐    │
-│  │              Agent Runner                       │    │
+│  │                 Agent Runner                    │    │
 │  │  (builds prompt, calls SDK query(), streams)    │    │
 │  └─────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘
 
 Mode A: npm run terminal          Mode B: npm run daemon
 ┌──────────────┐                  ┌──────────────────────┐
-│   Terminal    │                  │  Gateway (queue)     │
-│  (readline)   │                  │  ┌────────────────┐  │
-│  Direct call  │                  │  │ Message Queue   │  │
-│  to Agent     │                  │  │ (FIFO, serial)  │  │
-│  Runner       │                  │  └───┬────────────┘  │
+│   Terminal   │                  │  Gateway (queue)     │
+│  (readline)  │                  │  ┌────────────────┐  │
+│  Direct call │                  │  │ Message Queue  │  │
+│  to Agent    │                  │  │ (FIFO, serial) │  │
+│  Runner      │                  │  └───┬────────────┘  │
 └──────────────┘                  │      │               │
-                                  │  ┌───┴──┐ ┌───────┐  │
-                                  │  │Telegr.│ │ Slack │  │
-                                  │  └───────┘ └───────┘  │
-                                  │  ┌─────────────────┐  │
-                                  │  │ Heartbeat (cron) │  │
-                                  │  └─────────────────┘  │
+                                  │  ┌───┴───┐ ┌───────┐ │
+                                  │  │Telegr.│ │ Slack │ │
+                                  │  └───────┘ └───────┘ │
+                                  │  ┌─────────────────┐ │
+                                  │  │ Heartbeat (cron)│ │
+                                  │  └─────────────────┘ │
                                   └──────────────────────┘
 ```
 
