@@ -12,7 +12,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export { handleLine, type HandleLineResult } from "./terminal/handler.js";
+export { handleLine, handleLineStreaming, type HandleLineResult } from "./terminal/handler.js";
 export {
   createTerminalSession,
   type TerminalSession,

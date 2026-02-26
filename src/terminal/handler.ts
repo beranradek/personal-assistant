@@ -1,5 +1,5 @@
-import { runAgentTurn, clearSdkSession } from "../core/agent-runner.js";
-import type { AgentOptions } from "../core/agent-runner.js";
+import { runAgentTurn, clearSdkSession, streamAgentTurn } from "../core/agent-runner.js";
+import type { AgentOptions, StreamEvent } from "../core/agent-runner.js";
 import type { Config } from "../core/types.js";
 import { createLogger } from "../core/logger.js";
 
@@ -52,4 +52,36 @@ export async function handleLine(
     }
     return { response: null, error: errorMessage };
   }
+}
+
+/**
+ * Streaming variant of handleLine. Yields StreamEvent objects as they arrive.
+ *
+ * Yields nothing (empty generator) for empty/whitespace input.
+ * For /clear, yields a single result event.
+ * Otherwise, delegates to streamAgentTurn and yields all events.
+ */
+export async function* handleLineStreaming(
+  input: string,
+  sessionKey: string,
+  agentOptions: AgentOptions,
+  config: Config,
+): AsyncGenerator<StreamEvent> {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return;
+  }
+
+  if (trimmed === "/clear") {
+    clearSdkSession(sessionKey);
+    yield {
+      type: "result",
+      response: "Conversation cleared. Starting fresh.",
+      messages: [],
+      partial: false,
+    };
+    return;
+  }
+
+  yield* streamAgentTurn(trimmed, sessionKey, agentOptions, config);
 }

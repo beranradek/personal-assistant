@@ -59,6 +59,7 @@ vi.mock("./exec/process-registry.js", () => ({
 vi.mock("./core/agent-runner.js", () => ({
   buildAgentOptions: vi.fn(),
   runAgentTurn: vi.fn(),
+  streamAgentTurn: vi.fn(),
   clearSdkSession: vi.fn(),
 }));
 
@@ -75,7 +76,7 @@ vi.mock("./core/logger.js", () => ({
 // Imports – after mocks are registered
 // ---------------------------------------------------------------------------
 
-import { handleLine, TERMINAL_SESSION_KEY, createTerminalSession } from "./terminal.js";
+import { handleLine, handleLineStreaming, TERMINAL_SESSION_KEY, createTerminalSession } from "./terminal.js";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
@@ -85,7 +86,8 @@ import { createIndexer } from "./memory/indexer.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
 import { createCronToolManager } from "./cron/tool.js";
-import { buildAgentOptions, runAgentTurn } from "./core/agent-runner.js";
+import { buildAgentOptions, runAgentTurn, streamAgentTurn } from "./core/agent-runner.js";
+import type { StreamEvent } from "./core/agent-runner.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -425,6 +427,91 @@ describe("terminal", () => {
       // The handleLine function returns the response which the caller outputs to stdout
       expect(result).not.toBeNull();
       expect(result!.response).toBe("The answer is 42");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // handleLineStreaming
+  // -----------------------------------------------------------------------
+  describe("handleLineStreaming", () => {
+    it("yields stream events from streamAgentTurn", async () => {
+      const config = makeConfig();
+      const agentOpts = makeAgentOptions();
+
+      async function* mockStream(): AsyncGenerator<StreamEvent> {
+        yield { type: "text_delta", text: "Hello" };
+        yield { type: "result", response: "Hello", messages: [], partial: false };
+      }
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStream());
+
+      const events: StreamEvent[] = [];
+      for await (const event of handleLineStreaming("Hi", TERMINAL_SESSION_KEY, agentOpts, config)) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual({ type: "text_delta", text: "Hello" });
+      expect(streamAgentTurn).toHaveBeenCalledWith("Hi", "terminal--default", agentOpts, config);
+    });
+
+    it("returns empty generator for empty input", async () => {
+      const config = makeConfig();
+      const agentOpts = makeAgentOptions();
+
+      const events: StreamEvent[] = [];
+      for await (const event of handleLineStreaming("", TERMINAL_SESSION_KEY, agentOpts, config)) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(0);
+      expect(streamAgentTurn).not.toHaveBeenCalled();
+    });
+
+    it("returns empty generator for whitespace-only input", async () => {
+      const config = makeConfig();
+      const agentOpts = makeAgentOptions();
+
+      const events: StreamEvent[] = [];
+      for await (const event of handleLineStreaming("   ", TERMINAL_SESSION_KEY, agentOpts, config)) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(0);
+    });
+
+    it("handles /clear command by yielding a result event", async () => {
+      const config = makeConfig();
+      const agentOpts = makeAgentOptions();
+
+      const events: StreamEvent[] = [];
+      for await (const event of handleLineStreaming("/clear", TERMINAL_SESSION_KEY, agentOpts, config)) {
+        events.push(event);
+      }
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({
+        type: "result",
+        response: "Conversation cleared. Starting fresh.",
+        messages: [],
+        partial: false,
+      });
+    });
+
+    it("trims input before sending to streamAgentTurn", async () => {
+      const config = makeConfig();
+      const agentOpts = makeAgentOptions();
+
+      async function* mockStream(): AsyncGenerator<StreamEvent> {
+        yield { type: "result", response: "ok", messages: [], partial: false };
+      }
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStream());
+
+      const events: StreamEvent[] = [];
+      for await (const event of handleLineStreaming("  hello  ", TERMINAL_SESSION_KEY, agentOpts, config)) {
+        events.push(event);
+      }
+
+      expect(streamAgentTurn).toHaveBeenCalledWith("hello", "terminal--default", agentOpts, config);
     });
   });
 });
