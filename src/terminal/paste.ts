@@ -1,65 +1,61 @@
-import { Transform, type TransformCallback } from "node:stream";
-
-const PASTE_START = "\x1b[200~";
-const PASTE_END = "\x1b[201~";
-
-export interface PasteInterceptorOptions {
-  onPaste: (text: string) => void;
+export interface PasteTracker {
+  /** Call on each keypress event from stdin. */
+  handleKeypress(keyName: string | undefined): void;
+  /**
+   * Call on each readline "line" event.
+   * Returns `null` when the line is buffered (mid-paste).
+   * Returns the final combined string when ready to process.
+   */
+  handleLine(line: string): string | null;
 }
 
 /**
- * Creates a Transform stream that intercepts bracketed paste sequences.
+ * Creates a paste tracker that uses readline keypress events to detect
+ * bracketed paste boundaries.
  *
- * Terminals that support bracketed paste wrap pasted text in escape sequences:
- *   \x1b[200~  <pasted text>  \x1b[201~
+ * Node.js v22+ readline natively recognizes `\x1b[200~` as "paste-start"
+ * and `\x1b[201~` as "paste-end" keypress events when reading from a TTY.
+ * This tracker uses those events to buffer intermediate line events during
+ * a multiline paste and combine them into a single string.
  *
- * This transform buffers the pasted text and delivers it as a single unit
- * via the onPaste callback, while passing normal keystrokes through unchanged.
+ * Event ordering for multiline paste "A\nB\nC" + Enter:
+ *   paste-start → LINE "A" → LINE "B" → paste-end → LINE "C" (from Enter)
+ *
+ * Single-line paste: paste-start → paste-end → user presses Enter → LINE
  */
-export function createPasteInterceptor(options: PasteInterceptorOptions): Transform {
-  let pasteBuffer = "";
-  let isPasting = false;
+export function createPasteTracker(): PasteTracker {
+  let pasting = false;
+  let buffer: string[] = [];
 
-  return new Transform({
-    decodeStrings: false,
-    encoding: "utf-8",
-
-    transform(chunk: string, _encoding: BufferEncoding, callback: TransformCallback) {
-      let data = chunk;
-
-      // Check for paste start marker
-      const startIdx = data.indexOf(PASTE_START);
-      if (startIdx !== -1 && !isPasting) {
-        // Pass through anything before the paste marker
-        const before = data.slice(0, startIdx);
-        if (before) this.push(before);
-
-        isPasting = true;
-        pasteBuffer = "";
-        data = data.slice(startIdx + PASTE_START.length);
+  return {
+    handleKeypress(keyName: string | undefined): void {
+      if (keyName === "paste-start") {
+        pasting = true;
+        buffer = [];
+      } else if (keyName === "paste-end") {
+        pasting = false;
       }
-
-      if (isPasting) {
-        const endIdx = data.indexOf(PASTE_END);
-        if (endIdx !== -1) {
-          pasteBuffer += data.slice(0, endIdx);
-          isPasting = false;
-          options.onPaste(pasteBuffer);
-          pasteBuffer = "";
-
-          // Pass through anything after the paste end marker
-          const after = data.slice(endIdx + PASTE_END.length);
-          if (after) this.push(after);
-        } else {
-          pasteBuffer += data;
-        }
-      } else {
-        this.push(data);
-      }
-
-      callback();
     },
-  });
+
+    handleLine(line: string): string | null {
+      if (pasting) {
+        // Mid-paste: buffer this line, don't process yet
+        buffer.push(line);
+        return null;
+      }
+
+      if (buffer.length > 0) {
+        // First line after paste-end: combine buffered lines with this final one
+        buffer.push(line);
+        const combined = buffer.join("\n");
+        buffer = [];
+        return combined;
+      }
+
+      // Normal line (no paste in progress)
+      return line;
+    },
+  };
 }
 
 export function enableBracketedPaste(): void {

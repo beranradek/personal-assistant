@@ -1,131 +1,102 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { PassThrough } from "node:stream";
-import { createPasteInterceptor, enableBracketedPaste, disableBracketedPaste } from "./paste.js";
+import { createPasteTracker, enableBracketedPaste, disableBracketedPaste } from "./paste.js";
 
-describe("PasteInterceptor", () => {
+describe("createPasteTracker", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("passes normal text through unchanged", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
-
-    const chunks: string[] = [];
-    interceptor.on("data", (chunk: string) => chunks.push(chunk));
-
-    input.pipe(interceptor);
-    input.write("hello world");
-    input.end();
-
-    await new Promise((resolve) => interceptor.on("end", resolve));
-
-    expect(chunks.join("")).toBe("hello world");
-    expect(onPaste).not.toHaveBeenCalled();
+  it("returns normal lines unchanged when no paste is active", () => {
+    const paste = createPasteTracker();
+    expect(paste.handleLine("hello")).toBe("hello");
+    expect(paste.handleLine("world")).toBe("world");
   });
 
-  it("captures pasted text via onPaste callback", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
+  it("buffers lines during a multiline paste and combines on final line", () => {
+    const paste = createPasteTracker();
 
-    interceptor.resume(); // drain readable side so "end" fires
-    input.pipe(interceptor);
-    input.write("\x1b[200~pasted content\x1b[201~");
-    input.end();
-
-    await new Promise((resolve) => interceptor.on("end", resolve));
-
-    expect(onPaste).toHaveBeenCalledWith("pasted content");
+    // Multiline paste "A\nB\nC" + Enter:
+    // paste-start → LINE "A" → LINE "B" → paste-end → LINE "C"
+    paste.handleKeypress("paste-start");
+    expect(paste.handleLine("A")).toBeNull();
+    expect(paste.handleLine("B")).toBeNull();
+    paste.handleKeypress("paste-end");
+    expect(paste.handleLine("C")).toBe("A\nB\nC");
   });
 
-  it("strips paste markers from output", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
+  it("handles single-line paste (no buffering needed)", () => {
+    const paste = createPasteTracker();
 
-    const chunks: string[] = [];
-    interceptor.on("data", (chunk: string) => chunks.push(chunk));
-
-    input.pipe(interceptor);
-    input.write("\x1b[200~pasted\x1b[201~");
-    input.end();
-
-    await new Promise((resolve) => interceptor.on("end", resolve));
-
-    // The pasted text should be delivered via onPaste, not through the stream
-    expect(chunks.join("")).toBe("");
-    expect(onPaste).toHaveBeenCalledWith("pasted");
+    // Single-line paste: paste-start → paste-end → Enter → LINE
+    paste.handleKeypress("paste-start");
+    paste.handleKeypress("paste-end");
+    expect(paste.handleLine("single line")).toBe("single line");
   });
 
-  it("passes text before and after paste markers through", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
+  it("handles paste with trailing newline (empty final line)", () => {
+    const paste = createPasteTracker();
 
-    const chunks: string[] = [];
-    interceptor.on("data", (chunk: string) => chunks.push(chunk));
-
-    input.pipe(interceptor);
-    input.write("before\x1b[200~pasted\x1b[201~after");
-    input.end();
-
-    await new Promise((resolve) => interceptor.on("end", resolve));
-
-    expect(chunks.join("")).toBe("beforeafter");
-    expect(onPaste).toHaveBeenCalledWith("pasted");
+    // Paste "A\nB\n" — trailing newline means last line from Enter is empty
+    paste.handleKeypress("paste-start");
+    expect(paste.handleLine("A")).toBeNull();
+    expect(paste.handleLine("B")).toBeNull();
+    paste.handleKeypress("paste-end");
+    expect(paste.handleLine("")).toBe("A\nB\n");
   });
 
-  it("handles multiline pasted text", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
+  it("handles sequential pastes independently", () => {
+    const paste = createPasteTracker();
 
-    interceptor.resume(); // drain readable side so "end" fires
-    input.pipe(interceptor);
-    input.write("\x1b[200~line one\nline two\nline three\x1b[201~");
-    input.end();
+    // First paste
+    paste.handleKeypress("paste-start");
+    expect(paste.handleLine("first")).toBeNull();
+    paste.handleKeypress("paste-end");
+    expect(paste.handleLine("end1")).toBe("first\nend1");
 
-    await new Promise((resolve) => interceptor.on("end", resolve));
+    // Normal line between pastes
+    expect(paste.handleLine("normal")).toBe("normal");
 
-    expect(onPaste).toHaveBeenCalledWith("line one\nline two\nline three");
+    // Second paste
+    paste.handleKeypress("paste-start");
+    expect(paste.handleLine("second")).toBeNull();
+    paste.handleKeypress("paste-end");
+    expect(paste.handleLine("end2")).toBe("second\nend2");
   });
 
-  it("handles paste markers split across chunks", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
+  it("ignores unrelated keypress events", () => {
+    const paste = createPasteTracker();
 
-    interceptor.resume(); // drain readable side so "end" fires
-    input.pipe(interceptor);
-    // Start marker in first chunk, content in second, end marker in third
-    input.write("\x1b[200~first part ");
-    input.write("second part");
-    input.write("\x1b[201~");
-    input.end();
-
-    await new Promise((resolve) => interceptor.on("end", resolve));
-
-    expect(onPaste).toHaveBeenCalledWith("first part second part");
+    paste.handleKeypress("up");
+    paste.handleKeypress("down");
+    paste.handleKeypress("return");
+    paste.handleKeypress(undefined);
+    expect(paste.handleLine("still normal")).toBe("still normal");
   });
 
-  it("handles multiple sequential pastes", async () => {
-    const onPaste = vi.fn();
-    const interceptor = createPasteInterceptor({ onPaste });
-    const input = new PassThrough({ encoding: "utf-8" });
+  it("handles two-line paste correctly", () => {
+    const paste = createPasteTracker();
 
-    interceptor.resume(); // drain readable side so "end" fires
-    input.pipe(interceptor);
-    input.write("\x1b[200~first paste\x1b[201~");
-    input.write("\x1b[200~second paste\x1b[201~");
-    input.end();
+    // Paste "A\nB" + Enter:
+    // paste-start → LINE "A" → paste-end → LINE "B"
+    paste.handleKeypress("paste-start");
+    expect(paste.handleLine("A")).toBeNull();
+    paste.handleKeypress("paste-end");
+    expect(paste.handleLine("B")).toBe("A\nB");
+  });
 
-    await new Promise((resolve) => interceptor.on("end", resolve));
+  it("handles large multiline paste", () => {
+    const paste = createPasteTracker();
 
-    expect(onPaste).toHaveBeenCalledTimes(2);
-    expect(onPaste).toHaveBeenNthCalledWith(1, "first paste");
-    expect(onPaste).toHaveBeenNthCalledWith(2, "second paste");
+    paste.handleKeypress("paste-start");
+    for (let i = 0; i < 99; i++) {
+      expect(paste.handleLine(`line ${i}`)).toBeNull();
+    }
+    paste.handleKeypress("paste-end");
+    const result = paste.handleLine("line 99");
+    expect(result).not.toBeNull();
+    expect(result!.split("\n")).toHaveLength(100);
+    expect(result!.startsWith("line 0\n")).toBe(true);
+    expect(result!.endsWith("\nline 99")).toBe(true);
   });
 });
 

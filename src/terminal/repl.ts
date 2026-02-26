@@ -1,6 +1,6 @@
 import * as readline from "node:readline";
 import {
-  createPasteInterceptor,
+  createPasteTracker,
   enableBracketedPaste,
   disableBracketedPaste,
 } from "./paste.js";
@@ -25,40 +25,28 @@ export function runTerminalRepl(session: TerminalSession): void {
   const spinner = createSpinner();
   const isTTY = process.stdin.isTTY ?? false;
 
-  let pendingPaste: string | null = null;
-  let pasteInsertPos = 0;
+  const paste = createPasteTracker();
   let processing = false;
   let cleaned = false;
-
-  // Declared as `let` so the onPaste callback can reference `rl` via closure
-  // (rl is assigned after pasteStream is created, but onPaste runs later).
-  // eslint-disable-next-line prefer-const
-  let rl: readline.Interface;
-
-  // Set up paste interceptor Transform stream
-  const pasteStream = createPasteInterceptor({
-    onPaste: (text) => {
-      pendingPaste = text;
-      // Capture cursor position so we can insert the paste at the right spot
-      // when the user eventually presses Enter.
-      pasteInsertPos = (rl as any).cursor ?? 0;
-      // Don't push a synthetic \n — let the user press Enter naturally.
-      // This allows combining text typed before/after the paste into one message.
-    },
-  });
 
   if (isTTY) {
     enableBracketedPaste();
   }
 
   process.stdin.setEncoding("utf-8");
-  process.stdin.pipe(pasteStream);
 
-  rl = readline.createInterface({
-    input: pasteStream,
+  const rl = readline.createInterface({
+    input: process.stdin,
     output: process.stdout,
     prompt: colors.prompt("You> "),
   });
+
+  // Listen for paste-start / paste-end keypress events emitted by readline
+  if (isTTY) {
+    process.stdin.on("keypress", (_ch: string, key: { name?: string }) => {
+      paste.handleKeypress(key?.name);
+    });
+  }
 
   const cleanup = async () => {
     if (cleaned) return;
@@ -67,7 +55,6 @@ export function runTerminalRepl(session: TerminalSession): void {
     if (isTTY) {
       disableBracketedPaste();
     }
-    process.stdin.unpipe(pasteStream);
     await session.cleanup();
   };
 
@@ -84,22 +71,10 @@ export function runTerminalRepl(session: TerminalSession): void {
     // Guard against concurrent processing (e.g. user presses Enter twice quickly)
     if (processing) return;
 
-    // Combine typed text with pending paste content.
-    // When the user types before pasting, pastes, then types after — we merge
-    // all three parts: text-before + paste + text-after, using the cursor
-    // position captured at paste time.
-    let userInput: string;
-    if (pendingPaste !== null) {
-      const paste = pendingPaste;
-      const pos = pasteInsertPos;
-      pendingPaste = null;
+    const userInput = paste.handleLine(input);
 
-      const before = input.slice(0, pos).trimEnd();
-      const after = input.slice(pos).trimStart();
-      userInput = [before, paste, after].filter(Boolean).join("\n");
-    } else {
-      userInput = input;
-    }
+    // null means the line was buffered during a paste — wait for more
+    if (userInput === null) return;
 
     // Show a preview for multiline pastes
     if (userInput.includes("\n")) {
