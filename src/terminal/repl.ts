@@ -87,9 +87,11 @@ export function runTerminalRepl(session: TerminalSession): void {
 
     let headerPrinted = false;
     let streamedText = "";
+    let displayedRows = 0; // Total terminal rows for re-render cursor math
     let inTextBlock = false;
     // Track the last tool_start so we can update it with input details
     let pendingToolName: string | null = null;
+    const columns = process.stdout.columns || 80;
 
     for await (const event of handleLineStreaming(userInput, sessionKey, agentOptions, config)) {
       switch (event.type) {
@@ -103,6 +105,8 @@ export function runTerminalRepl(session: TerminalSession): void {
           inTextBlock = true;
           process.stdout.write(event.text);
           streamedText += event.text;
+          // Recalculate displayed rows from accumulated text
+          displayedRows = countTerminalRows(streamedText, columns);
           break;
         }
 
@@ -120,6 +124,7 @@ export function runTerminalRepl(session: TerminalSession): void {
           pendingToolName = event.toolName;
           // Show tool name immediately; will be updated when input arrives
           console.log(colors.dim(`  ${event.toolName}...`));
+          displayedRows += 1; // tool line = 1 row
           break;
         }
 
@@ -159,11 +164,8 @@ export function runTerminalRepl(session: TerminalSession): void {
             }
           } else if (streamedText && hasMarkdownElements(event.response)) {
             // Smart re-render: clear raw text and tool lines, replace with markdown
-            const columns = process.stdout.columns || 80;
-            const rows = countTerminalRows(streamedText, columns);
-            // Move up and clear
-            if (rows > 0) {
-              process.stdout.write(`\x1b[${rows}A\x1b[J`);
+            if (displayedRows > 0) {
+              process.stdout.write(`\x1b[${displayedRows}A\x1b[J`);
             }
             console.log(renderMarkdown(event.response));
             console.log();

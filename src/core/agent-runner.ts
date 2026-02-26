@@ -433,15 +433,6 @@ export async function* streamAgentTurn(
     if (isTransportError && responseText) {
       partial = true;
     } else {
-      // Close transport before yielding error
-      if (typeof (result as any).close === "function") {
-        try {
-          (result as any).close();
-        } catch {
-          // Already closed — safe to ignore.
-        }
-      }
-
       if (responseText) {
         // Non-transport error but we have a partial response
         partial = true;
