@@ -5,10 +5,12 @@ import {
   disableBracketedPaste,
 } from "./paste.js";
 import { createSpinner } from "./spinner.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderMarkdown, hasMarkdownElements } from "./markdown.js";
 import { colors } from "./colors.js";
-import { handleLine } from "./handler.js";
+import { handleLineStreaming } from "./handler.js";
+import { formatToolSummary, countTerminalRows } from "./stream-render.js";
 import type { TerminalSession } from "./session.js";
+import type { StreamEvent } from "../core/agent-runner.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("terminal");
@@ -16,9 +18,10 @@ const log = createLogger("terminal");
 /**
  * Run the interactive terminal REPL loop with:
  * - Bracketed paste support (multiline paste submitted as single message)
+ * - Streaming output with tool activity display
+ * - Smart markdown re-render on completion
  * - Colored prompt and output
- * - Spinner while waiting for agent response
- * - Markdown rendering of assistant responses
+ * - Spinner while waiting for first response
  */
 export function runTerminalRepl(session: TerminalSession): void {
   const { config, agentOptions, sessionKey } = session;
@@ -68,12 +71,9 @@ export function runTerminalRepl(session: TerminalSession): void {
   rl.prompt();
 
   rl.on("line", async (input) => {
-    // Guard against concurrent processing (e.g. user presses Enter twice quickly)
     if (processing) return;
 
     const userInput = paste.handleLine(input);
-
-    // null means the line was buffered during a paste — wait for more
     if (userInput === null) return;
 
     // Show a preview for multiline pastes
@@ -84,28 +84,112 @@ export function runTerminalRepl(session: TerminalSession): void {
 
     processing = true;
     spinner.start();
-    let result;
-    try {
-      result = await handleLine(userInput, sessionKey, agentOptions, config);
-    } finally {
-      spinner.stop();
-      processing = false;
+
+    let headerPrinted = false;
+    let streamedText = "";
+    let inTextBlock = false;
+    // Track the last tool_start so we can update it with input details
+    let pendingToolName: string | null = null;
+
+    for await (const event of handleLineStreaming(userInput, sessionKey, agentOptions, config)) {
+      switch (event.type) {
+        case "text_delta": {
+          if (!headerPrinted) {
+            spinner.stop();
+            console.log();
+            console.log(colors.label("Assistant:"));
+            headerPrinted = true;
+          }
+          inTextBlock = true;
+          process.stdout.write(event.text);
+          streamedText += event.text;
+          break;
+        }
+
+        case "tool_start": {
+          if (!headerPrinted) {
+            spinner.stop();
+            console.log();
+            console.log(colors.label("Assistant:"));
+            headerPrinted = true;
+          }
+          if (inTextBlock) {
+            process.stdout.write("\n");
+            inTextBlock = false;
+          }
+          pendingToolName = event.toolName;
+          // Show tool name immediately; will be updated when input arrives
+          console.log(colors.dim(`  ${event.toolName}...`));
+          break;
+        }
+
+        case "tool_input": {
+          // Update the tool line with detailed summary
+          if (pendingToolName === event.toolName) {
+            const summary = formatToolSummary(event.toolName, event.input);
+            // Move cursor up one line, clear it, rewrite
+            process.stdout.write("\x1b[1A\x1b[2K");
+            console.log(colors.dim(`  ${summary}`));
+          }
+          pendingToolName = null;
+          break;
+        }
+
+        case "tool_progress": {
+          // Show elapsed time — overwrite current tool line
+          const secs = Math.round(event.elapsedSeconds);
+          if (secs > 2) {
+            process.stdout.write("\x1b[1A\x1b[2K");
+            console.log(colors.dim(`  ${event.toolName}... (${secs}s)`));
+          }
+          break;
+        }
+
+        case "result": {
+          spinner.stop();
+          pendingToolName = null;
+
+          if (!headerPrinted) {
+            // No streaming events arrived — display result directly
+            if (event.response) {
+              console.log();
+              console.log(colors.label("Assistant:"));
+              console.log(renderMarkdown(event.response));
+              console.log();
+            }
+          } else if (streamedText && hasMarkdownElements(event.response)) {
+            // Smart re-render: clear raw text and tool lines, replace with markdown
+            const columns = process.stdout.columns || 80;
+            const rows = countTerminalRows(streamedText, columns);
+            // Move up and clear
+            if (rows > 0) {
+              process.stdout.write(`\x1b[${rows}A\x1b[J`);
+            }
+            console.log(renderMarkdown(event.response));
+            console.log();
+          } else {
+            // Plain text — just finalize
+            if (inTextBlock) {
+              process.stdout.write("\n");
+            }
+            console.log();
+          }
+          break;
+        }
+
+        case "error": {
+          spinner.stop();
+          if (inTextBlock) {
+            process.stdout.write("\n");
+          }
+          console.error(colors.error(`Error: ${event.error}`));
+          break;
+        }
+      }
     }
 
-    if (result === null) {
-      rl.prompt();
-      return;
-    }
-
-    if (result.error) {
-      console.error(colors.error(`Error: ${result.error}`));
-    } else if (result.response) {
-      console.log();
-      console.log(colors.label("Assistant:"));
-      console.log(renderMarkdown(result.response));
-      console.log();
-    }
-
+    spinner.stop();
+    processing = false;
     rl.prompt();
   });
 
