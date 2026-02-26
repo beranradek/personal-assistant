@@ -32,6 +32,7 @@ vi.mock("../security/bash-hook.js", () => ({
 import {
   buildAgentOptions,
   runAgentTurn,
+  streamAgentTurn,
   clearSdkSessionIds,
 } from "./agent-runner.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -809,6 +810,403 @@ describe("agent-runner", () => {
       await expect(
         runAgentTurn("Hi", sessionKey, agentOptions, config),
       ).rejects.toThrow("ProcessTransport is not ready");
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // streamAgentTurn
+  // -----------------------------------------------------------------------
+  describe("streamAgentTurn", () => {
+    /** Collect all events from the async generator into an array. */
+    async function collectEvents(
+      gen: AsyncGenerator<unknown>,
+    ): Promise<Array<Record<string, unknown>>> {
+      const events: Array<Record<string, unknown>> = [];
+      for await (const ev of gen) {
+        events.push(ev as Record<string, unknown>);
+      }
+      return events;
+    }
+
+    it("yields text_delta events from stream_event messages", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-1",
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "Hello " },
+            },
+          },
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-1",
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "world!" },
+            },
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-stream-1",
+            message: {
+              content: [{ type: "text", text: "Hello world!" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-1",
+            result: "Hello world!",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Hi", sessionKey, agentOptions, config),
+      );
+
+      const textDeltas = events.filter((e) => e.type === "text_delta");
+      expect(textDeltas).toHaveLength(2);
+      expect(textDeltas[0]).toEqual({ type: "text_delta", text: "Hello " });
+      expect(textDeltas[1]).toEqual({ type: "text_delta", text: "world!" });
+    });
+
+    it("yields tool_start events from content_block_start with tool_use", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-2",
+            event: {
+              type: "content_block_start",
+              index: 1,
+              content_block: { type: "tool_use", id: "tu_1", name: "Bash", input: {} },
+            },
+          },
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-2",
+            event: { type: "content_block_stop", index: 1 },
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-stream-2",
+            message: {
+              content: [{ type: "text", text: "Done" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-2",
+            result: "Done",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Run ls", sessionKey, agentOptions, config),
+      );
+
+      const toolStarts = events.filter((e) => e.type === "tool_start");
+      expect(toolStarts).toHaveLength(1);
+      expect(toolStarts[0]).toEqual({ type: "tool_start", toolName: "Bash" });
+    });
+
+    it("yields tool_progress events from SDK tool_progress messages", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "tool_progress",
+            tool_use_id: "tu_1",
+            tool_name: "Bash",
+            parent_tool_use_id: null,
+            elapsed_time_seconds: 5,
+            session_id: "sdk-stream-3",
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-stream-3",
+            message: {
+              content: [{ type: "text", text: "Done" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-3",
+            result: "Done",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Run long task", sessionKey, agentOptions, config),
+      );
+
+      const progEvents = events.filter((e) => e.type === "tool_progress");
+      expect(progEvents).toHaveLength(1);
+      expect(progEvents[0]).toEqual({
+        type: "tool_progress",
+        toolName: "Bash",
+        elapsedSeconds: 5,
+      });
+    });
+
+    it("captures session ID for future resumption", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--stream-resume";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-resume-1",
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "Hi" },
+            },
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-stream-resume-1",
+            message: {
+              content: [{ type: "text", text: "Hi" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-resume-1",
+            result: "Hi",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+
+      // First call - captures session ID
+      await collectEvents(
+        streamAgentTurn("Hello", sessionKey, agentOptions, config),
+      );
+
+      // Second call - should use resume
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-stream-resume-1",
+            message: {
+              content: [{ type: "text", text: "Again" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-resume-1",
+            result: "Again",
+          },
+        ]) as any,
+      );
+
+      await collectEvents(
+        streamAgentTurn("Follow up", sessionKey, agentOptions, config),
+      );
+
+      const secondCallArgs = vi.mocked(query).mock.calls[1][0];
+      expect(secondCallArgs.options).toHaveProperty(
+        "resume",
+        "sdk-stream-resume-1",
+      );
+    });
+
+    it("saves audit entry after stream completes", async () => {
+      const config = makeConfig();
+      const sessionKey = "telegram--audit-stream";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-stream-audit",
+            message: {
+              content: [{ type: "text", text: "Audited stream" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-audit",
+            result: "Audited stream",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      await collectEvents(
+        streamAgentTurn("Audit this", sessionKey, agentOptions, config),
+      );
+
+      expect(appendAuditEntry).toHaveBeenCalledWith(
+        config.security.workspace,
+        expect.objectContaining({
+          source: "telegram",
+          sessionKey,
+          type: "interaction",
+          userMessage: "Audit this",
+          assistantResponse: "Audited stream",
+        }),
+      );
+    });
+
+    it("yields result event with partial:true on transport error with partial response", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      async function* transportErrorStreamGenerator() {
+        yield {
+          type: "assistant",
+          session_id: "sdk-stream-partial",
+          message: {
+            content: [{ type: "text", text: "Partial stream" }],
+          },
+        };
+        throw new Error("ProcessTransport is not ready for writing");
+      }
+
+      vi.mocked(query).mockReturnValue(transportErrorStreamGenerator() as any);
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Hi", sessionKey, agentOptions, config),
+      );
+
+      const resultEvents = events.filter((e) => e.type === "result");
+      expect(resultEvents).toHaveLength(1);
+      expect(resultEvents[0]).toMatchObject({
+        type: "result",
+        response: "Partial stream",
+        partial: true,
+      });
+    });
+
+    it("yields error event on non-transport error with no response", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      async function* errorStreamGenerator() {
+        throw new Error("Something went wrong");
+      }
+
+      vi.mocked(query).mockReturnValue(errorStreamGenerator() as any);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Hi", sessionKey, agentOptions, config),
+      );
+
+      const errorEvents = events.filter((e) => e.type === "error");
+      expect(errorEvents).toHaveLength(1);
+      expect((errorEvents[0] as any).error).toContain("Something went wrong");
+    });
+
+    it("buffers tool input JSON and yields tool_input event on content_block_stop", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-tool",
+            event: {
+              type: "content_block_start",
+              index: 1,
+              content_block: { type: "tool_use", id: "tu_1", name: "Read", input: {} },
+            },
+          },
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-tool",
+            event: {
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "input_json_delta", partial_json: '{"file_path":' },
+            },
+          },
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-tool",
+            event: {
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "input_json_delta", partial_json: '"/src/foo.ts"}' },
+            },
+          },
+          {
+            type: "stream_event",
+            session_id: "sdk-stream-tool",
+            event: { type: "content_block_stop", index: 1 },
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-stream-tool",
+            message: {
+              content: [{ type: "text", text: "Read the file" }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-tool",
+            result: "Read the file",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Read foo", sessionKey, agentOptions, config),
+      );
+
+      const toolInputs = events.filter((e) => e.type === "tool_input");
+      expect(toolInputs).toHaveLength(1);
+      expect(toolInputs[0]).toEqual({
+        type: "tool_input",
+        toolName: "Read",
+        input: { file_path: "/src/foo.ts" },
+      });
     });
   });
 });

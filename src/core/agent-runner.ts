@@ -18,6 +18,7 @@ import type {
   HookCallbackMatcher,
   SDKMessage,
   SDKAssistantMessage,
+  SDKPartialAssistantMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Config, SessionMessage } from "./types.js";
 import { saveInteraction } from "../session/manager.js";
@@ -76,6 +77,18 @@ export interface AgentTurnResult {
   /** True when the SDK subprocess exited mid-response (transport race). */
   partial: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Stream events (for terminal streaming)
+// ---------------------------------------------------------------------------
+
+export type StreamEvent =
+  | { type: "text_delta"; text: string }
+  | { type: "tool_start"; toolName: string }
+  | { type: "tool_input"; toolName: string; input: Record<string, unknown> }
+  | { type: "tool_progress"; toolName: string; elapsedSeconds: number }
+  | { type: "result"; response: string; messages: SessionMessage[]; partial: boolean }
+  | { type: "error"; error: string };
 
 // ---------------------------------------------------------------------------
 // buildAgentOptions
@@ -290,4 +303,200 @@ export async function runAgentTurn(
   });
 
   return { response: responseText, messages: turnMessages, partial };
+}
+
+// ---------------------------------------------------------------------------
+// streamAgentTurn
+// ---------------------------------------------------------------------------
+
+/**
+ * Streaming variant of `runAgentTurn()` — an async generator that yields
+ * `StreamEvent` objects as they arrive from the SDK.
+ *
+ * Used by the terminal REPL to display incremental output (text deltas,
+ * tool start/progress indicators) while the agent turn is in flight.
+ *
+ * The final event is always either a `result` or an `error`.
+ */
+export async function* streamAgentTurn(
+  message: string,
+  sessionKey: string,
+  agentOptions: AgentOptions,
+  config: Config,
+): AsyncGenerator<StreamEvent> {
+  // 1. Build the user message
+  const userMsg: SessionMessage = {
+    role: "user",
+    content: message,
+    timestamp: new Date().toISOString(),
+  };
+
+  // 2. Check for existing SDK session to resume
+  const sdkSessionId = sdkSessionIds.get(sessionKey);
+
+  // 3. Call SDK query (with resume if we have a previous session)
+  const result = query({
+    prompt: message,
+    options: {
+      ...agentOptions,
+      ...(sdkSessionId ? { resume: sdkSessionId } : {}),
+    } as unknown as Options,
+  });
+
+  // 4. Iterate the async generator, yielding stream events
+  let responseText = "";
+  let partial = false;
+  const turnMessages: SessionMessage[] = [userMsg];
+
+  // Track active tool_use blocks by content block index for input buffering
+  const activeTools = new Map<number, { toolName: string; jsonChunks: string[] }>();
+
+  try {
+    for await (const msg of result) {
+      // Capture SDK session ID for future resumption
+      if (
+        !sdkSessionIds.has(sessionKey) &&
+        "session_id" in msg &&
+        msg.session_id
+      ) {
+        sdkSessionIds.set(sessionKey, msg.session_id as string);
+      }
+
+      if (msg.type === "stream_event") {
+        const streamMsg = msg as SDKPartialAssistantMessage;
+        const event = (streamMsg as any).event;
+        if (!event) continue;
+
+        if (event.type === "content_block_delta") {
+          const delta = event.delta;
+          if (delta?.type === "text_delta" && delta.text) {
+            yield { type: "text_delta", text: delta.text };
+          } else if (delta?.type === "input_json_delta" && delta.partial_json != null) {
+            const tool = activeTools.get(event.index);
+            if (tool) {
+              tool.jsonChunks.push(delta.partial_json);
+            }
+          }
+        } else if (event.type === "content_block_start") {
+          const block = event.content_block;
+          if (block?.type === "tool_use" && block.name) {
+            activeTools.set(event.index, { toolName: block.name, jsonChunks: [] });
+            yield { type: "tool_start", toolName: block.name };
+          }
+        } else if (event.type === "content_block_stop") {
+          const tool = activeTools.get(event.index);
+          if (tool) {
+            const raw = tool.jsonChunks.join("");
+            let input: Record<string, unknown> = {};
+            if (raw) {
+              try {
+                input = JSON.parse(raw);
+              } catch {
+                // Malformed JSON — yield empty input
+              }
+            }
+            yield { type: "tool_input", toolName: tool.toolName, input };
+            activeTools.delete(event.index);
+          }
+        }
+      } else if (msg.type === "tool_progress") {
+        const toolMsg = msg as any;
+        yield {
+          type: "tool_progress",
+          toolName: toolMsg.tool_name as string,
+          elapsedSeconds: toolMsg.elapsed_time_seconds as number,
+        };
+      } else if (
+        msg.type === "assistant" &&
+        (msg as SDKAssistantMessage).message?.content
+      ) {
+        const assistantMsg = msg as SDKAssistantMessage;
+        for (const block of assistantMsg.message.content) {
+          if (typeof block === "string") {
+            responseText += block;
+          } else if (
+            typeof block === "object" &&
+            block !== null &&
+            "type" in block &&
+            (block as { type: string }).type === "text" &&
+            "text" in block
+          ) {
+            responseText += (block as { type: "text"; text: string }).text;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    const isTransportError =
+      err instanceof Error &&
+      err.message.includes("ProcessTransport is not ready");
+    if (isTransportError && responseText) {
+      partial = true;
+    } else {
+      // Close transport before yielding error
+      if (typeof (result as any).close === "function") {
+        try {
+          (result as any).close();
+        } catch {
+          // Already closed — safe to ignore.
+        }
+      }
+
+      if (responseText) {
+        // Non-transport error but we have a partial response
+        partial = true;
+      } else {
+        // Enhance process exit errors with actionable guidance
+        let errorMessage = err instanceof Error ? err.message : String(err);
+        if (err instanceof Error) {
+          const exitMatch = err.message.match(
+            /Claude Code process exited with code (\d+)/,
+          );
+          if (exitMatch) {
+            const code = exitMatch[1];
+            const hint =
+              code === "1"
+                ? "This usually means an authentication error or a crash in the Claude Code subprocess. " +
+                  "Check that your ANTHROPIC_API_KEY is set and valid, or run `claude` directly to diagnose."
+                : `Exit code ${code} from the Claude Code subprocess. Run \`claude\` directly to diagnose.`;
+            errorMessage = `${err.message}\n${hint}`;
+          }
+        }
+        yield { type: "error", error: errorMessage };
+        return;
+      }
+    }
+  } finally {
+    // Ensure the SDK transport is closed
+    if (typeof (result as any).close === "function") {
+      try {
+        (result as any).close();
+      } catch {
+        // Already closed or process already exited — safe to ignore.
+      }
+    }
+  }
+
+  // Add assistant response to turn messages
+  turnMessages.push({
+    role: "assistant",
+    content: responseText,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Save to session transcript (audit trail)
+  await saveInteraction(sessionKey, turnMessages, config);
+
+  // Append audit entry
+  await appendAuditEntry(config.security.workspace, {
+    timestamp: new Date().toISOString(),
+    source: sessionKey.split("--")[0],
+    sessionKey,
+    type: "interaction",
+    userMessage: message,
+    assistantResponse: responseText,
+  });
+
+  // Yield final result event
+  yield { type: "result", response: responseText, messages: turnMessages, partial };
 }
