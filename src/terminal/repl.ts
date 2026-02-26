@@ -169,8 +169,13 @@ export function runTerminalRepl(session: TerminalSession): void {
             }
             console.log(renderMarkdown(event.response));
             console.log();
+          } else if (!streamedText && event.response) {
+            // No text was streamed (SDK sent complete assistant messages
+            // instead of text deltas) — display the full response now
+            console.log(renderMarkdown(event.response));
+            console.log();
           } else {
-            // Plain text — just finalize
+            // Plain text was streamed — just finalize
             if (inTextBlock) {
               process.stdout.write("\n");
             }

@@ -417,11 +417,18 @@ export async function* streamAgentTurn(
           } else if (
             typeof block === "object" &&
             block !== null &&
-            "type" in block &&
-            (block as { type: string }).type === "text" &&
-            "text" in block
+            "type" in block
           ) {
-            responseText += (block as { type: "text"; text: string }).text;
+            const typed = block as { type: string; [k: string]: unknown };
+            if (typed.type === "text" && "text" in typed) {
+              responseText += typed.text as string;
+            } else if (typed.type === "tool_use" && "name" in typed) {
+              // Yield tool activity from complete assistant messages
+              const toolName = typed.name as string;
+              yield { type: "tool_start", toolName };
+              const input = (typed.input ?? {}) as Record<string, unknown>;
+              yield { type: "tool_input", toolName, input };
+            }
           }
         }
       }
