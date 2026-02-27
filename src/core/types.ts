@@ -41,6 +41,7 @@ export const HeartbeatConfigSchema = z.object({
 
 export const GatewayConfigSchema = z.object({
   maxQueueSize: z.number().int().positive(),
+  processingUpdateIntervalMs: z.number().int().positive().default(5000),
 });
 
 export const AgentConfigSchema = z.object({

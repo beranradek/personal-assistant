@@ -35,7 +35,7 @@ export const DEFAULTS: Config = {
     activeHours: "8-21",
     deliverTo: "last",
   },
-  gateway: { maxQueueSize: 20 },
+  gateway: { maxQueueSize: 20, processingUpdateIntervalMs: 5000 },
   agent: { model: null, maxTurns: 200 },
   session: { maxHistoryMessages: 50, compactionEnabled: true },
   memory: {

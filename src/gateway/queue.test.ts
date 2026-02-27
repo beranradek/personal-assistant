@@ -78,7 +78,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       activeHours: "8-21",
       deliverTo: "last" as const,
     },
-    gateway: { maxQueueSize: 5 },
+    gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 5000 },
     agent: { model: null, maxTurns: 10 },
     session: { maxHistoryMessages: 50, compactionEnabled: false },
     memory: {
@@ -143,7 +143,7 @@ describe("MessageQueue", () => {
     });
 
     it("accepts messages up to maxQueueSize", () => {
-      const config = makeConfig({ gateway: { maxQueueSize: 3 } });
+      const config = makeConfig({ gateway: { maxQueueSize: 3, processingUpdateIntervalMs: 5000 } });
       const queue = createMessageQueue(config);
 
       const r1 = queue.enqueue(makeMessage({ text: "one" }));
@@ -156,7 +156,7 @@ describe("MessageQueue", () => {
     });
 
     it("rejects with { accepted: false } when queue is at maxQueueSize", () => {
-      const config = makeConfig({ gateway: { maxQueueSize: 2 } });
+      const config = makeConfig({ gateway: { maxQueueSize: 2, processingUpdateIntervalMs: 5000 } });
       const queue = createMessageQueue(config);
 
       queue.enqueue(makeMessage({ text: "one" }));

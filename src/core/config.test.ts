@@ -31,7 +31,7 @@ describe("config", () => {
           slack: { enabled: false, botToken: "", appToken: "", socketMode: true },
         },
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
-        gateway: { maxQueueSize: 20 },
+        gateway: { maxQueueSize: 20, processingUpdateIntervalMs: 5000 },
         agent: { model: null, maxTurns: 200 },
         session: { maxHistoryMessages: 50, compactionEnabled: true },
         memory: {
@@ -130,6 +130,7 @@ describe("config", () => {
       expect(config.heartbeat.enabled).toBe(true);
       expect(config.heartbeat.intervalMinutes).toBe(30);
       expect(config.gateway.maxQueueSize).toBe(20);
+      expect(config.gateway.processingUpdateIntervalMs).toBe(5000);
       expect(config.agent.model).toBeNull();
       expect(config.agent.maxTurns).toBe(200);
       expect(config.session.maxHistoryMessages).toBe(50);
