@@ -58,7 +58,24 @@ export function createAssistantServer(deps: AssistantServerDeps) {
     tools: [
       tool(
         "cron",
-        "Manage scheduled reminders and jobs",
+        `Manage scheduled reminders and jobs. Actions:
+
+ADD — create a new job. Required params:
+  - label: string — human-readable name (e.g. "Daily standup reminder")
+  - schedule: object — one of three types:
+      { "type": "cron", "expression": "<cron expr>" } — standard 5-field cron (e.g. "30 9 * * 1-5" = weekdays 9:30 UTC)
+      { "type": "oneshot", "iso": "<ISO 8601 datetime>" } — fires once (e.g. "2026-03-01T14:00:00Z")
+      { "type": "interval", "everyMs": <milliseconds> } — repeating interval (e.g. 3600000 = every hour)
+  - payload: { "text": "<message>" } — the text delivered when the job fires
+
+LIST — returns all jobs. No params needed.
+
+UPDATE — modify an existing job. Required params:
+  - id: string — the job UUID (from add/list response)
+  Optional: label, schedule, payload (same format as add), enabled (boolean)
+
+REMOVE — delete a job. Required params:
+  - id: string — the job UUID`,
         {
           action: z
             .enum(["add", "list", "update", "remove"])
@@ -67,7 +84,7 @@ export function createAssistantServer(deps: AssistantServerDeps) {
             .record(z.string(), z.unknown())
             .optional()
             .describe(
-              "Action parameters (label, schedule, payload, id, enabled)",
+              "Action parameters — see tool description for required fields per action",
             ),
         },
         async (args) => {
