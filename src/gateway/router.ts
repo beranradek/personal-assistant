@@ -16,6 +16,8 @@ export interface Router {
   register(adapter: Adapter): void;
   /** Remove an adapter from the registry. */
   unregister(name: string): void;
+  /** Look up a registered adapter by name. */
+  getAdapter(name: string): Adapter | undefined;
   /** Route a response message to its source adapter. */
   route(response: AdapterMessage): Promise<void>;
 }
@@ -41,6 +43,10 @@ export function createRouter(): Router {
     unregister(name: string): void {
       adapters.delete(name);
       log.info({ adapter: name }, "adapter unregistered");
+    },
+
+    getAdapter(name: string): Adapter | undefined {
+      return adapters.get(name);
     },
 
     async route(response: AdapterMessage): Promise<void> {

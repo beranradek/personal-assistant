@@ -802,4 +802,23 @@ describe("Router", () => {
       expect(adapter.sendResponse).not.toHaveBeenCalled();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // getAdapter
+  // -------------------------------------------------------------------------
+  describe("getAdapter", () => {
+    it("returns registered adapter by name", () => {
+      const router = createRouter();
+      const adapter = makeAdapter("telegram");
+      router.register(adapter);
+
+      expect(router.getAdapter("telegram")).toBe(adapter);
+    });
+
+    it("returns undefined for unregistered adapter", () => {
+      const router = createRouter();
+
+      expect(router.getAdapter("nonexistent")).toBeUndefined();
+    });
+  });
 });
