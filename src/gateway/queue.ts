@@ -11,12 +11,13 @@
  */
 
 import type { AdapterMessage, Config } from "../core/types.js";
-import type { AgentOptions, AgentTurnResult } from "../core/agent-runner.js";
+import type { AgentOptions, AgentTurnResult, StreamEvent } from "../core/agent-runner.js";
 import type { Router } from "./router.js";
-import { runAgentTurn, clearSdkSession } from "../core/agent-runner.js";
+import { runAgentTurn, streamAgentTurn, clearSdkSession } from "../core/agent-runner.js";
 import { resolveSessionKey } from "../session/manager.js";
 import { createLogger } from "../core/logger.js";
 import { isHeartbeatOk } from "../heartbeat/prompts.js";
+import { createProcessingAccumulator } from "./processing-message.js";
 
 const log = createLogger("gateway-queue");
 
@@ -147,17 +148,67 @@ export function createMessageQueue(config: Config): MessageQueue {
       }
 
       try {
-        const result: AgentTurnResult = await runAgentTurn(
-          message.text,
-          sessionKey,
-          agentOptions,
-          config,
-        );
+        const routeTarget = resolveRouteTarget(message, config);
+        const targetAdapter = routeTarget
+          ? router.getAdapter(routeTarget.source)
+          : undefined;
+        const supportsProcessing =
+          message.source !== "heartbeat" &&
+          targetAdapter?.createProcessingMessage != null &&
+          targetAdapter?.updateProcessingMessage != null;
+
+        let responseText: string;
+        let partial = false;
+
+        if (supportsProcessing && routeTarget) {
+          // Streaming path with processing message
+          const accumulator = createProcessingAccumulator(
+            targetAdapter as {
+              createProcessingMessage: NonNullable<typeof targetAdapter.createProcessingMessage>;
+              updateProcessingMessage: NonNullable<typeof targetAdapter.updateProcessingMessage>;
+            },
+            routeTarget.sourceId,
+            message.metadata,
+            config.gateway.processingUpdateIntervalMs,
+          );
+          accumulator.start();
+
+          let resultEvent:
+            | { response: string; messages: unknown[]; partial: boolean }
+            | undefined;
+
+          for await (const event of streamAgentTurn(
+            message.text,
+            sessionKey,
+            agentOptions,
+            config,
+          )) {
+            accumulator.handleEvent(event);
+            if (event.type === "result") {
+              resultEvent = event;
+            }
+          }
+
+          await accumulator.stop();
+
+          responseText = resultEvent?.response ?? "";
+          partial = resultEvent?.partial ?? false;
+        } else {
+          // Non-streaming fallback
+          const result: AgentTurnResult = await runAgentTurn(
+            message.text,
+            sessionKey,
+            agentOptions,
+            config,
+          );
+          responseText = result.response;
+          partial = result.partial;
+        }
 
         // Build the response text, appending a notice if the response is partial
-        let responseText = result.response;
-        if (result.partial) {
-          responseText += "\n\n[Note: This response may be incomplete due to an internal interruption.]";
+        if (partial) {
+          responseText +=
+            "\n\n[Note: This response may be incomplete due to an internal interruption.]";
         }
 
         // Route the response back to the source adapter
@@ -165,26 +216,26 @@ export function createMessageQueue(config: Config): MessageQueue {
           // Suppress heartbeat responses that contain HEARTBEAT_OK
           if (message.source === "heartbeat" && isHeartbeatOk(responseText)) {
             log.debug({ sessionKey }, "heartbeat OK, no notification needed");
+          } else if (routeTarget) {
+            const response: AdapterMessage = {
+              source: routeTarget.source,
+              sourceId: routeTarget.sourceId,
+              text: responseText,
+              metadata: message.metadata,
+            };
+            await router.route(response);
           } else {
-            const routeTarget = resolveRouteTarget(message, config);
-            if (routeTarget) {
-              const response: AdapterMessage = {
-                source: routeTarget.source,
-                sourceId: routeTarget.sourceId,
-                text: responseText,
-                metadata: message.metadata,
-              };
-              await router.route(response);
-            } else {
-              log.warn(
-                { deliverTo: config.heartbeat.deliverTo },
-                "no adapter target for heartbeat, dropping response",
-              );
-            }
+            log.warn(
+              { deliverTo: config.heartbeat.deliverTo },
+              "no adapter target for heartbeat, dropping response",
+            );
           }
         } else {
           // Notify the user when the agent returns an empty response
-          log.warn({ source: message.source, sessionKey }, "agent returned empty response");
+          log.warn(
+            { source: message.source, sessionKey },
+            "agent returned empty response",
+          );
           const emptyTarget = resolveRouteTarget(message, config);
           if (emptyTarget) {
             try {
@@ -195,7 +246,10 @@ export function createMessageQueue(config: Config): MessageQueue {
                 metadata: message.metadata,
               });
             } catch (routeErr) {
-              log.error({ err: routeErr }, "failed to send empty-response notice");
+              log.error(
+                { err: routeErr },
+                "failed to send empty-response notice",
+              );
             }
           }
         }

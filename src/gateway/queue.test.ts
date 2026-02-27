@@ -18,6 +18,12 @@ vi.mock("../core/logger.js", () => ({
 
 vi.mock("../core/agent-runner.js", () => ({
   runAgentTurn: vi.fn(),
+  streamAgentTurn: vi.fn(),
+  clearSdkSession: vi.fn(),
+}));
+
+vi.mock("./processing-message.js", () => ({
+  createProcessingAccumulator: vi.fn(),
 }));
 
 vi.mock("../session/manager.js", () => ({
@@ -32,8 +38,9 @@ vi.mock("../session/manager.js", () => ({
 
 import { createMessageQueue } from "./queue.js";
 import { createRouter } from "./router.js";
-import { runAgentTurn } from "../core/agent-runner.js";
-import type { AgentOptions, AgentTurnResult } from "../core/agent-runner.js";
+import { runAgentTurn, streamAgentTurn } from "../core/agent-runner.js";
+import type { AgentOptions, AgentTurnResult, StreamEvent } from "../core/agent-runner.js";
+import { createProcessingAccumulator } from "./processing-message.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -118,6 +125,25 @@ function makeAgentOptions(): AgentOptions {
     settingSources: ["project"],
     maxTurns: 10,
   };
+}
+
+function makeStreamingAdapter(name: string) {
+  return {
+    name,
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    sendResponse: vi.fn().mockResolvedValue(undefined),
+    createProcessingMessage: vi.fn().mockResolvedValue("proc-msg-1"),
+    updateProcessingMessage: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+async function* mockStreamGenerator(
+  events: StreamEvent[],
+): AsyncGenerator<StreamEvent> {
+  for (const event of events) {
+    yield event;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +435,194 @@ describe("MessageQueue", () => {
         expect.objectContaining({
           text: expect.stringContaining("Partial answer here"),
         }),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Streaming with processing messages
+  // -------------------------------------------------------------------------
+  describe("streaming with processing messages", () => {
+    it("uses streamAgentTurn when adapter supports processing messages", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      const events: StreamEvent[] = [
+        { type: "tool_start", toolName: "Glob" },
+        { type: "text_delta", text: "Found files" },
+        {
+          type: "result",
+          response: "Here are the files",
+          messages: [],
+          partial: false,
+        },
+      ];
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      expect(streamAgentTurn).toHaveBeenCalled();
+      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(mockAcc.start).toHaveBeenCalled();
+      expect(mockAcc.handleEvent).toHaveBeenCalledTimes(3);
+      expect(mockAcc.stop).toHaveBeenCalled();
+      // Final response sent as new message
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Here are the files",
+        }),
+      );
+    });
+
+    it("falls back to runAgentTurn when adapter lacks processing methods", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeAdapter("telegram"); // No processing methods
+      router.register(adapter);
+
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "reply",
+        messages: [],
+        partial: false,
+      });
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      expect(runAgentTurn).toHaveBeenCalled();
+      expect(streamAgentTurn).not.toHaveBeenCalled();
+    });
+
+    it("always uses runAgentTurn for heartbeat messages", async () => {
+      const config = makeConfig({
+        heartbeat: {
+          enabled: true,
+          intervalMinutes: 30,
+          activeHours: "8-21",
+          deliverTo: "last" as const,
+        },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      // Establish last adapter with streaming
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+      vi.mocked(streamAgentTurn).mockReturnValue(
+        mockStreamGenerator([
+          { type: "result", response: "ok", messages: [], partial: false },
+        ]),
+      );
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
+      await queue.processNext(agentOptions, config, router);
+
+      vi.clearAllMocks();
+      vi.mocked(runAgentTurn).mockResolvedValue({
+        response: "HEARTBEAT_OK",
+        messages: [],
+        partial: false,
+      });
+
+      queue.enqueue({
+        source: "heartbeat",
+        sourceId: "last",
+        text: "heartbeat prompt",
+      });
+      await queue.processNext(agentOptions, config, router);
+
+      expect(runAgentTurn).toHaveBeenCalled();
+      expect(streamAgentTurn).not.toHaveBeenCalled();
+    });
+
+    it("sends error response when streamAgentTurn yields only error event", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      // Stream yields only an error event, no result
+      const events: StreamEvent[] = [
+        { type: "error", error: "Something went wrong" },
+      ];
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      // No result event means responseText is "" → empty response notice
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("nothing to respond with"),
+        }),
+      );
+    });
+
+    it("passes processingUpdateIntervalMs from config to accumulator", async () => {
+      const config = makeConfig({
+        gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 3000 },
+      });
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      vi.mocked(streamAgentTurn).mockReturnValue(
+        mockStreamGenerator([
+          { type: "result", response: "ok", messages: [], partial: false },
+        ]),
+      );
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      expect(createProcessingAccumulator).toHaveBeenCalledWith(
+        expect.any(Object),
+        "123456",
+        undefined,
+        3000,
       );
     });
   });
