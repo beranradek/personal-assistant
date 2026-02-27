@@ -208,10 +208,13 @@ export function createMessageQueue(config: Config): MessageQueue {
 
           await accumulator.stop();
 
-          // If tools were used, send only the text after the last tool call.
-          // If no tools were used, send the full response (no processing
-          // message was created, so nothing to deduplicate).
-          responseText = sawTool ? finalText : (resultEvent?.response ?? "");
+          // If tools were used and there is text after the last tool call,
+          // send only that tail text (the rest was already shown in the
+          // processing message). Otherwise fall back to the full response.
+          responseText =
+            sawTool && finalText.trim()
+              ? finalText
+              : (resultEvent?.response ?? "");
           partial = resultEvent?.partial ?? false;
         } else {
           // Non-streaming fallback

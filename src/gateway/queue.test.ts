@@ -528,6 +528,81 @@ describe("MessageQueue", () => {
       );
     });
 
+    it("falls back to full response when tools used but no text follows last tool", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      // Agent says some text, calls a tool, but no text after the tool
+      const events: StreamEvent[] = [
+        { type: "text_delta", text: "Let me do that for you." },
+        { type: "tool_start", toolName: "Bash" },
+        { type: "tool_input", toolName: "Bash", input: { command: "ls" } },
+        {
+          type: "result",
+          response: "Let me do that for you.",
+          messages: [],
+          partial: false,
+        },
+      ];
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      // No text after last tool → fall back to full result.response
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Let me do that for you.",
+        }),
+      );
+    });
+
+    it("falls back to full response when error follows tools", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      const events: StreamEvent[] = [
+        { type: "tool_start", toolName: "Bash" },
+        { type: "tool_input", toolName: "Bash", input: { command: "ls" } },
+        { type: "error", error: "Something went wrong" },
+      ];
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      // Error after tool → fall back to error text from resultEvent
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("Something went wrong"),
+        }),
+      );
+    });
+
     it("falls back to runAgentTurn when adapter lacks processing methods", async () => {
       const config = makeConfig();
       const agentOptions = makeAgentOptions();
