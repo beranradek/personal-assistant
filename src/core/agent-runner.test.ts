@@ -1208,5 +1208,114 @@ describe("agent-runner", () => {
         input: { file_path: "/src/foo.ts" },
       });
     });
+
+    it("yields text_delta from assistant messages when no stream events preceded them", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      // Simulate multi-turn conversation where SDK sends complete assistant
+      // messages without prior stream_event text deltas (e.g. intermediate turns)
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-no-stream",
+            message: {
+              content: [
+                { type: "text", text: "Let me check." },
+                { type: "tool_use", id: "tu_1", name: "Bash", input: { command: "ls" } },
+              ],
+            },
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-no-stream",
+            message: {
+              content: [
+                { type: "text", text: "Here are the results." },
+              ],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-no-stream",
+            result: "Let me check.Here are the results.",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Show files", sessionKey, agentOptions, config),
+      );
+
+      // Text from assistant messages should be yielded as text_delta
+      const textDeltas = events.filter((e) => e.type === "text_delta");
+      expect(textDeltas).toHaveLength(2);
+      expect(textDeltas[0]).toEqual({ type: "text_delta", text: "Let me check." });
+      expect(textDeltas[1]).toEqual({ type: "text_delta", text: "Here are the results." });
+
+      // Tool should also be yielded
+      const toolStarts = events.filter((e) => e.type === "tool_start");
+      expect(toolStarts).toHaveLength(1);
+      expect(toolStarts[0]).toEqual({ type: "tool_start", toolName: "Bash" });
+
+      // Events should be in correct order: text, tool_start, tool_input, text, result
+      const types = events.map((e) => e.type);
+      expect(types).toEqual(["text_delta", "tool_start", "tool_input", "text_delta", "result"]);
+    });
+
+    it("does not double-yield text when stream events precede assistant message", async () => {
+      const config = makeConfig();
+      const sessionKey = "terminal--default";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "stream_event",
+            session_id: "sdk-streamed",
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "Streamed text" },
+            },
+          },
+          {
+            type: "assistant",
+            session_id: "sdk-streamed",
+            message: {
+              content: [
+                { type: "text", text: "Streamed text" },
+                { type: "tool_use", id: "tu_2", name: "Read", input: { file_path: "/a.ts" } },
+              ],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-streamed",
+            result: "Streamed text",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      const events = await collectEvents(
+        streamAgentTurn("Read a.ts", sessionKey, agentOptions, config),
+      );
+
+      // Text should appear only once (from stream_event, not duplicated from assistant)
+      const textDeltas = events.filter((e) => e.type === "text_delta");
+      expect(textDeltas).toHaveLength(1);
+
+      // Tool should NOT be re-yielded from assistant message (already streamed)
+      const toolStarts = events.filter((e) => e.type === "tool_start");
+      expect(toolStarts).toHaveLength(0);
+    });
   });
 });

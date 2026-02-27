@@ -350,6 +350,10 @@ export async function* streamAgentTurn(
 
   // Track active tool_use blocks by content block index for input buffering
   const activeTools = new Map<number, { toolName: string; jsonChunks: string[] }>();
+  // Track whether stream_events were received since the last assistant message.
+  // When true, text/tool content was already yielded via streaming — the
+  // complete assistant message only needs to accumulate responseText.
+  let hasStreamedSinceLastAssistant = false;
 
   try {
     for await (const msg of result) {
@@ -366,6 +370,8 @@ export async function* streamAgentTurn(
         const streamMsg = msg as SDKPartialAssistantMessage;
         const event = (streamMsg as any).event;
         if (!event) continue;
+
+        hasStreamedSinceLastAssistant = true;
 
         if (event.type === "content_block_delta") {
           const delta = event.delta;
@@ -414,6 +420,9 @@ export async function* streamAgentTurn(
         for (const block of assistantMsg.message.content) {
           if (typeof block === "string") {
             responseText += block;
+            if (!hasStreamedSinceLastAssistant) {
+              yield { type: "text_delta", text: block };
+            }
           } else if (
             typeof block === "object" &&
             block !== null &&
@@ -421,16 +430,24 @@ export async function* streamAgentTurn(
           ) {
             const typed = block as { type: string; [k: string]: unknown };
             if (typed.type === "text" && "text" in typed) {
-              responseText += typed.text as string;
+              const text = typed.text as string;
+              responseText += text;
+              if (!hasStreamedSinceLastAssistant) {
+                yield { type: "text_delta", text };
+              }
             } else if (typed.type === "tool_use" && "name" in typed) {
-              // Yield tool activity from complete assistant messages
               const toolName = typed.name as string;
-              yield { type: "tool_start", toolName };
-              const input = (typed.input ?? {}) as Record<string, unknown>;
-              yield { type: "tool_input", toolName, input };
+              if (!hasStreamedSinceLastAssistant) {
+                yield { type: "tool_start", toolName };
+                const input = (typed.input ?? {}) as Record<string, unknown>;
+                yield { type: "tool_input", toolName, input };
+              }
             }
           }
         }
+        // Reset for the next turn — stream events for the next assistant
+        // message (if any) will set this back to true.
+        hasStreamedSinceLastAssistant = false;
       }
     }
   } catch (err) {

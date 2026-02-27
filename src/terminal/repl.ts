@@ -89,6 +89,7 @@ export function runTerminalRepl(session: TerminalSession): void {
     let streamedText = "";
     let displayedRows = 0; // Total terminal rows for re-render cursor math
     let inTextBlock = false;
+    let hasToolLines = false; // Whether any tool events were displayed
     // Track the last tool_start so we can update it with input details
     let pendingToolName: string | null = null;
     const columns = process.stdout.columns || 80;
@@ -121,6 +122,7 @@ export function runTerminalRepl(session: TerminalSession): void {
             process.stdout.write("\n");
             inTextBlock = false;
           }
+          hasToolLines = true;
           pendingToolName = event.toolName;
           // Show tool name immediately; will be updated when input arrives
           console.log(colors.dim(`  ${event.toolName}...`));
@@ -162,20 +164,17 @@ export function runTerminalRepl(session: TerminalSession): void {
               console.log(renderMarkdown(event.response));
               console.log();
             }
-          } else if (streamedText && hasMarkdownElements(event.response)) {
-            // Smart re-render: clear raw text and tool lines, replace with markdown
+          } else if (streamedText && !hasToolLines && hasMarkdownElements(event.response)) {
+            // Smart re-render: clear raw text and replace with markdown.
+            // Only safe when no tool lines were displayed — re-rendering
+            // would erase the interleaved tool/text display.
             if (displayedRows > 0) {
               process.stdout.write(`\x1b[${displayedRows}A\x1b[J`);
             }
             console.log(renderMarkdown(event.response));
             console.log();
-          } else if (!streamedText && event.response) {
-            // No text was streamed (SDK sent complete assistant messages
-            // instead of text deltas) — display the full response now
-            console.log(renderMarkdown(event.response));
-            console.log();
           } else {
-            // Plain text was streamed — just finalize
+            // Text (and possibly tool lines) were streamed — just finalize
             if (inTextBlock) {
               process.stdout.write("\n");
             }
