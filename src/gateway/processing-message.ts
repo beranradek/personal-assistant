@@ -176,13 +176,13 @@ export function createProcessingAccumulator(
       switch (event.type) {
         case "tool_start":
           currentToolName = event.toolName;
-          buffer.push(`\n\ud83d\udd27 ${event.toolName}`);
+          buffer.push(`\n\ud83d\udd27 ${event.toolName}\n`);
           break;
         case "tool_input":
           if (currentToolName === event.toolName) {
             const lastIdx = buffer.length - 1;
             if (lastIdx >= 0 && buffer[lastIdx].includes(event.toolName)) {
-              buffer[lastIdx] = `\n\ud83d\udd27 ${formatToolInput(event.toolName, event.input)}`;
+              buffer[lastIdx] = `\n\ud83d\udd27 ${formatToolInput(event.toolName, event.input)}\n`;
             }
           }
           break;
