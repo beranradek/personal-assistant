@@ -17,13 +17,14 @@ const mocks = vi.hoisted(() => {
   const botStart = vi.fn().mockResolvedValue(undefined);
   const botStop = vi.fn().mockResolvedValue(undefined);
   const botApiSendMessage = vi.fn().mockResolvedValue(undefined);
+  const botApiEditMessageText = vi.fn().mockResolvedValue(undefined);
   const BotCtor = vi.fn(function (this: Record<string, unknown>) {
     this.on = botOn;
     this.start = botStart;
     this.stop = botStop;
-    this.api = { sendMessage: botApiSendMessage };
+    this.api = { sendMessage: botApiSendMessage, editMessageText: botApiEditMessageText };
   });
-  return { botOn, botStart, botStop, botApiSendMessage, BotCtor };
+  return { botOn, botStart, botStop, botApiSendMessage, botApiEditMessageText, BotCtor };
 });
 
 vi.mock("../core/logger.js", () => ({
@@ -367,6 +368,60 @@ describe("Telegram Adapter", () => {
       expect(mockLog.info).toHaveBeenCalledWith(
         expect.stringContaining("stopped"),
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // createProcessingMessage
+  // -------------------------------------------------------------------------
+  describe("createProcessingMessage", () => {
+    it("sends a message and returns the message_id as string", async () => {
+      const onMessage = vi.fn();
+      mocks.botApiSendMessage.mockResolvedValueOnce({ message_id: 42 });
+      const adapter = createTelegramAdapter(makeConfig(), onMessage);
+
+      const messageId = await adapter.createProcessingMessage!("999", "Processing...");
+
+      expect(mocks.botApiSendMessage).toHaveBeenCalledWith(999, "Processing...");
+      expect(messageId).toBe("42");
+    });
+
+    it("logs error when chat ID is invalid", async () => {
+      const onMessage = vi.fn();
+      const adapter = createTelegramAdapter(makeConfig(), onMessage);
+
+      await expect(
+        adapter.createProcessingMessage!("not-a-number", "text"),
+      ).rejects.toThrow();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // updateProcessingMessage
+  // -------------------------------------------------------------------------
+  describe("updateProcessingMessage", () => {
+    it("edits an existing message with new text", async () => {
+      const onMessage = vi.fn();
+      const adapter = createTelegramAdapter(makeConfig(), onMessage);
+
+      await adapter.updateProcessingMessage!("999", "42", "Updated content");
+
+      expect(mocks.botApiEditMessageText).toHaveBeenCalledWith(
+        999,
+        42,
+        "Updated content",
+      );
+    });
+
+    it("logs error when edit fails", async () => {
+      const onMessage = vi.fn();
+      const adapter = createTelegramAdapter(makeConfig(), onMessage);
+      mocks.botApiEditMessageText.mockRejectedValueOnce(new Error("edit failed"));
+
+      await expect(
+        adapter.updateProcessingMessage!("999", "42", "text"),
+      ).rejects.toThrow("edit failed");
+      expect(mockLog.error).toHaveBeenCalled();
     });
   });
 });

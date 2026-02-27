@@ -144,5 +144,34 @@ export function createTelegramAdapter(
         }
       }
     },
+
+    async createProcessingMessage(
+      sourceId: string,
+      text: string,
+    ): Promise<string> {
+      const chatId = Number(sourceId);
+      if (Number.isNaN(chatId)) {
+        const err = new Error(`invalid chat ID: ${sourceId}`);
+        log.error({ sourceId }, "invalid chat ID for processing message");
+        throw err;
+      }
+      const result = await bot.api.sendMessage(chatId, text);
+      return String(result.message_id);
+    },
+
+    async updateProcessingMessage(
+      sourceId: string,
+      messageId: string,
+      text: string,
+    ): Promise<void> {
+      const chatId = Number(sourceId);
+      const msgId = Number(messageId);
+      try {
+        await bot.api.editMessageText(chatId, msgId, text);
+      } catch (err) {
+        log.error({ chatId, messageId, err }, "failed to edit processing message");
+        throw err;
+      }
+    },
   };
 }
