@@ -583,10 +583,16 @@ describe("MessageQueue", () => {
 
       await queue.processNext(agentOptions, config, router);
 
-      // No result event means responseText is "" → empty response notice
+      // Error event is captured as a partial response with the error text
       expect(adapter.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: expect.stringContaining("nothing to respond with"),
+          text: expect.stringContaining("Something went wrong"),
+        }),
+      );
+      // Should also include the partial notice
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("incomplete"),
         }),
       );
     });

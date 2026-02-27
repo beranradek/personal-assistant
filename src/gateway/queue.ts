@@ -187,6 +187,9 @@ export function createMessageQueue(config: Config): MessageQueue {
             if (event.type === "result") {
               resultEvent = event;
             }
+            if (event.type === "error") {
+              resultEvent = { response: event.error, messages: [], partial: true };
+            }
           }
 
           await accumulator.stop();
