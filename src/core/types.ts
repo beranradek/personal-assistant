@@ -114,6 +114,28 @@ export interface Adapter {
   stop(): Promise<void>;
   /** Deliver a response back to the user via this adapter. */
   sendResponse(message: AdapterMessage): Promise<void>;
+
+  /**
+   * Create a processing message in the user's chat/thread.
+   * Returns a platform-specific message ID for later updates.
+   * Optional — only adapters that support streaming implement this.
+   */
+  createProcessingMessage?(
+    sourceId: string,
+    text: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<string>;
+
+  /**
+   * Update an existing processing message with new content.
+   * Optional — only adapters that support streaming implement this.
+   */
+  updateProcessingMessage?(
+    sourceId: string,
+    messageId: string,
+    text: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
