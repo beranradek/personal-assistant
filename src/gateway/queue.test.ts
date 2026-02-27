@@ -458,11 +458,13 @@ describe("MessageQueue", () => {
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
       const events: StreamEvent[] = [
+        { type: "text_delta", text: "Let me search..." },
         { type: "tool_start", toolName: "Glob" },
-        { type: "text_delta", text: "Found files" },
+        { type: "tool_input", toolName: "Glob", input: { pattern: "**/*.ts" } },
+        { type: "text_delta", text: "Here are the files" },
         {
           type: "result",
-          response: "Here are the files",
+          response: "Let me search...Here are the files",
           messages: [],
           partial: false,
         },
@@ -477,12 +479,51 @@ describe("MessageQueue", () => {
       expect(streamAgentTurn).toHaveBeenCalled();
       expect(runAgentTurn).not.toHaveBeenCalled();
       expect(mockAcc.start).toHaveBeenCalled();
-      expect(mockAcc.handleEvent).toHaveBeenCalledTimes(3);
+      expect(mockAcc.handleEvent).toHaveBeenCalledTimes(5);
       expect(mockAcc.stop).toHaveBeenCalled();
-      // Final response sent as new message
+      // Final response should only contain text AFTER the last tool call,
+      // not the intermediate "Let me search..." that was in the processing message
       expect(adapter.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Here are the files",
+        }),
+      );
+    });
+
+    it("sends full response when no tools are used (text-only reply)", async () => {
+      const config = makeConfig();
+      const agentOptions = makeAgentOptions();
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      const events: StreamEvent[] = [
+        { type: "text_delta", text: "Just a simple answer" },
+        {
+          type: "result",
+          response: "Just a simple answer",
+          messages: [],
+          partial: false,
+        },
+      ];
+      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(agentOptions, config, router);
+
+      // No tools used → full result.response should be sent
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Just a simple answer",
         }),
       );
     });

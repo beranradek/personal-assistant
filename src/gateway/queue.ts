@@ -177,6 +177,13 @@ export function createMessageQueue(config: Config): MessageQueue {
             | { response: string; messages: unknown[]; partial: boolean }
             | undefined;
 
+          // Track text after the last tool call — this is the final response
+          // to send as a new message. result.response contains ALL text across
+          // every turn (including intermediate text already shown in the
+          // processing message), so we only want the tail portion.
+          let finalText = "";
+          let sawTool = false;
+
           for await (const event of streamAgentTurn(
             message.text,
             sessionKey,
@@ -184,6 +191,13 @@ export function createMessageQueue(config: Config): MessageQueue {
             config,
           )) {
             accumulator.handleEvent(event);
+            if (event.type === "tool_start") {
+              finalText = "";
+              sawTool = true;
+            }
+            if (event.type === "text_delta") {
+              finalText += event.text;
+            }
             if (event.type === "result") {
               resultEvent = event;
             }
@@ -194,7 +208,10 @@ export function createMessageQueue(config: Config): MessageQueue {
 
           await accumulator.stop();
 
-          responseText = resultEvent?.response ?? "";
+          // If tools were used, send only the text after the last tool call.
+          // If no tools were used, send the full response (no processing
+          // message was created, so nothing to deduplicate).
+          responseText = sawTool ? finalText : (resultEvent?.response ?? "");
           partial = resultEvent?.partial ?? false;
         } else {
           // Non-streaming fallback
