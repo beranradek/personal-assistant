@@ -82,3 +82,9 @@ Key sections: `security` (command allowlist, workspace/data paths, additional re
 
 - `~/.personal-assistant/workspace/` — Agent workspace (memory files, skills, daily logs)
 - `~/.personal-assistant/data/` — Sessions (JSONL), vector DB (sqlite), cron jobs (JSON)
+
+## Maintenance
+
+Designs and plans of features to implement are stored in `docs/plans/active/` with date and short description. 
+Completed plans are moved to `docs/plans/completed/`.
+This serves as a living design document and implementation log for the project.
