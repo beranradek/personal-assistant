@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => {
   const appStart = vi.fn().mockResolvedValue(undefined);
   const appStop = vi.fn().mockResolvedValue(undefined);
   const chatPostMessage = vi.fn().mockResolvedValue({ ok: true, ts: "1234567890.123456" });
+  const chatUpdate = vi.fn().mockResolvedValue({ ok: true });
   const authTest = vi.fn().mockResolvedValue({ ok: true, user_id: "U_BOT_ID" });
   const AppCtor = vi.fn(function (this: Record<string, unknown>) {
     this.message = appMessage;
@@ -25,11 +26,11 @@ const mocks = vi.hoisted(() => {
     this.start = appStart;
     this.stop = appStop;
     this.client = {
-      chat: { postMessage: chatPostMessage },
+      chat: { postMessage: chatPostMessage, update: chatUpdate },
       auth: { test: authTest },
     };
   });
-  return { appMessage, appEvent, appStart, appStop, chatPostMessage, authTest, AppCtor };
+  return { appMessage, appEvent, appStart, appStop, chatPostMessage, chatUpdate, authTest, AppCtor };
 });
 
 vi.mock("../core/logger.js", () => ({
@@ -431,6 +432,90 @@ describe("Slack Adapter", () => {
       expect(mockLog.info).toHaveBeenCalledWith(
         expect.stringContaining("stopped"),
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // createProcessingMessage
+  // -------------------------------------------------------------------------
+  describe("createProcessingMessage", () => {
+    it("posts a message in the correct thread and returns ts", async () => {
+      const onMessage = vi.fn();
+      mocks.chatPostMessage.mockResolvedValueOnce({
+        ok: true,
+        ts: "1234567890.999999",
+      });
+      const adapter = createSlackAdapter(makeConfig(), onMessage);
+
+      const messageId = await adapter.createProcessingMessage!(
+        "C_CHANNEL_1--1234567890.000001",
+        "Processing...",
+      );
+
+      expect(mocks.chatPostMessage).toHaveBeenCalledWith({
+        channel: "C_CHANNEL_1",
+        text: "Processing...",
+        thread_ts: "1234567890.000001",
+      });
+      expect(messageId).toBe("1234567890.999999");
+    });
+
+    it("uses metadata for channel/thread when provided", async () => {
+      const onMessage = vi.fn();
+      mocks.chatPostMessage.mockResolvedValueOnce({
+        ok: true,
+        ts: "1234567890.999999",
+      });
+      const adapter = createSlackAdapter(makeConfig(), onMessage);
+
+      await adapter.createProcessingMessage!(
+        "C_CHANNEL_1--1234567890.000001",
+        "Processing...",
+        { channelId: "C_META_CHANNEL", threadId: "1234567890.000002" },
+      );
+
+      expect(mocks.chatPostMessage).toHaveBeenCalledWith({
+        channel: "C_META_CHANNEL",
+        text: "Processing...",
+        thread_ts: "1234567890.000002",
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // updateProcessingMessage
+  // -------------------------------------------------------------------------
+  describe("updateProcessingMessage", () => {
+    it("updates an existing message with new text in the correct channel", async () => {
+      const onMessage = vi.fn();
+      const adapter = createSlackAdapter(makeConfig(), onMessage);
+
+      await adapter.updateProcessingMessage!(
+        "C_CHANNEL_1--1234567890.000001",
+        "1234567890.999999",
+        "Updated content",
+      );
+
+      expect(mocks.chatUpdate).toHaveBeenCalledWith({
+        channel: "C_CHANNEL_1",
+        ts: "1234567890.999999",
+        text: "Updated content",
+      });
+    });
+
+    it("logs error when update fails", async () => {
+      const onMessage = vi.fn();
+      const adapter = createSlackAdapter(makeConfig(), onMessage);
+      mocks.chatUpdate.mockRejectedValueOnce(new Error("update failed"));
+
+      await expect(
+        adapter.updateProcessingMessage!(
+          "C_CHANNEL_1--1234567890.000001",
+          "1234567890.999999",
+          "text",
+        ),
+      ).rejects.toThrow("update failed");
+      expect(mockLog.error).toHaveBeenCalled();
     });
   });
 });

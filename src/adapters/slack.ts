@@ -176,5 +176,48 @@ export function createSlackAdapter(
         throw err;
       }
     },
+
+    async createProcessingMessage(
+      sourceId: string,
+      text: string,
+      metadata?: Record<string, unknown>,
+    ): Promise<string> {
+      const { channelId: parsedChannel, threadTs: parsedThread } = decodeSourceId(sourceId);
+      const channelId = (metadata?.channelId as string) ?? parsedChannel;
+      const threadTs = (metadata?.threadId as string) ?? parsedThread;
+
+      try {
+        const result = await app.client.chat.postMessage({
+          channel: channelId,
+          text,
+          thread_ts: threadTs,
+        });
+        return result.ts as string;
+      } catch (err) {
+        log.error({ channelId, threadTs, err }, "failed to create processing message");
+        throw err;
+      }
+    },
+
+    async updateProcessingMessage(
+      sourceId: string,
+      messageId: string,
+      text: string,
+      metadata?: Record<string, unknown>,
+    ): Promise<void> {
+      const { channelId: parsedChannel } = decodeSourceId(sourceId);
+      const channelId = (metadata?.channelId as string) ?? parsedChannel;
+
+      try {
+        await app.client.chat.update({
+          channel: channelId,
+          ts: messageId,
+          text,
+        });
+      } catch (err) {
+        log.error({ channelId, messageId, err }, "failed to update processing message");
+        throw err;
+      }
+    },
   };
 }
