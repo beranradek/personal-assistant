@@ -131,7 +131,25 @@ describe("ProcessingMessageAccumulator", () => {
     );
   });
 
-  it("accumulates text_delta events", async () => {
+  it("accumulates text_delta events (flushed after tool_start)", async () => {
+    const adapter = makeAdapter();
+    const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
+    acc.start();
+
+    acc.handleEvent({ type: "text_delta", text: "Hello " });
+    acc.handleEvent({ type: "text_delta", text: "world" });
+    acc.handleEvent({ type: "tool_start", toolName: "Glob" });
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(adapter.createProcessingMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Hello world"),
+      undefined,
+    );
+  });
+
+  it("does not flush when only text_delta events (no tools)", async () => {
     const adapter = makeAdapter();
     const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
     acc.start();
@@ -141,11 +159,11 @@ describe("ProcessingMessageAccumulator", () => {
 
     await vi.advanceTimersByTimeAsync(5000);
 
-    expect(adapter.createProcessingMessage).toHaveBeenCalledWith(
-      "123",
-      expect.stringContaining("Hello world"),
-      undefined,
-    );
+    expect(adapter.createProcessingMessage).not.toHaveBeenCalled();
+
+    await acc.stop();
+    // Even stop() should not flush without tools
+    expect(adapter.createProcessingMessage).not.toHaveBeenCalled();
   });
 
   it("interleaves tool calls and text", async () => {
@@ -230,6 +248,7 @@ describe("ProcessingMessageAccumulator", () => {
     const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
     acc.start();
 
+    acc.handleEvent({ type: "tool_start", toolName: "Bash" });
     // Generate lots of content
     for (let i = 0; i < 100; i++) {
       acc.handleEvent({ type: "text_delta", text: "x".repeat(50) + "\n" });

@@ -117,6 +117,7 @@ export function createProcessingAccumulator(
   let lastElapsedSeconds = 0;
   let currentToolName: string | null = null;
   let flushing = false;
+  let sawTool = false;
 
   function truncateContent(content: string): string {
     if (content.length <= MAX_CONTENT_LENGTH) return content;
@@ -128,6 +129,7 @@ export function createProcessingAccumulator(
   }
 
   async function flush(): Promise<void> {
+    if (!sawTool) return;
     if (flushing) return;
     if (buffer.length === 0 && lastElapsedSeconds === 0) return;
 
@@ -175,6 +177,7 @@ export function createProcessingAccumulator(
     handleEvent(event: StreamEvent): void {
       switch (event.type) {
         case "tool_start":
+          sawTool = true;
           currentToolName = event.toolName;
           buffer.push(`\n\ud83d\udd27 ${event.toolName}\n`);
           break;
