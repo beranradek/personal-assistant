@@ -42,13 +42,15 @@ Adapters (Telegram/Slack/Terminal) → Gateway Queue (FIFO, serial) → Agent Ru
 
 Daemon mode initializes subsystems in order: config → workspace → memory system → MCP servers → agent options → queue/router → adapters → heartbeat → cron timer → processing loop.
 
+For Telegram and Slack adapters, the queue uses `streamAgentTurn()` to stream intermediate outputs (tool calls, text fragments) into a periodically-updated "processing message" in the user's chat/thread. The final response is sent as a separate new message. The update interval is configurable via `gateway.processingUpdateIntervalMs` (default: 5s).
+
 ### Source Layout (`src/`)
 
 | Directory | Purpose |
 |-----------|---------|
 | `core/` | Config loading (Zod-validated `settings.json`), agent runner (SDK orchestration + session lifecycle), workspace bootstrap, logger (pino), central types |
 | `adapters/` | Telegram (grammy) and Slack (@slack/bolt socket mode) integrations implementing the `Adapter` interface |
-| `gateway/` | FIFO message queue with serial processing loop; router dispatches responses back to originating adapter |
+| `gateway/` | FIFO message queue with serial processing loop; router dispatches responses back to originating adapter; processing message accumulator for streaming intermediate outputs |
 | `session/` | JSONL-based conversation persistence per session key (`source--sourceId[--threadId]`), auto-compaction |
 | `memory/` | Hybrid search: local embeddings (node-llama-cpp), vector store (sqlite-vec), file indexer with chunking, daily JSONL audit log |
 | `security/` | Three-layer defense: SDK sandbox + filesystem path validation + bash command allowlist hook (PreToolUse) |
