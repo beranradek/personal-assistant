@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
+import { chmodSync } from "node:fs";
 
 // ─── Public interfaces ──────────────────────────────────────────────
 
@@ -76,6 +77,11 @@ export function createVectorStore(
 ): VectorStore {
   const db = new Database(dbPath);
   sqliteVec.load(db);
+
+  // Restrict DB file to owner-only access (skip for in-memory DBs)
+  if (dbPath !== ":memory:") {
+    chmodSync(dbPath, 0o600);
+  }
 
   // Enable WAL mode for better concurrent read/write performance
   db.pragma("journal_mode = WAL");

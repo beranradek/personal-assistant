@@ -34,10 +34,13 @@ export async function appendAuditEntry(
   const date = dateFromTimestamp(entry.timestamp);
   const dailyDir = path.join(workspaceDir, "daily");
 
-  await fs.mkdir(dailyDir, { recursive: true });
+  await fs.mkdir(dailyDir, { recursive: true, mode: 0o700 });
 
   const filePath = path.join(dailyDir, `${date}.jsonl`);
-  await fs.appendFile(filePath, JSON.stringify(entry) + "\n", "utf-8");
+  await fs.appendFile(filePath, JSON.stringify(entry) + "\n", {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 /**

@@ -37,8 +37,11 @@ export async function appendMessage(
   message: SessionMessage,
 ): Promise<void> {
   return withLock(sessionPath, async () => {
-    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
-    await fs.appendFile(sessionPath, JSON.stringify(message) + "\n", "utf-8");
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true, mode: 0o700 });
+    await fs.appendFile(sessionPath, JSON.stringify(message) + "\n", {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
   });
 }
 
@@ -53,8 +56,8 @@ export async function appendMessages(
 ): Promise<void> {
   if (messages.length === 0) return;
   return withLock(sessionPath, async () => {
-    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true, mode: 0o700 });
     const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
-    await fs.appendFile(sessionPath, data, "utf-8");
+    await fs.appendFile(sessionPath, data, { encoding: "utf-8", mode: 0o600 });
   });
 }

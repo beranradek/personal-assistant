@@ -3,6 +3,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
 
+// Owner-only permissions for sensitive directories and files
+const DIR_MODE = 0o700;
+const FILE_MODE = 0o600;
+
 // ---------------------------------------------------------------------------
 // Path to bundled templates (resolved relative to this source file)
 // ---------------------------------------------------------------------------
@@ -35,7 +39,7 @@ export async function writeFileIfMissing(
   content: string,
 ): Promise<void> {
   try {
-    await fs.writeFile(filePath, content, { flag: "wx" });
+    await fs.writeFile(filePath, content, { flag: "wx", mode: FILE_MODE });
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "EEXIST") {
       return; // File already exists – nothing to do
@@ -73,14 +77,20 @@ export async function ensureWorkspace(config: Config): Promise<void> {
   const workspace = config.security.workspace;
   const dataDir = config.security.dataDir;
 
-  // 1. Create directories (recursive so parent dirs are created too)
-  await fs.mkdir(workspace, { recursive: true });
-  await fs.mkdir(path.join(workspace, "daily"), { recursive: true });
-  await fs.mkdir(path.join(workspace, ".claude", "skills"), {
-    recursive: true,
-  });
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.mkdir(path.join(dataDir, "sessions"), { recursive: true });
+  // 1. Create directories with owner-only permissions.
+  //    chmod after mkdir ensures existing dirs from older installations
+  //    are also tightened (mkdir mode only applies to newly created dirs).
+  const dirs = [
+    workspace,
+    path.join(workspace, "daily"),
+    path.join(workspace, ".claude", "skills"),
+    dataDir,
+    path.join(dataDir, "sessions"),
+  ];
+  for (const dir of dirs) {
+    await fs.mkdir(dir, { recursive: true, mode: DIR_MODE });
+    await fs.chmod(dir, DIR_MODE);
+  }
 
   // 2. Copy template files into workspace root (write-exclusive)
   for (const name of TEMPLATE_FILES) {

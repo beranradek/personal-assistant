@@ -71,8 +71,10 @@ async function runInit(configDir: string): Promise<void> {
     // File doesn't exist, continue
   }
 
-  await fs.mkdir(configDir, { recursive: true });
-  await fs.writeFile(settingsPath, JSON.stringify(DEFAULTS, null, 2) + "\n");
+  await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(settingsPath, JSON.stringify(DEFAULTS, null, 2) + "\n", {
+    mode: 0o600,
+  });
   console.log(`Created default settings: ${settingsPath}`);
   console.log("Edit this file to customize your configuration.");
 
