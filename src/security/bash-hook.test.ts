@@ -36,6 +36,7 @@ function makeTestConfig(workspaceDir: string): Config {
         "git",
       ],
       commandsNeedingExtraValidation: ["rm", "kill"],
+      allowSudo: false,
       workspace: workspaceDir,
       dataDir: path.join(workspaceDir, ".data"),
       additionalReadDirs: [],
@@ -709,6 +710,69 @@ describe("bashSecurityHook", () => {
         bashInput("echo pseudocode"),
         "tool-55",
         { workspaceDir, config },
+      );
+
+      expect(result).toEqual({});
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // allowSudo: true — sudo is permitted when explicitly configured
+  // -------------------------------------------------------------------------
+
+  describe("allowSudo configuration", () => {
+    it("allows sudo when allowSudo is true and the command after sudo is in allowlist", async () => {
+      const sudoConfig = {
+        ...config,
+        security: { ...config.security, allowSudo: true, allowedCommands: [...config.security.allowedCommands, "apt"] },
+      };
+
+      const result = await bashSecurityHook(
+        bashInput("sudo apt install -y chromium-browser"),
+        "tool-60",
+        { workspaceDir, config: sudoConfig },
+      );
+
+      expect(result).toEqual({});
+    });
+
+    it("blocks sudo when allowSudo is true but command after sudo is not in allowlist", async () => {
+      const sudoConfig = {
+        ...config,
+        security: { ...config.security, allowSudo: true },
+      };
+
+      const result = await bashSecurityHook(
+        bashInput("sudo apt install -y chromium-browser"),
+        "tool-61",
+        { workspaceDir, config: sudoConfig },
+      );
+
+      // "apt" is not in the allowlist, so it should be blocked
+      expect(result).toHaveProperty("decision", "block");
+    });
+
+    it("still blocks sudo when allowSudo is false (default)", async () => {
+      const result = await bashSecurityHook(
+        bashInput("sudo ls"),
+        "tool-62",
+        { workspaceDir, config },
+      );
+
+      expect(result).toHaveProperty("decision", "block");
+      expect((result as { reason: string }).reason).toContain("sudo");
+    });
+
+    it("allows sudo in chained commands when allowSudo is true", async () => {
+      const sudoConfig = {
+        ...config,
+        security: { ...config.security, allowSudo: true, allowedCommands: [...config.security.allowedCommands, "apt"] },
+      };
+
+      const result = await bashSecurityHook(
+        bashInput("echo hello && sudo apt update"),
+        "tool-63",
+        { workspaceDir, config: sudoConfig },
       );
 
       expect(result).toEqual({});

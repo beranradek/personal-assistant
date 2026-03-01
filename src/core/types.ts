@@ -7,6 +7,7 @@ import { z } from "zod";
 export const SecurityConfigSchema = z.object({
   allowedCommands: z.array(z.string()),
   commandsNeedingExtraValidation: z.array(z.string()),
+  allowSudo: z.boolean().default(false),
   workspace: z.string(),
   dataDir: z.string(),
   additionalReadDirs: z.array(z.string()),

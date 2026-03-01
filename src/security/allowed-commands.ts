@@ -408,6 +408,12 @@ export function extractCommands(commandString: string): string[] {
           if (cmd) {
             commands.push(cmd);
           }
+          // When the command is "sudo", the next non-flag token is
+          // the actual command — keep expectCommand true so it gets
+          // extracted (and validated) as well.
+          if (cmd === "sudo") {
+            continue; // stay in expectCommand mode
+          }
           expectCommand = false;
         }
 

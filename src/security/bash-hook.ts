@@ -271,9 +271,12 @@ export async function bashSecurityHook(
   }
 
   // Step 3: Reject any command containing sudo (privilege escalation)
-  const sudoCheck = containsSudo(trimmedCommand);
-  if (sudoCheck.found) {
-    return { decision: "block", reason: sudoCheck.reason };
+  //         unless explicitly allowed via config.security.allowSudo
+  if (!context.config.security.allowSudo) {
+    const sudoCheck = containsSudo(trimmedCommand);
+    if (sudoCheck.found) {
+      return { decision: "block", reason: sudoCheck.reason };
+    }
   }
 
   const { config, workspaceDir } = context;
@@ -286,6 +289,11 @@ export async function bashSecurityHook(
   const commands = extractCommands(trimmedCommand);
 
   for (const cmd of commands) {
+    // When sudo is allowed, skip allowlist check for "sudo" itself —
+    // the actual command after sudo is still validated.
+    if (cmd === "sudo" && config.security.allowSudo) {
+      continue;
+    }
     const validation = validateCommand(cmd, allowlist);
     if (!validation.allowed) {
       return {

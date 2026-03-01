@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import {
+  containsSudo,
   extractCommands,
   validateCommand,
   extractFilePathsFromCommand,
@@ -42,12 +43,27 @@ export async function handleExec(
 ): Promise<ExecResult> {
   const { command, background = false, yieldMs } = options;
 
-  // ---- Step 1 & 2: Extract and validate commands ----
+  // ---- Step 1: Check for sudo privilege escalation ----
+
+  if (!config.security.allowSudo) {
+    const sudoCheck = containsSudo(command);
+    if (sudoCheck.found) {
+      return {
+        success: false,
+        message: sudoCheck.reason ?? "Use of 'sudo' is not allowed.",
+      };
+    }
+  }
+
+  // ---- Step 2: Extract and validate commands against allowlist ----
 
   const allowlist = new Set(config.security.allowedCommands);
   const commands = extractCommands(command);
 
   for (const cmd of commands) {
+    if (cmd === "sudo" && config.security.allowSudo) {
+      continue;
+    }
     const validation = validateCommand(cmd, allowlist);
     if (!validation.allowed) {
       return {

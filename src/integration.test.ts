@@ -101,6 +101,7 @@ function makeConfig(
         "kill", "pkill",
       ],
       commandsNeedingExtraValidation: ["rm", "rmdir", "kill", "chmod", "curl"],
+      allowSudo: false,
       workspace: workspaceDir,
       dataDir,
       additionalReadDirs: [],

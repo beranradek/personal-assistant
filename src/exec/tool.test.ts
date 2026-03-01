@@ -20,6 +20,7 @@ vi.mock("node:child_process", () => ({
 // ---------------------------------------------------------------------------
 
 vi.mock("../security/allowed-commands.js", () => ({
+  containsSudo: vi.fn(),
   extractCommands: vi.fn(),
   validateCommand: vi.fn(),
   extractFilePathsFromCommand: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("../security/path-validator.js", () => ({
 
 import { spawn } from "node:child_process";
 import {
+  containsSudo,
   extractCommands,
   validateCommand,
   extractFilePathsFromCommand,
@@ -50,6 +52,7 @@ function makeConfig(overrides: Partial<Config["security"]> = {}): Config {
     security: {
       allowedCommands: ["ls", "echo", "node", "cat"],
       commandsNeedingExtraValidation: [],
+      allowSudo: false,
       workspace: "/home/test/workspace",
       dataDir: "/home/test/.pa/data",
       additionalReadDirs: [],
@@ -126,6 +129,7 @@ function createLongRunningProcess(initialOutput: string = ""): ChildProcess {
  * Set up mocks so security validation passes.
  */
 function passAllSecurity() {
+  (containsSudo as Mock).mockReturnValue({ found: false });
   (extractCommands as Mock).mockReturnValue(["ls"]);
   (validateCommand as Mock).mockReturnValue({ allowed: true });
   (extractFilePathsFromCommand as Mock).mockReturnValue([]);

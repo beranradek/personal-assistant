@@ -70,6 +70,14 @@ describe("extractCommands", () => {
     expect(extractCommands("ls | grep foo")).toEqual(["ls", "grep"]);
   });
 
+  it("extracts both sudo and the command after it", () => {
+    expect(extractCommands("sudo apt install -y chromium")).toEqual(["sudo", "apt"]);
+  });
+
+  it("extracts sudo and command in a chain", () => {
+    expect(extractCommands("echo hello && sudo apt update")).toEqual(["echo", "sudo", "apt"]);
+  });
+
   it("extracts commands chained with &&", () => {
     expect(extractCommands("echo hello && cat file")).toEqual(["echo", "cat"]);
   });

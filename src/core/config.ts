@@ -20,6 +20,7 @@ export const DEFAULTS: Config = {
       "kill", "pkill",
     ],
     commandsNeedingExtraValidation: ["rm", "rmdir", "kill", "chmod", "curl"],
+    allowSudo: false,
     workspace: "~/.personal-assistant/workspace",
     dataDir: "~/.personal-assistant/data",
     additionalReadDirs: [],
