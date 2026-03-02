@@ -119,7 +119,7 @@ export async function startDaemon(configDir: string): Promise<void> {
   );
 
   // 6. Create backend + gateway queue & router
-  const backend = await createBackend(config, agentOptions);
+  const backend = await createBackend(config, agentOptions, { configDir });
   log.info({ backend: backend.name }, "Agent backend initialized");
 
   if (config.agent.backend === "codex") {

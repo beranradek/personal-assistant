@@ -109,6 +109,43 @@ Session transcripts (user messages + assistant responses) are still saved to PA'
 
 When using the Codex backend, PA's own security hooks (bash command allowlist, filesystem path validation) are **not used**. Security is delegated entirely to Codex CLI's sandbox and approval policy.
 
+### Hardening with execpolicy.txt
+
+In daemon mode, `approvalPolicy` defaults to `"never"` (required for headless operation — there is no human to approve). This means Codex can run any command the sandbox allows.
+
+To restrict which commands Codex can execute, create an `execpolicy.txt` file in the workspace:
+
+```
+# ~/.personal-assistant/workspace/execpolicy.txt
+#
+# Lines starting with + are allowed, - are denied. Evaluated top to bottom,
+# first match wins. See `codex --help` for full syntax.
+
+# Allow PA's own tools
++ pa mcp-server
+
+# Allow common safe commands
++ git *
++ ls *
++ cat *
++ head *
++ tail *
++ find *
++ grep *
++ wc *
+
+# Allow package managers (read-only operations)
++ npm list *
++ npm info *
+
+# Deny everything else by default
+- *
+```
+
+Place this file at `{workspace}/execpolicy.txt`. Codex reads it automatically when `workingDirectory` points to the workspace.
+
+For interactive terminal mode, you can use `approvalPolicy: "on-failure"` or `"untrusted"` to get prompted before potentially dangerous commands run.
+
 ## Switching Between Backends
 
 Change `agent.backend` in `settings.json` and restart:
@@ -121,6 +158,12 @@ Change `agent.backend` in `settings.json` and restart:
 ```
 
 Session history from one backend is not transferable to the other. Switching backends effectively starts a fresh conversation.
+
+## Known Limitations
+
+- **Memory refresh**: Memory files (MEMORY.md, USER.md) are re-read at the start of each turn and injected into Codex's `developer_instructions`. However, the Codex SDK applies these instructions at the process level, so mid-turn changes to memory files are not visible until the next turn.
+- **No tool_progress parity**: The Claude backend emits native `tool_progress` events from the SDK. The Codex backend synthesizes these via a 1-second timer, so elapsed time display may be slightly less precise.
+- **Thread persistence**: Thread IDs are kept in memory only. Restarting the daemon or terminal starts fresh threads (conversation context within Codex is lost, though PA's JSONL session transcripts are preserved).
 
 ## Troubleshooting
 

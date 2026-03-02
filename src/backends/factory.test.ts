@@ -8,6 +8,7 @@ vi.mock("./codex.js", () => ({
 }));
 
 import { createBackend } from "./factory.js";
+import { createCodexBackend } from "./codex.js";
 import { DEFAULTS } from "../core/config.js";
 import type { Config } from "../core/types.js";
 import type { AgentOptions } from "../core/agent-runner.js";
@@ -35,6 +36,14 @@ describe("createBackend", () => {
   it("throws when Claude backend is requested without agentOptions", async () => {
     await expect(createBackend(makeConfig("claude"))).rejects.toThrow(
       "AgentOptions required for Claude backend",
+    );
+  });
+
+  it("forwards configDir to codex backend", async () => {
+    await createBackend(makeConfig("codex"), undefined, { configDir: "/custom/config" });
+    expect(createCodexBackend).toHaveBeenCalledWith(
+      expect.anything(),
+      { configDir: "/custom/config" },
     );
   });
 });

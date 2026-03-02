@@ -94,7 +94,7 @@ export async function createTerminalSession(
     mcpServers,
   );
 
-  const backend = await createBackend(config, agentOptions);
+  const backend = await createBackend(config, agentOptions, { configDir });
 
   return {
     config,

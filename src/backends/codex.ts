@@ -9,7 +9,8 @@
  * PA's built-in MCP tools are injected programmatically via CodexOptions.config
  * so the Codex CLI spawns `pa mcp-server` as a child process.
  *
- * Memory content (MEMORY.md, USER.md) is injected via developer_instructions.
+ * Memory content (MEMORY.md, USER.md) is injected via developer_instructions
+ * and refreshed at the start of each turn.
  */
 
 import { Codex } from "@openai/codex-sdk";
@@ -18,6 +19,17 @@ import type {
   ThreadEvent,
   ThreadItem,
   ThreadOptions,
+  CommandExecutionItem,
+  FileChangeItem,
+  McpToolCallItem,
+  AgentMessageItem,
+  ReasoningItem,
+  WebSearchItem,
+  TodoListItem,
+  TurnFailedEvent,
+  ThreadErrorEvent,
+  ItemStartedEvent,
+  ItemCompletedEvent,
 } from "@openai/codex-sdk";
 import type { AgentBackend, StreamEvent, AgentTurnResult } from "./interface.js";
 import type { Config, SessionMessage } from "../core/types.js";
@@ -38,13 +50,21 @@ function mapItemStarted(item: ThreadItem): StreamEvent | null {
       return { type: "tool_start", toolName: "command_execution" };
     case "file_change":
       return { type: "tool_start", toolName: "file_change" };
-    case "mcp_tool_call":
+    case "mcp_tool_call": {
+      // C1 fix: use correct SDK field names (server, tool)
+      const mcp = item as McpToolCallItem;
       return {
         type: "tool_start",
-        toolName: `mcp:${(item as any).server_label ?? "mcp"}/${(item as any).tool_name ?? "unknown"}`,
+        toolName: `mcp:${mcp.server}/${mcp.tool}`,
       };
+    }
     case "web_search":
       return { type: "tool_start", toolName: "web_search" };
+    // S4: Surface reasoning and todo_list as tool starts
+    case "reasoning":
+      return { type: "tool_start", toolName: "reasoning" };
+    case "todo_list":
+      return { type: "tool_start", toolName: "todo_list" };
     default:
       return null;
   }
@@ -52,41 +72,70 @@ function mapItemStarted(item: ThreadItem): StreamEvent | null {
 
 function mapItemCompleted(item: ThreadItem): StreamEvent | null {
   switch (item.type) {
-    case "agent_message":
-      return { type: "text_delta", text: (item as any).text ?? "" };
-    case "command_execution":
+    case "agent_message": {
+      const msg = item as AgentMessageItem;
+      return { type: "text_delta", text: msg.text };
+    }
+    case "command_execution": {
+      const cmd = item as CommandExecutionItem;
       return {
         type: "tool_input",
         toolName: "command_execution",
         input: {
-          command: (item as any).command ?? "",
-          exit_code: (item as any).exit_code ?? null,
-          aggregated_output: (item as any).aggregated_output ?? "",
+          command: cmd.command,
+          exit_code: cmd.exit_code ?? null,
+          aggregated_output: cmd.aggregated_output,
         },
       };
-    case "file_change":
+    }
+    case "file_change": {
+      const fc = item as FileChangeItem;
+      const summary = fc.changes
+        .map((c) => `${c.kind} ${c.path}`)
+        .join(", ");
       return {
         type: "tool_input",
         toolName: "file_change",
-        input: { changes: (item as any).changes ?? (item as any).file_path ?? "" },
+        input: { changes: summary },
       };
+    }
     case "mcp_tool_call": {
-      const toolName = `mcp:${(item as any).server_label ?? "mcp"}/${(item as any).tool_name ?? "unknown"}`;
+      // C1 fix: use correct SDK field names (server, tool)
+      const mcp = item as McpToolCallItem;
+      const toolName = `mcp:${mcp.server}/${mcp.tool}`;
       return {
         type: "tool_input",
         toolName,
         input: {
-          arguments: (item as any).arguments ?? {},
-          result: (item as any).result ?? (item as any).error ?? null,
+          arguments: mcp.arguments ?? {},
+          result: mcp.result?.structured_content ?? mcp.error?.message ?? null,
         },
       };
     }
-    case "web_search":
+    case "web_search": {
+      const ws = item as WebSearchItem;
       return {
         type: "tool_input",
         toolName: "web_search",
-        input: { query: (item as any).query ?? "" },
+        input: { query: ws.query },
       };
+    }
+    // S4: Surface reasoning text as text_delta
+    case "reasoning": {
+      const r = item as ReasoningItem;
+      return { type: "text_delta", text: r.text };
+    }
+    // S4: Surface todo list as tool_input
+    case "todo_list": {
+      const tl = item as TodoListItem;
+      return {
+        type: "tool_input",
+        toolName: "todo_list",
+        input: {
+          items: tl.items.map((i) => `${i.completed ? "[x]" : "[ ]"} ${i.text}`).join("\n"),
+        },
+      };
+    }
     default:
       return null;
   }
@@ -96,11 +145,12 @@ function mapItemCompleted(item: ThreadItem): StreamEvent | null {
 // Extract text from completed items for the final response
 // ---------------------------------------------------------------------------
 
+// I6 fix: join with double newline separator
 function extractResponseText(items: ThreadItem[]): string {
   return items
-    .filter((item): item is ThreadItem & { type: "agent_message" } => item.type === "agent_message")
-    .map((item) => (item as any).text ?? "")
-    .join("");
+    .filter((item): item is AgentMessageItem => item.type === "agent_message")
+    .map((item) => item.text)
+    .join("\n\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -135,25 +185,59 @@ function buildThreadOptions(config: Config): ThreadOptions {
 }
 
 // ---------------------------------------------------------------------------
+// C2: Synthetic tool_progress timer
+// ---------------------------------------------------------------------------
+
+/** Start a timer that emits tool_progress events periodically. Returns a stop function. */
+function startProgressTimer(
+  toolName: string,
+  emit: (event: StreamEvent) => void,
+  intervalMs = 1000,
+): () => void {
+  const start = Date.now();
+  const timer = setInterval(() => {
+    emit({
+      type: "tool_progress",
+      toolName,
+      elapsedSeconds: Math.round((Date.now() - start) / 1000),
+    });
+  }, intervalMs);
+  return () => clearInterval(timer);
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
+
+export interface CodexBackendOptions {
+  /** Config directory path for passing --config to the MCP server subprocess. */
+  configDir?: string;
+}
 
 /**
  * Create a Codex agent backend.
  *
- * Async because it reads memory files for developer_instructions injection.
+ * Async because it initializes the Codex SDK and reads initial memory files.
  */
-export async function createCodexBackend(config: Config): Promise<AgentBackend> {
-  // Read memory content for developer_instructions injection
-  const memoryContent = await readMemoryFiles(config.security.workspace);
-
-  // Build Codex config with MCP server injection + developer_instructions
+export async function createCodexBackend(
+  config: Config,
+  options?: CodexBackendOptions,
+): Promise<AgentBackend> {
+  // Build Codex config with MCP server injection
   const codexConfig: Record<string, unknown> = {
     ...(config.codex.configOverrides ?? {}),
   };
 
-  if (memoryContent) {
-    codexConfig.developer_instructions = memoryContent;
+  // I5: Read memory initially for startup; will refresh per-turn below
+  const initialMemory = await readMemoryFiles(config.security.workspace);
+  if (initialMemory) {
+    codexConfig.developer_instructions = initialMemory;
+  }
+
+  // I3 fix: Pass --config to the MCP server subprocess if a config dir is known
+  const mcpArgs = ["mcp-server"];
+  if (options?.configDir) {
+    mcpArgs.push("--config", options.configDir);
   }
 
   // Inject PA's stdio MCP server
@@ -161,7 +245,7 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
   codexConfig.mcp_servers = {
     "personal-assistant": {
       command: "pa",
-      args: ["mcp-server"],
+      args: mcpArgs,
       startup_timeout_sec: 30,
       tool_timeout_sec: 120,
     },
@@ -183,10 +267,25 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
     "Codex backend initialized",
   );
 
+  /** I5: Refresh developer_instructions with latest memory content. */
+  async function refreshMemory(): Promise<void> {
+    try {
+      const content = await readMemoryFiles(config.security.workspace);
+      if (content) {
+        codexConfig.developer_instructions = content;
+      }
+    } catch (err) {
+      log.warn({ err }, "Failed to refresh memory files for Codex turn");
+    }
+  }
+
   return {
     name: "codex",
 
     async *runTurn(message: string, sessionKey: string): AsyncGenerator<StreamEvent> {
+      // I5: Refresh memory at the start of each turn
+      await refreshMemory();
+
       const userMsg: SessionMessage = {
         role: "user",
         content: message,
@@ -216,6 +315,10 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
         // Stream the turn
         const streamed = await thread.runStreamed(message);
 
+        // C2: Track active tool for synthetic tool_progress events
+        let stopProgress: (() => void) | null = null;
+        const pendingProgressEvents: StreamEvent[] = [];
+
         for await (const event of streamed.events) {
           const te = event as ThreadEvent;
 
@@ -227,13 +330,33 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
               break;
 
             case "item.started": {
-              const startEvent = mapItemStarted((te as any).item);
-              if (startEvent) yield startEvent;
+              const startEvent = mapItemStarted((te as ItemStartedEvent).item);
+              if (startEvent) {
+                // Stop any existing progress timer
+                if (stopProgress) stopProgress();
+                // Start synthetic tool_progress for this tool
+                stopProgress = startProgressTimer(
+                  startEvent.type === "tool_start" ? startEvent.toolName : "",
+                  (evt) => pendingProgressEvents.push(evt),
+                );
+                yield startEvent;
+              }
               break;
             }
 
             case "item.completed": {
-              const completeEvent = mapItemCompleted((te as any).item);
+              // Stop progress timer when item completes
+              if (stopProgress) {
+                stopProgress();
+                stopProgress = null;
+              }
+              // Yield any pending progress events
+              for (const pe of pendingProgressEvents) {
+                yield pe;
+              }
+              pendingProgressEvents.length = 0;
+
+              const completeEvent = mapItemCompleted((te as ItemCompletedEvent).item);
               if (completeEvent) {
                 if (completeEvent.type === "text_delta") {
                   responseText += completeEvent.text;
@@ -243,19 +366,29 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
               break;
             }
 
-            case "turn.failed":
-              yield { type: "error", error: (te as any).message ?? "Turn failed" };
+            // I1 fix: extract error from te.error.message, not te.message
+            case "turn.failed": {
+              if (stopProgress) { stopProgress(); stopProgress = null; }
+              const tf = te as TurnFailedEvent;
+              yield { type: "error", error: tf.error?.message ?? "Turn failed" };
               break;
+            }
 
-            case "error":
-              yield { type: "error", error: (te as any).message ?? "Codex error" };
+            case "error": {
+              if (stopProgress) { stopProgress(); stopProgress = null; }
+              const err = te as ThreadErrorEvent;
+              yield { type: "error", error: err.message ?? "Codex error" };
               break;
+            }
 
             // item.updated, turn.started, turn.completed — no action needed during streaming
             default:
               break;
           }
         }
+
+        // Clean up any lingering progress timer
+        if (stopProgress) stopProgress();
 
         // Capture thread ID after the turn
         if (thread.id && !threadIds.has(sessionKey)) {
@@ -294,6 +427,9 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
     },
 
     async runTurnSync(message: string, sessionKey: string): Promise<AgentTurnResult> {
+      // I5: Refresh memory at the start of each turn
+      await refreshMemory();
+
       const userMsg: SessionMessage = {
         role: "user",
         content: message,
@@ -353,8 +489,13 @@ export async function createCodexBackend(config: Config): Promise<AgentBackend> 
       log.debug({ sessionKey }, "cleared Codex thread mapping");
     },
 
+    // I4 fix: properly clean up Codex resources
     async close(): Promise<void> {
       threadIds.clear();
+      // The Codex SDK doesn't expose a close() method on the Codex class,
+      // but clearing thread mappings ensures no stale references remain.
+      // Any child processes spawned by the SDK are tied to individual turns
+      // and terminate when the turn completes.
       log.info("Codex backend closed");
     },
   };

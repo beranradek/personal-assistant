@@ -367,7 +367,7 @@ describe("daemon", () => {
     expect(createIndexer).toHaveBeenCalled();
     expect(readMemoryFiles).toHaveBeenCalled();
     expect(buildAgentOptions).toHaveBeenCalled();
-    expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object));
+    expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object), expect.objectContaining({ configDir: expect.any(String) }));
     expect(createMemoryServer).toHaveBeenCalled();
     expect(createAssistantServer).toHaveBeenCalled();
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));

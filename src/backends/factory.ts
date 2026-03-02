@@ -14,9 +14,15 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("backend-factory");
 
+export interface CreateBackendOptions {
+  /** Config directory path, forwarded to the Codex backend for MCP server --config. */
+  configDir?: string;
+}
+
 export async function createBackend(
   config: Config,
   agentOptions?: AgentOptions,
+  options?: CreateBackendOptions,
 ): Promise<AgentBackend> {
   const backendType = config.agent.backend;
   log.info({ backend: backendType }, "Creating agent backend");
@@ -28,7 +34,7 @@ export async function createBackend(
       }
       return createClaudeBackend(agentOptions, config);
     case "codex":
-      return createCodexBackend(config);
+      return createCodexBackend(config, { configDir: options?.configDir });
     default:
       throw new Error(`Unknown agent backend: ${backendType}`);
   }

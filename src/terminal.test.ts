@@ -126,7 +126,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       deliverTo: "last",
     },
     gateway: { maxQueueSize: 100 },
-    agent: { model: null, maxTurns: 10 },
+    agent: { backend: "claude" as const, model: null, maxTurns: 10 },
     session: { maxHistoryMessages: 50, compactionEnabled: true },
     memory: {
       search: {
@@ -140,6 +140,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       extraPaths: [],
     },
     mcpServers: {},
+    codex: {
+      codexPath: null,
+      apiKey: null,
+      baseUrl: null,
+      sandboxMode: "workspace-write" as const,
+      approvalPolicy: "never" as const,
+      networkAccess: false,
+      reasoningEffort: null,
+      skipGitRepoCheck: true,
+      configOverrides: {},
+    },
     ...overrides,
   };
 }

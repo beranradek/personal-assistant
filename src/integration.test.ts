@@ -118,7 +118,7 @@ function makeConfig(
       deliverTo: "last" as const,
     },
     gateway: { maxQueueSize: 20 },
-    agent: { model: null, maxTurns: 200 },
+    agent: { backend: "claude" as const, model: null, maxTurns: 200 },
     session: { maxHistoryMessages: 50, compactionEnabled: true },
     memory: {
       search: {
@@ -132,6 +132,17 @@ function makeConfig(
       extraPaths: [],
     },
     mcpServers: {},
+    codex: {
+      codexPath: null,
+      apiKey: null,
+      baseUrl: null,
+      sandboxMode: "workspace-write" as const,
+      approvalPolicy: "never" as const,
+      networkAccess: false,
+      reasoningEffort: null,
+      skipGitRepoCheck: true,
+      configOverrides: {},
+    },
     ...overrides,
   } as Config;
 }
