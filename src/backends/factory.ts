@@ -1,0 +1,35 @@
+/**
+ * Backend Factory
+ * ===============
+ *
+ * Creates the appropriate AgentBackend based on config.agent.backend.
+ */
+
+import type { AgentBackend } from "./interface.js";
+import type { AgentOptions } from "../core/agent-runner.js";
+import type { Config } from "../core/types.js";
+import { createClaudeBackend } from "./claude.js";
+import { createCodexBackend } from "./codex.js";
+import { createLogger } from "../core/logger.js";
+
+const log = createLogger("backend-factory");
+
+export async function createBackend(
+  config: Config,
+  agentOptions?: AgentOptions,
+): Promise<AgentBackend> {
+  const backendType = config.agent.backend;
+  log.info({ backend: backendType }, "Creating agent backend");
+
+  switch (backendType) {
+    case "claude":
+      if (!agentOptions) {
+        throw new Error("AgentOptions required for Claude backend");
+      }
+      return createClaudeBackend(agentOptions, config);
+    case "codex":
+      return createCodexBackend(config);
+    default:
+      throw new Error(`Unknown agent backend: ${backendType}`);
+  }
+}

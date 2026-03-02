@@ -37,7 +37,7 @@ export const DEFAULTS: Config = {
     deliverTo: "last",
   },
   gateway: { maxQueueSize: 20, processingUpdateIntervalMs: 5000 },
-  agent: { model: null, maxTurns: 200 },
+  agent: { backend: "claude" as const, model: null, maxTurns: 200 },
   session: { maxHistoryMessages: 50, compactionEnabled: true },
   memory: {
     search: {
@@ -51,6 +51,17 @@ export const DEFAULTS: Config = {
     extraPaths: [],
   },
   mcpServers: {},
+  codex: {
+    codexPath: null,
+    apiKey: null,
+    baseUrl: null,
+    sandboxMode: "workspace-write" as const,
+    approvalPolicy: "never" as const,
+    networkAccess: false,
+    reasoningEffort: null,
+    skipGitRepoCheck: true,
+    configOverrides: {},
+  },
 };
 
 // ---------------------------------------------------------------------------

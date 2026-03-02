@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { loadConfig } from "../core/config.js";
-import { ensureWorkspace } from "../core/workspace.js";
+import { ensureWorkspace, ensureCodexSkills } from "../core/workspace.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { createEmbeddingProvider } from "../memory/embeddings.js";
 import { createVectorStore } from "../memory/vector-store.js";
@@ -12,14 +12,15 @@ import { createCronToolManager } from "../cron/tool.js";
 import { handleExec } from "../exec/tool.js";
 import { getSession, listSessions } from "../exec/process-registry.js";
 import { buildAgentOptions } from "../core/agent-runner.js";
-import type { AgentOptions } from "../core/agent-runner.js";
+import { createBackend } from "../backends/factory.js";
+import type { AgentBackend } from "../backends/interface.js";
 import type { Config } from "../core/types.js";
 
 export const TERMINAL_SESSION_KEY = "terminal--default";
 
 export interface TerminalSession {
   config: Config;
-  agentOptions: AgentOptions;
+  backend: AgentBackend;
   sessionKey: string;
   /** Release resources (vector store, embedder, cron timer). */
   cleanup: () => Promise<void>;
@@ -36,6 +37,9 @@ export async function createTerminalSession(
 ): Promise<TerminalSession> {
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
+  if (config.agent.backend === "codex") {
+    await ensureCodexSkills(config);
+  }
 
   // Initialize memory system
   const embedder = await createEmbeddingProvider();
@@ -90,11 +94,14 @@ export async function createTerminalSession(
     mcpServers,
   );
 
+  const backend = await createBackend(config, agentOptions);
+
   return {
     config,
-    agentOptions,
+    backend,
     sessionKey: TERMINAL_SESSION_KEY,
     cleanup: async () => {
+      if (backend.close) await backend.close();
       cronManager.stop();
       store.close();
       await embedder.close();

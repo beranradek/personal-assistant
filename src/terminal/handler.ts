@@ -1,6 +1,4 @@
-import { runAgentTurn, clearSdkSession, streamAgentTurn } from "../core/agent-runner.js";
-import type { AgentOptions, StreamEvent } from "../core/agent-runner.js";
-import type { Config } from "../core/types.js";
+import type { AgentBackend, StreamEvent } from "../backends/interface.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("terminal");
@@ -21,8 +19,7 @@ export interface HandleLineResult {
 export async function handleLine(
   input: string,
   sessionKey: string,
-  agentOptions: AgentOptions,
-  config: Config,
+  backend: AgentBackend,
 ): Promise<HandleLineResult | null> {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -31,12 +28,12 @@ export async function handleLine(
 
   // Handle /clear command — reset conversation history
   if (trimmed === "/clear") {
-    clearSdkSession(sessionKey);
+    backend.clearSession(sessionKey);
     return { response: "Conversation cleared. Starting fresh.", error: null };
   }
 
   try {
-    const result = await runAgentTurn(trimmed, sessionKey, agentOptions, config);
+    const result = await backend.runTurnSync(trimmed, sessionKey);
     return { response: result.response, error: null };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -64,8 +61,7 @@ export async function handleLine(
 export async function* handleLineStreaming(
   input: string,
   sessionKey: string,
-  agentOptions: AgentOptions,
-  config: Config,
+  backend: AgentBackend,
 ): AsyncGenerator<StreamEvent> {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -73,7 +69,7 @@ export async function* handleLineStreaming(
   }
 
   if (trimmed === "/clear") {
-    clearSdkSession(sessionKey);
+    backend.clearSession(sessionKey);
     yield {
       type: "result",
       response: "Conversation cleared. Starting fresh.",
@@ -83,5 +79,5 @@ export async function* handleLineStreaming(
     return;
   }
 
-  yield* streamAgentTurn(trimmed, sessionKey, agentOptions, config);
+  yield* backend.runTurn(trimmed, sessionKey);
 }

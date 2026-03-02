@@ -10,7 +10,7 @@ import { colors } from "./colors.js";
 import { handleLineStreaming } from "./handler.js";
 import { formatToolSummary, countTerminalRows } from "./stream-render.js";
 import type { TerminalSession } from "./session.js";
-import type { StreamEvent } from "../core/agent-runner.js";
+import type { StreamEvent } from "../backends/interface.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("terminal");
@@ -24,7 +24,7 @@ const log = createLogger("terminal");
  * - Spinner while waiting for first response
  */
 export function runTerminalRepl(session: TerminalSession): void {
-  const { config, agentOptions, sessionKey } = session;
+  const { config, backend, sessionKey } = session;
   const spinner = createSpinner();
   const isTTY = process.stdin.isTTY ?? false;
 
@@ -94,7 +94,7 @@ export function runTerminalRepl(session: TerminalSession): void {
     let pendingToolName: string | null = null;
     const columns = process.stdout.columns || 80;
 
-    for await (const event of handleLineStreaming(userInput, sessionKey, agentOptions, config)) {
+    for await (const event of handleLineStreaming(userInput, sessionKey, backend)) {
       switch (event.type) {
         case "text_delta": {
           if (!headerPrinted) {

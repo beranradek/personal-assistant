@@ -95,6 +95,10 @@ vi.mock("./exec/process-registry.js", () => ({
   listSessions: vi.fn(),
 }));
 
+vi.mock("./backends/factory.js", () => ({
+  createBackend: vi.fn(),
+}));
+
 vi.mock("./core/logger.js", () => ({
   createLogger: vi.fn(() => ({
     info: vi.fn(),
@@ -126,6 +130,7 @@ import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { loadCronStore } from "./cron/store.js";
 import { armTimer } from "./cron/timer.js";
 import { createCronToolManager } from "./cron/tool.js";
+import { createBackend } from "./backends/factory.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -162,7 +167,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       deliverTo: "last",
     },
     gateway: { maxQueueSize: 20 },
-    agent: { model: null, maxTurns: 200 },
+    agent: { backend: "claude" as const, model: null, maxTurns: 200 },
     session: { maxHistoryMessages: 50, compactionEnabled: true },
     memory: {
       search: {
@@ -176,6 +181,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       extraPaths: [],
     },
     mcpServers: {},
+    codex: {
+      codexPath: null,
+      apiKey: null,
+      baseUrl: null,
+      sandboxMode: "workspace-write" as const,
+      approvalPolicy: "never" as const,
+      networkAccess: false,
+      reasoningEffort: null,
+      skipGitRepoCheck: true,
+      configOverrides: {},
+    },
     ...overrides,
   };
 }
@@ -252,6 +268,16 @@ function makeMockCronManager() {
  * Set up common mocks for a successful daemon startup.
  * Returns references to all mock objects so tests can assert on them.
  */
+function makeMockBackend() {
+  return {
+    name: "claude",
+    runTurn: vi.fn(async function* () {}),
+    runTurnSync: vi.fn().mockResolvedValue({ response: "", messages: [], partial: false }),
+    clearSession: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function setupMocks(config: Config) {
   const mockStore = makeMockStore();
   const mockEmbedder = makeMockEmbedder();
@@ -259,6 +285,7 @@ function setupMocks(config: Config) {
   const mockQueue = makeMockQueue();
   const mockRouter = makeMockRouter();
   const mockCronManager = makeMockCronManager();
+  const mockBackend = makeMockBackend();
 
   vi.mocked(loadConfig).mockReturnValue(config);
   vi.mocked(ensureWorkspace).mockResolvedValue(undefined);
@@ -285,6 +312,7 @@ function setupMocks(config: Config) {
   vi.mocked(loadCronStore).mockResolvedValue([]);
   vi.mocked(armTimer).mockReturnValue({ disarm: vi.fn() });
   vi.mocked(createCronToolManager).mockReturnValue(mockCronManager);
+  vi.mocked(createBackend).mockResolvedValue(mockBackend);
 
   return {
     mockStore,
@@ -293,6 +321,7 @@ function setupMocks(config: Config) {
     mockQueue,
     mockRouter,
     mockCronManager,
+    mockBackend,
   };
 }
 
@@ -325,7 +354,7 @@ describe("daemon", () => {
   // -----------------------------------------------------------------------
   it("initializes config, workspace, queue, and router on startup", async () => {
     const config = makeConfig();
-    const { mockQueue, mockRouter } = setupMocks(config);
+    const { mockQueue, mockRouter, mockBackend } = setupMocks(config);
 
     await startDaemon("/app");
 
@@ -338,9 +367,10 @@ describe("daemon", () => {
     expect(createIndexer).toHaveBeenCalled();
     expect(readMemoryFiles).toHaveBeenCalled();
     expect(buildAgentOptions).toHaveBeenCalled();
+    expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object));
     expect(createMemoryServer).toHaveBeenCalled();
     expect(createAssistantServer).toHaveBeenCalled();
-    expect(mockQueue.processLoop).toHaveBeenCalled();
+    expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
   });
 
   // -----------------------------------------------------------------------
@@ -440,7 +470,7 @@ describe("daemon", () => {
     });
 
     const mockTelegramAdapter = makeMockAdapter("telegram");
-    const { mockQueue, mockStore, mockEmbedder, mockCronManager } = setupMocks(config);
+    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend } = setupMocks(config);
     vi.mocked(createTelegramAdapter).mockReturnValue(mockTelegramAdapter);
 
     const mockHeartbeatStop = vi.fn();
@@ -463,6 +493,7 @@ describe("daemon", () => {
     expect(mockTelegramAdapter.stop).toHaveBeenCalled();
     expect(mockHeartbeatStop).toHaveBeenCalled();
     expect(mockCronManager.stop).toHaveBeenCalled();
+    expect(mockBackend.close).toHaveBeenCalled();
     expect(mockStore.close).toHaveBeenCalled();
     expect(mockEmbedder.close).toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(0);
@@ -475,7 +506,7 @@ describe("daemon", () => {
   // -----------------------------------------------------------------------
   it("registers SIGINT handler that triggers graceful shutdown", async () => {
     const config = makeConfig();
-    const { mockQueue, mockStore, mockEmbedder, mockCronManager } = setupMocks(config);
+    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend } = setupMocks(config);
 
     const mockHeartbeatStop = vi.fn();
     vi.mocked(createHeartbeatScheduler).mockReturnValue({ stop: mockHeartbeatStop });
@@ -493,6 +524,7 @@ describe("daemon", () => {
 
     // Verify graceful shutdown
     expect(mockQueue.stop).toHaveBeenCalled();
+    expect(mockBackend.close).toHaveBeenCalled();
     expect(mockStore.close).toHaveBeenCalled();
     expect(mockEmbedder.close).toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(0);

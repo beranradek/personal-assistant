@@ -3,7 +3,7 @@ import {
   createProcessingAccumulator,
   formatToolInput,
 } from "./processing-message.js";
-import type { StreamEvent } from "../core/agent-runner.js";
+import type { StreamEvent } from "../backends/interface.js";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -63,6 +63,33 @@ describe("formatToolInput", () => {
 
   it("returns tool name for unknown tools", () => {
     expect(formatToolInput("CustomTool", { foo: "bar" })).toBe("CustomTool");
+  });
+
+  // Codex item types
+  it("formats command_execution", () => {
+    expect(formatToolInput("command_execution", { command: "git status" })).toBe(
+      "Running: git status",
+    );
+  });
+
+  it("formats file_change", () => {
+    expect(
+      formatToolInput("file_change", { changes: "update: src/index.ts" }),
+    ).toContain("src/index.ts");
+  });
+
+  it("formats mcp: prefixed tool calls", () => {
+    expect(
+      formatToolInput("mcp:memory/memory_search", {
+        arguments: { query: "tasks" },
+      }),
+    ).toContain("memory_search");
+  });
+
+  it("formats web_search (Codex)", () => {
+    expect(
+      formatToolInput("web_search", { query: "TypeScript ESM" }),
+    ).toContain("TypeScript ESM");
   });
 });
 

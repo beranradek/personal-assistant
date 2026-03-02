@@ -11,9 +11,8 @@
  */
 
 import type { AdapterMessage, Config } from "../core/types.js";
-import type { AgentOptions, AgentTurnResult, StreamEvent } from "../core/agent-runner.js";
+import type { AgentBackend, StreamEvent, AgentTurnResult } from "../backends/interface.js";
 import type { Router } from "./router.js";
-import { runAgentTurn, streamAgentTurn, clearSdkSession } from "../core/agent-runner.js";
 import { resolveSessionKey } from "../session/manager.js";
 import { createLogger } from "../core/logger.js";
 import { isHeartbeatOk } from "../heartbeat/prompts.js";
@@ -30,7 +29,7 @@ export interface MessageQueue {
   enqueue(message: AdapterMessage): EnqueueResult;
   /** Process the next message in the queue. Returns true if a message was processed. */
   processNext(
-    agentOptions: AgentOptions,
+    backend: AgentBackend,
     config: Config,
     router: Router,
   ): Promise<boolean>;
@@ -41,7 +40,7 @@ export interface MessageQueue {
    * Awaits messages and processes them one at a time.
    */
   processLoop(
-    agentOptions: AgentOptions,
+    backend: AgentBackend,
     config: Config,
     router: Router,
   ): Promise<void>;
@@ -109,7 +108,7 @@ export function createMessageQueue(config: Config): MessageQueue {
      * Not safe for concurrent use — use `processLoop()` for serial processing.
      */
     async processNext(
-      agentOptions: AgentOptions,
+      backend: AgentBackend,
       config: Config,
       router: Router,
     ): Promise<boolean> {
@@ -132,7 +131,7 @@ export function createMessageQueue(config: Config): MessageQueue {
 
       // Handle /clear command — reset conversation history
       if (message.text.trim() === "/clear") {
-        clearSdkSession(sessionKey);
+        backend.clearSession(sessionKey);
         log.info({ sessionKey }, "session cleared via /clear");
         try {
           await router.route({
@@ -184,11 +183,9 @@ export function createMessageQueue(config: Config): MessageQueue {
           let finalText = "";
           let sawTool = false;
 
-          for await (const event of streamAgentTurn(
+          for await (const event of backend.runTurn(
             message.text,
             sessionKey,
-            agentOptions,
-            config,
           )) {
             accumulator.handleEvent(event);
             if (event.type === "tool_start") {
@@ -218,11 +215,9 @@ export function createMessageQueue(config: Config): MessageQueue {
           partial = resultEvent?.partial ?? false;
         } else {
           // Non-streaming fallback
-          const result: AgentTurnResult = await runAgentTurn(
+          const result: AgentTurnResult = await backend.runTurnSync(
             message.text,
             sessionKey,
-            agentOptions,
-            config,
           );
           responseText = result.response;
           partial = result.partial;
@@ -304,7 +299,7 @@ export function createMessageQueue(config: Config): MessageQueue {
     },
 
     async processLoop(
-      agentOptions: AgentOptions,
+      backend: AgentBackend,
       config: Config,
       router: Router,
     ): Promise<void> {
@@ -320,7 +315,7 @@ export function createMessageQueue(config: Config): MessageQueue {
         }
         if (!running) break;
 
-        await this.processNext(agentOptions, config, router);
+        await this.processNext(backend, config, router);
       }
 
       log.info("process loop stopped");

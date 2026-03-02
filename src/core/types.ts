@@ -46,8 +46,21 @@ export const GatewayConfigSchema = z.object({
 });
 
 export const AgentConfigSchema = z.object({
+  backend: z.enum(["claude", "codex"]).default("claude"),
   model: z.string().nullable(),
   maxTurns: z.number().int().positive(),
+});
+
+export const CodexConfigSchema = z.object({
+  codexPath: z.string().nullable().default(null),
+  apiKey: z.string().nullable().default(null),
+  baseUrl: z.string().nullable().default(null),
+  sandboxMode: z.enum(["read-only", "workspace-write", "danger-full-access"]).default("workspace-write"),
+  approvalPolicy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
+  networkAccess: z.boolean().default(false),
+  reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).nullable().default(null),
+  skipGitRepoCheck: z.boolean().default(true),
+  configOverrides: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const SessionConfigSchema = z.object({
@@ -85,6 +98,7 @@ export const ConfigSchema = z.object({
   session: SessionConfigSchema,
   memory: MemoryConfigSchema,
   mcpServers: McpServerConfigSchema,
+  codex: CodexConfigSchema,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

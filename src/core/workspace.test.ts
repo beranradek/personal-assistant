@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { ensureWorkspace, writeFileIfMissing } from "./workspace.js";
+import { ensureWorkspace, ensureCodexSkills, writeFileIfMissing } from "./workspace.js";
 import type { Config } from "./types.js";
 import { DEFAULTS } from "./config.js";
 
@@ -162,6 +162,76 @@ describe("workspace", () => {
       // No errors thrown, dirs and files still exist
       const stat = await fs.stat(workspaceDir);
       expect(stat.isDirectory()).toBe(true);
+    });
+  });
+
+  describe("ensureCodexSkills", () => {
+    const skillPath = path.join(os.homedir(), ".codex", "skills", "personal-assistant.md");
+    let savedContent: string | null = null;
+
+    beforeEach(async () => {
+      // Back up existing skill file if present
+      try {
+        savedContent = await fs.readFile(skillPath, "utf-8");
+        await fs.unlink(skillPath);
+      } catch {
+        savedContent = null;
+      }
+    });
+
+    afterEach(async () => {
+      // Restore original skill file (or remove test artifact)
+      if (savedContent !== null) {
+        await fs.mkdir(path.dirname(skillPath), { recursive: true });
+        await fs.writeFile(skillPath, savedContent);
+      } else {
+        try {
+          await fs.unlink(skillPath);
+        } catch {
+          // ignore if already gone
+        }
+      }
+    });
+
+    it("creates .agents/skills/ directory in workspace", async () => {
+      const config = makeConfig(workspaceDir, dataDir);
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      await ensureCodexSkills(config);
+
+      const skillsDir = path.join(workspaceDir, ".agents", "skills");
+      const stat = await fs.stat(skillsDir);
+      expect(stat.isDirectory()).toBe(true);
+    });
+
+    it("copies core skill template to ~/.codex/skills/", async () => {
+      const config = makeConfig(workspaceDir, dataDir);
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      await ensureCodexSkills(config);
+
+      const stat = await fs.stat(skillPath);
+      expect(stat.isFile()).toBe(true);
+
+      const content = await fs.readFile(skillPath, "utf-8");
+      expect(content).toContain("personal-assistant");
+    });
+
+    it("does not overwrite existing skill files", async () => {
+      const config = makeConfig(workspaceDir, dataDir);
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      // First run: create skills
+      await ensureCodexSkills(config);
+
+      // Overwrite with custom content
+      await fs.writeFile(skillPath, "custom skill content");
+
+      // Second run: should not overwrite
+      await ensureCodexSkills(config);
+
+      const content = await fs.readFile(skillPath, "utf-8");
+      expect(content).toBe("custom skill content");
     });
   });
 });

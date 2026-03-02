@@ -16,14 +16,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveConfigDir, loadConfig, DEFAULTS } from "./core/config.js";
-import { ensureWorkspace } from "./core/workspace.js";
+import { ensureWorkspace, ensureCodexSkills } from "./core/workspace.js";
 import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
 import { createLogger } from "./core/logger.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -51,6 +51,7 @@ Commands:
   terminal              Start interactive terminal mode
   daemon                Start headless daemon mode
   init                  Create default settings.json in config directory
+  mcp-server            Start stdio MCP server (for Codex backend integration)
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -84,6 +85,77 @@ async function runInit(configDir: string): Promise<void> {
   console.log(`Workspace initialized: ${config.security.workspace}`);
 }
 
+async function startMcpServer(configDir: string): Promise<void> {
+  // Dynamic imports to avoid loading heavy deps at CLI parse time
+  const [
+    { createEmbeddingProvider },
+    { createVectorStore },
+    { createIndexer },
+    { hybridSearch },
+    { createCronToolManager },
+    { handleExec },
+    { getSession, listSessions },
+    { createStdioMcpServer, runStdioServer },
+  ] = await Promise.all([
+    import("./memory/embeddings.js"),
+    import("./memory/vector-store.js"),
+    import("./memory/indexer.js"),
+    import("./memory/hybrid-search.js"),
+    import("./cron/tool.js"),
+    import("./exec/tool.js"),
+    import("./exec/process-registry.js"),
+    import("./tools/stdio-mcp-server.js"),
+  ]);
+
+  const config = loadConfig(configDir);
+  await ensureWorkspace(config);
+  await ensureCodexSkills(config);
+
+  // Initialize memory system
+  const embedder = await createEmbeddingProvider();
+  const dbPath = path.join(config.security.dataDir, "vectors.db");
+  const store = createVectorStore(dbPath, embedder.dimensions);
+  const indexer = createIndexer(store, embedder);
+
+  const memoryFiles = ["MEMORY.md", ...config.memory.extraPaths].map((f) =>
+    f.startsWith("/") ? f : path.join(config.security.workspace, f),
+  );
+  await indexer.syncFiles(memoryFiles);
+
+  // Create cron manager
+  const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
+  const cronManager = createCronToolManager({ storePath: cronStorePath });
+  await cronManager.rearmTimer();
+
+  // Create and start the stdio MCP server
+  const server = createStdioMcpServer({
+    search: async (query: string, maxResults?: number) =>
+      hybridSearch(query, store, embedder, {
+        vectorWeight: config.memory.search.hybridWeights.vector,
+        keywordWeight: config.memory.search.hybridWeights.keyword,
+        minScore: config.memory.search.minScore,
+        maxResults: maxResults ?? config.memory.search.maxResults,
+      }),
+    handleCronAction: cronManager.handleAction,
+    handleExec: (options) => handleExec(options, config),
+    getProcessSession: getSession,
+    listProcessSessions: listSessions,
+  });
+
+  // Clean shutdown
+  const cleanup = async () => {
+    cronManager.stop();
+    store.close();
+    await embedder.close();
+    process.exit(0);
+  };
+
+  process.once("SIGTERM", cleanup);
+  process.once("SIGINT", cleanup);
+
+  await runStdioServer(server);
+}
+
 async function runTerminal(configDir: string): Promise<void> {
   const session = await createTerminalSession(configDir);
   runTerminalRepl(session);
@@ -114,6 +186,9 @@ async function main(): Promise<void> {
       break;
     case "daemon":
       await startDaemon(configDir);
+      break;
+    case "mcp-server":
+      await startMcpServer(configDir);
       break;
   }
 }

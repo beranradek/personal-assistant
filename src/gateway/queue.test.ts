@@ -16,12 +16,6 @@ vi.mock("../core/logger.js", () => ({
   createLogger: () => mockLog,
 }));
 
-vi.mock("../core/agent-runner.js", () => ({
-  runAgentTurn: vi.fn(),
-  streamAgentTurn: vi.fn(),
-  clearSdkSession: vi.fn(),
-}));
-
 vi.mock("./processing-message.js", () => ({
   createProcessingAccumulator: vi.fn(),
 }));
@@ -38,8 +32,7 @@ vi.mock("../session/manager.js", () => ({
 
 import { createMessageQueue } from "./queue.js";
 import { createRouter } from "./router.js";
-import { runAgentTurn, streamAgentTurn } from "../core/agent-runner.js";
-import type { AgentOptions, AgentTurnResult, StreamEvent } from "../core/agent-runner.js";
+import type { AgentBackend, StreamEvent } from "../backends/interface.js";
 import { createProcessingAccumulator } from "./processing-message.js";
 
 // ---------------------------------------------------------------------------
@@ -113,17 +106,17 @@ function makeAdapter(name: string): Adapter {
   };
 }
 
-function makeAgentOptions(): AgentOptions {
+function makeBackend(overrides: Partial<AgentBackend> = {}): AgentBackend {
   return {
-    systemPrompt: { type: "preset", preset: "claude_code", append: "" },
-    cwd: "/tmp/workspace",
-    tools: { type: "preset", preset: "claude_code" },
-    allowedTools: [],
-    sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
-    hooks: {},
-    mcpServers: {},
-    settingSources: ["project"],
-    maxTurns: 10,
+    name: "test",
+    runTurn: vi.fn(async function* () {}) as unknown as AgentBackend["runTurn"],
+    runTurnSync: vi.fn().mockResolvedValue({
+      response: "",
+      messages: [],
+      partial: false,
+    }),
+    clearSession: vi.fn(),
+    ...overrides,
   };
 }
 
@@ -136,14 +129,6 @@ function makeStreamingAdapter(name: string) {
     createProcessingMessage: vi.fn().mockResolvedValue("proc-msg-1"),
     updateProcessingMessage: vi.fn().mockResolvedValue(undefined),
   };
-}
-
-async function* mockStreamGenerator(
-  events: StreamEvent[],
-): AsyncGenerator<StreamEvent> {
-  for (const event of events) {
-    yield event;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,42 +182,39 @@ describe("MessageQueue", () => {
   // processNext
   // -------------------------------------------------------------------------
   describe("processNext", () => {
-    it("dequeues and processes one message via agent runner", async () => {
+    it("dequeues and processes one message via backend", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "Hi there!",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
-
-      const turnResult: AgentTurnResult = {
-        response: "Hi there!",
-        messages: [],
-        partial: false,
-      };
-      vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
 
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ text: "Hello" }));
 
-      const processed = await queue.processNext(agentOptions, config, router);
+      const processed = await queue.processNext(backend, config, router);
 
       expect(processed).toBe(true);
-      expect(runAgentTurn).toHaveBeenCalledWith(
+      expect(backend.runTurnSync).toHaveBeenCalledWith(
         "Hello",
         "telegram--123456",
-        agentOptions,
-        config,
       );
     });
 
     it("returns false when queue is empty", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend();
       const router = createRouter();
 
       const queue = createMessageQueue(config);
-      const processed = await queue.processNext(agentOptions, config, router);
+      const processed = await queue.processNext(backend, config, router);
 
       expect(processed).toBe(false);
-      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurnSync).not.toHaveBeenCalled();
     });
   });
 
@@ -242,25 +224,25 @@ describe("MessageQueue", () => {
   describe("FIFO order", () => {
     it("processes messages in first-in, first-out order", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
-      const router = createRouter();
-
       const processedTexts: string[] = [];
-      vi.mocked(runAgentTurn).mockImplementation(
-        async (message: string) => {
-          processedTexts.push(message);
-          return { response: `reply to ${message}`, messages: [], partial: false };
-        },
-      );
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockImplementation(
+          async (message: string) => {
+            processedTexts.push(message);
+            return { response: `reply to ${message}`, messages: [], partial: false };
+          },
+        ),
+      });
+      const router = createRouter();
 
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ text: "first" }));
       queue.enqueue(makeMessage({ text: "second" }));
       queue.enqueue(makeMessage({ text: "third" }));
 
-      await queue.processNext(agentOptions, config, router);
-      await queue.processNext(agentOptions, config, router);
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
+      await queue.processNext(backend, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(processedTexts).toEqual(["first", "second", "third"]);
     });
@@ -272,26 +254,26 @@ describe("MessageQueue", () => {
   describe("processLoop / stop", () => {
     it("processes enqueued messages via the loop", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "reply",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const adapter = makeAdapter("telegram");
       router.register(adapter);
-
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "reply",
-        messages: [],
-        partial: false,
-      });
 
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ text: "hello" }));
 
       // Start the loop in the background
-      const loopDone = queue.processLoop(agentOptions, config, router);
+      const loopDone = queue.processLoop(backend, config, router);
 
       // Wait for processing to happen
       await vi.waitFor(() => {
-        expect(runAgentTurn).toHaveBeenCalledTimes(1);
+        expect(backend.runTurnSync).toHaveBeenCalledTimes(1);
       });
 
       queue.stop();
@@ -302,11 +284,11 @@ describe("MessageQueue", () => {
 
     it("stop() causes processLoop to resolve", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend();
       const router = createRouter();
 
       const queue = createMessageQueue(config);
-      const loopDone = queue.processLoop(agentOptions, config, router);
+      const loopDone = queue.processLoop(backend, config, router);
 
       // Stop immediately (no messages to process)
       queue.stop();
@@ -316,33 +298,31 @@ describe("MessageQueue", () => {
 
     it("wakes up the loop when a message is enqueued while waiting", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "reply",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
 
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "reply",
-        messages: [],
-        partial: false,
-      });
-
       const queue = createMessageQueue(config);
-      const loopDone = queue.processLoop(agentOptions, config, router);
+      const loopDone = queue.processLoop(backend, config, router);
 
       // Enqueue after loop has started (it should be waiting for a message)
       queue.enqueue(makeMessage({ text: "late arrival" }));
 
       await vi.waitFor(() => {
-        expect(runAgentTurn).toHaveBeenCalledTimes(1);
+        expect(backend.runTurnSync).toHaveBeenCalledTimes(1);
       });
 
       queue.stop();
       await loopDone;
 
-      expect(runAgentTurn).toHaveBeenCalledWith(
+      expect(backend.runTurnSync).toHaveBeenCalledWith(
         "late arrival",
         "telegram--123456",
-        agentOptions,
-        config,
       );
     });
   });
@@ -351,19 +331,19 @@ describe("MessageQueue", () => {
   // Error handling
   // -------------------------------------------------------------------------
   describe("error handling", () => {
-    it("logs error and sends error response when runAgentTurn throws", async () => {
+    it("logs error and sends error response when backend throws", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockRejectedValue(new Error("agent failure")),
+      });
       const router = createRouter();
       const adapter = makeAdapter("telegram");
       router.register(adapter);
 
-      vi.mocked(runAgentTurn).mockRejectedValue(new Error("agent failure"));
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ text: "boom" }));
 
-      const result = await queue.processNext(agentOptions, config, router);
+      const result = await queue.processNext(backend, config, router);
 
       expect(result).toBe(true);
       expect(mockLog.error).toHaveBeenCalledWith(
@@ -382,21 +362,21 @@ describe("MessageQueue", () => {
 
     it("notifies user when agent returns empty response", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const adapter = makeAdapter("telegram");
       router.register(adapter);
 
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "",
-        messages: [],
-        partial: false,
-      });
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ text: "Hello" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(adapter.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -409,21 +389,21 @@ describe("MessageQueue", () => {
 
     it("appends partial notice when response is marked partial", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "Partial answer here",
+          messages: [],
+          partial: true,
+        }),
+      });
       const router = createRouter();
       const adapter = makeAdapter("telegram");
       router.register(adapter);
 
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "Partial answer here",
-        messages: [],
-        partial: true,
-      });
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ text: "Hello" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(adapter.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -443,20 +423,8 @@ describe("MessageQueue", () => {
   // Streaming with processing messages
   // -------------------------------------------------------------------------
   describe("streaming with processing messages", () => {
-    it("uses streamAgentTurn when adapter supports processing messages", async () => {
+    it("uses streaming when adapter supports processing messages", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
-      const router = createRouter();
-      const adapter = makeStreamingAdapter("telegram");
-      router.register(adapter);
-
-      const mockAcc = {
-        handleEvent: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn().mockResolvedValue(undefined),
-      };
-      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
-
       const events: StreamEvent[] = [
         { type: "text_delta", text: "Let me search..." },
         { type: "tool_start", toolName: "Glob" },
@@ -469,15 +437,29 @@ describe("MessageQueue", () => {
           partial: false,
         },
       ];
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
-      expect(streamAgentTurn).toHaveBeenCalled();
-      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurn).toHaveBeenCalled();
+      expect(backend.runTurnSync).not.toHaveBeenCalled();
       expect(mockAcc.start).toHaveBeenCalled();
       expect(mockAcc.handleEvent).toHaveBeenCalledTimes(5);
       expect(mockAcc.stop).toHaveBeenCalled();
@@ -492,7 +474,20 @@ describe("MessageQueue", () => {
 
     it("sends full response when no tools are used (text-only reply)", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const events: StreamEvent[] = [
+        { type: "text_delta", text: "Just a simple answer" },
+        {
+          type: "result",
+          response: "Just a simple answer",
+          messages: [],
+          partial: false,
+        },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
       const router = createRouter();
       const adapter = makeStreamingAdapter("telegram");
       router.register(adapter);
@@ -504,21 +499,10 @@ describe("MessageQueue", () => {
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
-      const events: StreamEvent[] = [
-        { type: "text_delta", text: "Just a simple answer" },
-        {
-          type: "result",
-          response: "Just a simple answer",
-          messages: [],
-          partial: false,
-        },
-      ];
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       // No tools used → full result.response should be sent
       expect(adapter.sendResponse).toHaveBeenCalledWith(
@@ -530,19 +514,6 @@ describe("MessageQueue", () => {
 
     it("falls back to full response when tools used but no text follows last tool", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
-      const router = createRouter();
-      const adapter = makeStreamingAdapter("telegram");
-      router.register(adapter);
-
-      const mockAcc = {
-        handleEvent: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn().mockResolvedValue(undefined),
-      };
-      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
-
-      // Agent says some text, calls a tool, but no text after the tool
       const events: StreamEvent[] = [
         { type: "text_delta", text: "Let me do that for you." },
         { type: "tool_start", toolName: "Bash" },
@@ -554,12 +525,26 @@ describe("MessageQueue", () => {
           partial: false,
         },
       ];
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       // No text after last tool → fall back to full result.response
       expect(adapter.sendResponse).toHaveBeenCalledWith(
@@ -571,7 +556,16 @@ describe("MessageQueue", () => {
 
     it("falls back to full response when error follows tools", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const events: StreamEvent[] = [
+        { type: "tool_start", toolName: "Bash" },
+        { type: "tool_input", toolName: "Bash", input: { command: "ls" } },
+        { type: "error", error: "Something went wrong" },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
       const router = createRouter();
       const adapter = makeStreamingAdapter("telegram");
       router.register(adapter);
@@ -583,17 +577,10 @@ describe("MessageQueue", () => {
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
-      const events: StreamEvent[] = [
-        { type: "tool_start", toolName: "Bash" },
-        { type: "tool_input", toolName: "Bash", input: { command: "ls" } },
-        { type: "error", error: "Something went wrong" },
-      ];
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       // Error after tool → fall back to error text from resultEvent
       expect(adapter.sendResponse).toHaveBeenCalledWith(
@@ -603,29 +590,29 @@ describe("MessageQueue", () => {
       );
     });
 
-    it("falls back to runAgentTurn when adapter lacks processing methods", async () => {
+    it("falls back to runTurnSync when adapter lacks processing methods", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "reply",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const adapter = makeAdapter("telegram"); // No processing methods
       router.register(adapter);
 
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "reply",
-        messages: [],
-        partial: false,
-      });
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
-      expect(runAgentTurn).toHaveBeenCalled();
-      expect(streamAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurnSync).toHaveBeenCalled();
+      expect(backend.runTurn).not.toHaveBeenCalled();
     });
 
-    it("always uses runAgentTurn for heartbeat messages", async () => {
+    it("always uses runTurnSync for heartbeat messages", async () => {
       const config = makeConfig({
         heartbeat: {
           enabled: true,
@@ -634,30 +621,37 @@ describe("MessageQueue", () => {
           deliverTo: "last" as const,
         },
       });
-      const agentOptions = makeAgentOptions();
+
+      const firstEvents: StreamEvent[] = [
+        { type: "result", response: "ok", messages: [], partial: false },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of firstEvents) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "HEARTBEAT_OK",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const adapter = makeStreamingAdapter("telegram");
       router.register(adapter);
 
-      // Establish last adapter with streaming
       const mockAcc = {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
-      vi.mocked(streamAgentTurn).mockReturnValue(
-        mockStreamGenerator([
-          { type: "result", response: "ok", messages: [], partial: false },
-        ]),
-      );
 
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "HEARTBEAT_OK",
         messages: [],
         partial: false,
@@ -668,15 +662,22 @@ describe("MessageQueue", () => {
         sourceId: "last",
         text: "heartbeat prompt",
       });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
-      expect(runAgentTurn).toHaveBeenCalled();
-      expect(streamAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurnSync).toHaveBeenCalled();
+      expect(backend.runTurn).not.toHaveBeenCalled();
     });
 
-    it("sends error response when streamAgentTurn yields only error event", async () => {
+    it("sends error response when streaming yields only error event", async () => {
       const config = makeConfig();
-      const agentOptions = makeAgentOptions();
+      const events: StreamEvent[] = [
+        { type: "error", error: "Something went wrong" },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
       const router = createRouter();
       const adapter = makeStreamingAdapter("telegram");
       router.register(adapter);
@@ -688,16 +689,10 @@ describe("MessageQueue", () => {
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
-      // Stream yields only an error event, no result
-      const events: StreamEvent[] = [
-        { type: "error", error: "Something went wrong" },
-      ];
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStreamGenerator(events));
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       // Error event is captured as a partial response with the error text
       expect(adapter.sendResponse).toHaveBeenCalledWith(
@@ -717,7 +712,14 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 3000 },
       });
-      const agentOptions = makeAgentOptions();
+      const events: StreamEvent[] = [
+        { type: "result", response: "ok", messages: [], partial: false },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
       const router = createRouter();
       const adapter = makeStreamingAdapter("telegram");
       router.register(adapter);
@@ -729,16 +731,10 @@ describe("MessageQueue", () => {
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
-      vi.mocked(streamAgentTurn).mockReturnValue(
-        mockStreamGenerator([
-          { type: "result", response: "ok", messages: [], partial: false },
-        ]),
-      );
-
       const queue = createMessageQueue(config);
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
 
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(createProcessingAccumulator).toHaveBeenCalledWith(
         expect.any(Object),
@@ -757,33 +753,33 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "heartbeat reply",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
-
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "heartbeat reply",
-        messages: [],
-        partial: false,
-      });
 
       const queue = createMessageQueue(config);
 
       // First, a user message from telegram to establish "last" adapter
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
 
       // Now process a heartbeat message
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
         partial: false,
       });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -798,32 +794,32 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "telegram" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "heartbeat reply",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
-
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "heartbeat reply",
-        messages: [],
-        partial: false,
-      });
 
       const queue = createMessageQueue(config);
 
       // A telegram message first so the queue knows the sourceId
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
         partial: false,
       });
 
       queue.enqueue({ source: "heartbeat", sourceId: "telegram", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -838,18 +834,18 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
       });
-      const agentOptions = makeAgentOptions();
-      const router = createRouter();
-
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "heartbeat reply",
-        messages: [],
-        partial: false,
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "heartbeat reply",
+          messages: [],
+          partial: false,
+        }),
       });
+      const router = createRouter();
 
       const queue = createMessageQueue(config);
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(mockLog.warn).toHaveBeenCalledWith(
         expect.objectContaining({ deliverTo: "last" }),
@@ -861,32 +857,32 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "slack" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "reply",
+          messages: [],
+          partial: false,
+        }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
-
-      vi.mocked(runAgentTurn).mockResolvedValue({
-        response: "reply",
-        messages: [],
-        partial: false,
-      });
 
       const queue = createMessageQueue(config);
 
       // Only telegram has been used, but deliverTo is slack
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "heartbeat reply",
         messages: [],
         partial: false,
       });
 
       queue.enqueue({ source: "heartbeat", sourceId: "slack", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).not.toHaveBeenCalled();
       expect(mockLog.warn).toHaveBeenCalledWith(
@@ -899,7 +895,9 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({ response: "ok", messages: [], partial: false }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
@@ -907,20 +905,19 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
 
       // Heartbeat where agent responds with HEARTBEAT_OK
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "HEARTBEAT_OK",
         messages: [],
         partial: false,
       });
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).not.toHaveBeenCalled();
       expect(mockLog.debug).toHaveBeenCalledWith(
@@ -933,7 +930,9 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({ response: "ok", messages: [], partial: false }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
@@ -941,20 +940,19 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
 
       // Heartbeat where agent embeds HEARTBEAT_OK in a longer response
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "Nothing needs attention. HEARTBEAT_OK.",
         messages: [],
         partial: false,
       });
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).not.toHaveBeenCalled();
     });
@@ -963,7 +961,9 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({ response: "ok", messages: [], partial: false }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
@@ -971,20 +971,19 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
 
       // Heartbeat where agent has something important to say
-      vi.mocked(runAgentTurn).mockResolvedValue({
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockResolvedValue({
         response: "Your build failed! Check the logs.",
         messages: [],
         partial: false,
       });
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -999,7 +998,9 @@ describe("MessageQueue", () => {
       const config = makeConfig({
         heartbeat: { enabled: true, intervalMinutes: 30, activeHours: "8-21", deliverTo: "last" as const },
       });
-      const agentOptions = makeAgentOptions();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({ response: "ok", messages: [], partial: false }),
+      });
       const router = createRouter();
       const telegram = makeAdapter("telegram");
       router.register(telegram);
@@ -1007,15 +1008,14 @@ describe("MessageQueue", () => {
       const queue = createMessageQueue(config);
 
       // Establish last adapter
-      vi.mocked(runAgentTurn).mockResolvedValue({ response: "ok", messages: [], partial: false });
       queue.enqueue(makeMessage({ source: "telegram", sourceId: "42", text: "hi" }));
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       vi.clearAllMocks();
-      vi.mocked(runAgentTurn).mockRejectedValue(new Error("agent failure"));
+      (backend.runTurnSync as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("agent failure"));
 
       queue.enqueue({ source: "heartbeat", sourceId: "last", text: "heartbeat prompt" });
-      await queue.processNext(agentOptions, config, router);
+      await queue.processNext(backend, config, router);
 
       expect(telegram.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({

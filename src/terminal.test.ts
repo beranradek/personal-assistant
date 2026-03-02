@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Config } from "./core/types.js";
-import type { AgentOptions, AgentTurnResult } from "./core/agent-runner.js";
+import type { AgentTurnResult } from "./core/agent-runner.js";
+import type { AgentBackend, StreamEvent } from "./backends/interface.js";
 
 // ---------------------------------------------------------------------------
 // Mocks – must be declared before importing the module under test
@@ -58,9 +59,10 @@ vi.mock("./exec/process-registry.js", () => ({
 
 vi.mock("./core/agent-runner.js", () => ({
   buildAgentOptions: vi.fn(),
-  runAgentTurn: vi.fn(),
-  streamAgentTurn: vi.fn(),
-  clearSdkSession: vi.fn(),
+}));
+
+vi.mock("./backends/factory.js", () => ({
+  createBackend: vi.fn(),
 }));
 
 vi.mock("./core/logger.js", () => ({
@@ -86,8 +88,8 @@ import { createIndexer } from "./memory/indexer.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
 import { createCronToolManager } from "./cron/tool.js";
-import { buildAgentOptions, runAgentTurn, streamAgentTurn } from "./core/agent-runner.js";
-import type { StreamEvent } from "./core/agent-runner.js";
+import { buildAgentOptions } from "./core/agent-runner.js";
+import { createBackend } from "./backends/factory.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -142,17 +144,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-function makeAgentOptions(): AgentOptions {
+function makeBackend(overrides: Partial<AgentBackend> = {}): AgentBackend {
   return {
-    systemPrompt: { type: "preset", preset: "claude_code", append: "memory" },
-    cwd: "/tmp/workspace",
-    tools: { type: "preset", preset: "claude_code" },
-    allowedTools: ["Read", "Write", "Bash"],
-    sandbox: { enabled: true, autoAllowBashIfSandboxed: true },
-    hooks: {},
-    mcpServers: {},
-    settingSources: ["project"],
-    maxTurns: 10,
+    name: "test",
+    runTurn: vi.fn(async function* () {}) as unknown as AgentBackend["runTurn"],
+    runTurnSync: vi.fn().mockResolvedValue({
+      response: "",
+      messages: [],
+      partial: false,
+    }),
+    clearSession: vi.fn(),
+    ...overrides,
   };
 }
 
@@ -208,6 +210,7 @@ describe("terminal", () => {
         rearmTimer: vi.fn(),
         stop: vi.fn(),
       };
+      const mockBackend = makeBackend();
 
       vi.mocked(loadConfig).mockReturnValue(config);
       vi.mocked(ensureWorkspace).mockResolvedValue(undefined);
@@ -218,15 +221,15 @@ describe("terminal", () => {
       vi.mocked(createMemoryServer).mockReturnValue({} as any);
       vi.mocked(createAssistantServer).mockReturnValue({} as any);
       vi.mocked(createCronToolManager).mockReturnValue(mockCronManager);
+      vi.mocked(createBackend).mockResolvedValue(mockBackend);
 
-      return { mockEmbedder, mockStore, mockIndexer, mockCronManager };
+      return { mockEmbedder, mockStore, mockIndexer, mockCronManager, mockBackend };
     }
 
-    it("creates a terminal session with config and agent options", async () => {
+    it("creates a terminal session with config and backend", async () => {
       const config = makeConfig();
-      setupSessionMocks(config);
-      const agentOpts = makeAgentOptions();
-      vi.mocked(buildAgentOptions).mockReturnValue(agentOpts);
+      const { mockBackend } = setupSessionMocks(config);
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
 
       const session = await createTerminalSession("/app");
 
@@ -236,14 +239,14 @@ describe("terminal", () => {
         includeHeartbeat: false,
       });
       expect(session.config).toBe(config);
-      expect(session.agentOptions).toBe(agentOpts);
+      expect(session.backend).toBe(mockBackend);
       expect(session.sessionKey).toBe("terminal--default");
     });
 
     it("initializes memory system and MCP servers", async () => {
       const config = makeConfig();
       setupSessionMocks(config);
-      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
 
       await createTerminalSession("/app");
 
@@ -262,7 +265,7 @@ describe("terminal", () => {
       const mockAssistantServer = { name: "assistant" };
       vi.mocked(createMemoryServer).mockReturnValue(mockMemoryServer as any);
       vi.mocked(createAssistantServer).mockReturnValue(mockAssistantServer as any);
-      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
 
       await createTerminalSession("/app");
 
@@ -282,7 +285,7 @@ describe("terminal", () => {
         mcpServers: { "chrome-devtools": { command: "npx", args: [] } },
       });
       setupSessionMocks(config);
-      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
 
       await createTerminalSession("/app");
 
@@ -300,8 +303,8 @@ describe("terminal", () => {
 
     it("cleanup releases resources", async () => {
       const config = makeConfig();
-      const { mockStore, mockEmbedder, mockCronManager } = setupSessionMocks(config);
-      vi.mocked(buildAgentOptions).mockReturnValue(makeAgentOptions());
+      const { mockStore, mockEmbedder, mockCronManager, mockBackend } = setupSessionMocks(config);
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
 
       const session = await createTerminalSession("/app");
       await session.cleanup();
@@ -316,9 +319,8 @@ describe("terminal", () => {
   // handleLine
   // -----------------------------------------------------------------------
   describe("handleLine", () => {
-    it("sends user input to agent runner with terminal session key", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+    it("sends user input to backend with terminal session key", async () => {
+      const backend = makeBackend();
       const turnResult: AgentTurnResult = {
         response: "Hello back!",
         messages: [
@@ -327,42 +329,37 @@ describe("terminal", () => {
         ],
         partial: false,
       };
-      vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
+      vi.mocked(backend.runTurnSync).mockResolvedValue(turnResult);
 
-      const result = await handleLine("Hello", TERMINAL_SESSION_KEY, agentOpts, config);
+      const result = await handleLine("Hello", TERMINAL_SESSION_KEY, backend);
 
-      expect(runAgentTurn).toHaveBeenCalledWith(
+      expect(backend.runTurnSync).toHaveBeenCalledWith(
         "Hello",
         "terminal--default",
-        agentOpts,
-        config,
       );
       expect(result).toEqual({ response: "Hello back!", error: null });
     });
 
     it("returns null for empty input (skips, re-prompts)", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+      const backend = makeBackend();
 
-      const result = await handleLine("", TERMINAL_SESSION_KEY, agentOpts, config);
+      const result = await handleLine("", TERMINAL_SESSION_KEY, backend);
 
       expect(result).toBeNull();
-      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurnSync).not.toHaveBeenCalled();
     });
 
     it("returns null for whitespace-only input", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+      const backend = makeBackend();
 
-      const result = await handleLine("   \t  ", TERMINAL_SESSION_KEY, agentOpts, config);
+      const result = await handleLine("   \t  ", TERMINAL_SESSION_KEY, backend);
 
       expect(result).toBeNull();
-      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurnSync).not.toHaveBeenCalled();
     });
 
-    it("trims input before sending to agent runner", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+    it("trims input before sending to backend", async () => {
+      const backend = makeBackend();
       const turnResult: AgentTurnResult = {
         response: "Trimmed!",
         messages: [
@@ -371,24 +368,21 @@ describe("terminal", () => {
         ],
         partial: false,
       };
-      vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
+      vi.mocked(backend.runTurnSync).mockResolvedValue(turnResult);
 
-      await handleLine("  hello  ", TERMINAL_SESSION_KEY, agentOpts, config);
+      await handleLine("  hello  ", TERMINAL_SESSION_KEY, backend);
 
-      expect(runAgentTurn).toHaveBeenCalledWith(
+      expect(backend.runTurnSync).toHaveBeenCalledWith(
         "hello",
         "terminal--default",
-        agentOpts,
-        config,
       );
     });
 
-    it("returns error message when agent runner throws", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
-      vi.mocked(runAgentTurn).mockRejectedValue(new Error("SDK connection failed"));
+    it("returns error message when backend throws", async () => {
+      const backend = makeBackend();
+      vi.mocked(backend.runTurnSync).mockRejectedValue(new Error("SDK connection failed"));
 
-      const result = await handleLine("Hello", TERMINAL_SESSION_KEY, agentOpts, config);
+      const result = await handleLine("Hello", TERMINAL_SESSION_KEY, backend);
 
       expect(result).toEqual({
         response: null,
@@ -397,11 +391,10 @@ describe("terminal", () => {
     });
 
     it("returns error string for non-Error thrown values", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
-      vi.mocked(runAgentTurn).mockRejectedValue("string error");
+      const backend = makeBackend();
+      vi.mocked(backend.runTurnSync).mockRejectedValue("string error");
 
-      const result = await handleLine("Hello", TERMINAL_SESSION_KEY, agentOpts, config);
+      const result = await handleLine("Hello", TERMINAL_SESSION_KEY, backend);
 
       expect(result).toEqual({
         response: null,
@@ -410,8 +403,7 @@ describe("terminal", () => {
     });
 
     it("streams agent response to stdout", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+      const backend = makeBackend();
       const turnResult: AgentTurnResult = {
         response: "The answer is 42",
         messages: [
@@ -420,9 +412,9 @@ describe("terminal", () => {
         ],
         partial: false,
       };
-      vi.mocked(runAgentTurn).mockResolvedValue(turnResult);
+      vi.mocked(backend.runTurnSync).mockResolvedValue(turnResult);
 
-      const result = await handleLine("What is the answer?", TERMINAL_SESSION_KEY, agentOpts, config);
+      const result = await handleLine("What is the answer?", TERMINAL_SESSION_KEY, backend);
 
       // The handleLine function returns the response which the caller outputs to stdout
       expect(result).not.toBeNull();
@@ -434,45 +426,42 @@ describe("terminal", () => {
   // handleLineStreaming
   // -----------------------------------------------------------------------
   describe("handleLineStreaming", () => {
-    it("yields stream events from streamAgentTurn", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+    it("yields stream events from backend.runTurn", async () => {
+      const backend = makeBackend();
 
       async function* mockStream(): AsyncGenerator<StreamEvent> {
         yield { type: "text_delta", text: "Hello" };
         yield { type: "result", response: "Hello", messages: [], partial: false };
       }
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStream());
+      vi.mocked(backend.runTurn).mockReturnValue(mockStream());
 
       const events: StreamEvent[] = [];
-      for await (const event of handleLineStreaming("Hi", TERMINAL_SESSION_KEY, agentOpts, config)) {
+      for await (const event of handleLineStreaming("Hi", TERMINAL_SESSION_KEY, backend)) {
         events.push(event);
       }
 
       expect(events).toHaveLength(2);
       expect(events[0]).toEqual({ type: "text_delta", text: "Hello" });
-      expect(streamAgentTurn).toHaveBeenCalledWith("Hi", "terminal--default", agentOpts, config);
+      expect(backend.runTurn).toHaveBeenCalledWith("Hi", "terminal--default");
     });
 
     it("returns empty generator for empty input", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+      const backend = makeBackend();
 
       const events: StreamEvent[] = [];
-      for await (const event of handleLineStreaming("", TERMINAL_SESSION_KEY, agentOpts, config)) {
+      for await (const event of handleLineStreaming("", TERMINAL_SESSION_KEY, backend)) {
         events.push(event);
       }
 
       expect(events).toHaveLength(0);
-      expect(streamAgentTurn).not.toHaveBeenCalled();
+      expect(backend.runTurn).not.toHaveBeenCalled();
     });
 
     it("returns empty generator for whitespace-only input", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+      const backend = makeBackend();
 
       const events: StreamEvent[] = [];
-      for await (const event of handleLineStreaming("   ", TERMINAL_SESSION_KEY, agentOpts, config)) {
+      for await (const event of handleLineStreaming("   ", TERMINAL_SESSION_KEY, backend)) {
         events.push(event);
       }
 
@@ -480,11 +469,10 @@ describe("terminal", () => {
     });
 
     it("handles /clear command by yielding a result event", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+      const backend = makeBackend();
 
       const events: StreamEvent[] = [];
-      for await (const event of handleLineStreaming("/clear", TERMINAL_SESSION_KEY, agentOpts, config)) {
+      for await (const event of handleLineStreaming("/clear", TERMINAL_SESSION_KEY, backend)) {
         events.push(event);
       }
 
@@ -497,21 +485,20 @@ describe("terminal", () => {
       });
     });
 
-    it("trims input before sending to streamAgentTurn", async () => {
-      const config = makeConfig();
-      const agentOpts = makeAgentOptions();
+    it("trims input before sending to backend.runTurn", async () => {
+      const backend = makeBackend();
 
       async function* mockStream(): AsyncGenerator<StreamEvent> {
         yield { type: "result", response: "ok", messages: [], partial: false };
       }
-      vi.mocked(streamAgentTurn).mockReturnValue(mockStream());
+      vi.mocked(backend.runTurn).mockReturnValue(mockStream());
 
       const events: StreamEvent[] = [];
-      for await (const event of handleLineStreaming("  hello  ", TERMINAL_SESSION_KEY, agentOpts, config)) {
+      for await (const event of handleLineStreaming("  hello  ", TERMINAL_SESSION_KEY, backend)) {
         events.push(event);
       }
 
-      expect(streamAgentTurn).toHaveBeenCalledWith("hello", "terminal--default", agentOpts, config);
+      expect(backend.runTurn).toHaveBeenCalledWith("hello", "terminal--default");
     });
   });
 });

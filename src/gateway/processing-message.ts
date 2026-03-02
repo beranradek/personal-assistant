@@ -10,7 +10,7 @@
  * output, matching the terminal streaming display style.
  */
 
-import type { StreamEvent } from "../core/agent-runner.js";
+import type { StreamEvent } from "../backends/interface.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("processing-message");
@@ -64,7 +64,28 @@ export function formatToolInput(
       const q = input.query as string | undefined;
       return q ? `Searching web: ${q}` : toolName;
     }
+    // Codex item types
+    case "command_execution": {
+      const cmd = input.command as string | undefined;
+      if (!cmd) return toolName;
+      const truncated =
+        cmd.length > MAX_CMD_LEN ? cmd.slice(0, MAX_CMD_LEN) + "..." : cmd;
+      return `Running: ${truncated}`;
+    }
+    case "file_change": {
+      const changes = input.changes as string | undefined;
+      return changes ? `File change: ${changes}` : toolName;
+    }
+    case "web_search": {
+      const q = input.query as string | undefined;
+      return q ? `Searching web: ${q}` : toolName;
+    }
     default:
+      // Handle mcp: prefixed tool calls (e.g. "mcp:memory/memory_search")
+      if (toolName.startsWith("mcp:")) {
+        const shortName = toolName.split("/").pop() ?? toolName;
+        return `MCP: ${shortName}`;
+      }
       return toolName;
   }
 }

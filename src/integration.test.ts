@@ -704,10 +704,14 @@ describe("Integration: Queue processes messages in order", () => {
   });
 
   it("queue + router work together in processLoop", async () => {
-    // runAgentTurn is mocked at the top level via vi.mock
-    vi.mocked(runAgentTurn).mockImplementation(async (message: string) => {
-      return { response: `reply to: ${message}`, messages: [], partial: false };
-    });
+    const mockBackend = {
+      name: "test",
+      runTurn: vi.fn(async function* () {}),
+      runTurnSync: vi.fn().mockImplementation(async (message: string) => {
+        return { response: `reply to: ${message}`, messages: [], partial: false };
+      }),
+      clearSession: vi.fn(),
+    };
 
     const router = createRouter();
     const adapter = makeAdapter("telegram");
@@ -719,15 +723,8 @@ describe("Integration: Queue processes messages in order", () => {
     queue.enqueue({ source: "telegram", sourceId: "u1", text: "hello" });
     queue.enqueue({ source: "telegram", sourceId: "u1", text: "world" });
 
-    const agentOptions = buildAgentOptions(
-      config,
-      "/tmp/workspace",
-      "test memory",
-      {},
-    );
-
     // Start loop in background
-    const loopDone = queue.processLoop(agentOptions, config, router);
+    const loopDone = queue.processLoop(mockBackend as any, config, router);
 
     // Wait for both messages to be processed
     await vi.waitFor(() => {

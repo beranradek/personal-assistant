@@ -22,9 +22,10 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
-import { ensureWorkspace } from "./core/workspace.js";
+import { ensureWorkspace, ensureCodexSkills } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
+import { createBackend } from "./backends/factory.js";
 import { createEmbeddingProvider } from "./memory/embeddings.js";
 import { createVectorStore } from "./memory/vector-store.js";
 import { createIndexer } from "./memory/indexer.js";
@@ -60,6 +61,9 @@ export async function startDaemon(configDir: string): Promise<void> {
   // 1. Load config & ensure workspace
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
+  if (config.agent.backend === "codex") {
+    await ensureCodexSkills(config);
+  }
 
   // 2. Initialize memory system
   const embedder = await createEmbeddingProvider();
@@ -114,7 +118,18 @@ export async function startDaemon(configDir: string): Promise<void> {
     mcpServers,
   );
 
-  // 6. Create gateway queue & router
+  // 6. Create backend + gateway queue & router
+  const backend = await createBackend(config, agentOptions);
+  log.info({ backend: backend.name }, "Agent backend initialized");
+
+  if (config.agent.backend === "codex") {
+    log.info(
+      { sandbox: config.codex.sandboxMode, approval: config.codex.approvalPolicy },
+      "Codex backend active — PA security hooks (bash allowlist, path validation) are " +
+      "not used. Command security is enforced by Codex CLI sandbox and approval policy.",
+    );
+  }
+
   const queue = createMessageQueue(config);
   const router = createRouter();
 
@@ -181,7 +196,7 @@ export async function startDaemon(configDir: string): Promise<void> {
   await cronManager.rearmTimer();
 
   // 10. Start processing loop (non-blocking -- processLoop runs until stopped)
-  queue.processLoop(agentOptions, config, router);
+  queue.processLoop(backend, config, router);
 
   log.info("Daemon started");
 
@@ -221,6 +236,11 @@ export async function startDaemon(configDir: string): Promise<void> {
 
     // Stop cron timer
     cronManager.stop();
+
+    // Close backend
+    if (backend.close) {
+      await backend.close();
+    }
 
     // Close memory system
     store.close();

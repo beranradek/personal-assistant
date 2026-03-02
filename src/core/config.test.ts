@@ -139,6 +139,17 @@ describe("config", () => {
       expect(config.memory.search.hybridWeights).toEqual({ vector: 0.7, keyword: 0.3 });
       expect(config.memory.extraPaths).toEqual([]);
       expect(config.mcpServers).toEqual({});
+      // Codex backend defaults
+      expect(config.agent.backend).toBe("claude");
+      expect(config.codex.sandboxMode).toBe("workspace-write");
+      expect(config.codex.approvalPolicy).toBe("never");
+      expect(config.codex.networkAccess).toBe(false);
+      expect(config.codex.skipGitRepoCheck).toBe(true);
+      expect(config.codex.codexPath).toBeNull();
+      expect(config.codex.apiKey).toBeNull();
+      expect(config.codex.baseUrl).toBeNull();
+      expect(config.codex.reasoningEffort).toBeNull();
+      expect(config.codex.configOverrides).toEqual({});
     });
   });
 

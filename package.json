@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@openai/codex-sdk": "^0.107.0",
     "@slack/bolt": "^4.6.0",
     "better-sqlite3": "^12.6.2",
     "cron-parser": "^5.5.0",
