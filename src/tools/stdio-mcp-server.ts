@@ -51,7 +51,24 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "cron",
-    description: "Manage scheduled reminders and jobs (add, list, update, remove)",
+    description: `Manage scheduled reminders and jobs. Actions:
+
+ADD — create a new job. Required params:
+  - label: string — human-readable name (e.g. "Daily standup reminder")
+  - schedule: object — one of three types:
+      { "type": "cron", "expression": "<cron expr>" } — standard 5-field cron (e.g. "30 9 * * 1-5" = weekdays 9:30 UTC)
+      { "type": "oneshot", "iso": "<ISO 8601 datetime>" } — fires once (e.g. "2026-03-01T14:00:00Z")
+      { "type": "interval", "everyMs": <milliseconds> } — repeating interval (e.g. 3600000 = every hour)
+  - payload: { "text": "<message>" } — the text delivered when the job fires
+
+LIST — returns all jobs. No params needed.
+
+UPDATE — modify an existing job. Required params:
+  - id: string — the job UUID (from add/list response)
+  Optional: label, schedule, payload (same format as add), enabled (boolean)
+
+REMOVE — delete a job. Required params:
+  - id: string — the job UUID`,
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -62,7 +79,7 @@ const TOOL_DEFINITIONS = [
         },
         params: {
           type: "object",
-          description: "Action parameters",
+          description: "Action parameters — see tool description for required fields per action",
         },
       },
       required: ["action"],
@@ -70,18 +87,18 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "exec",
-    description: "Run a command with optional background execution",
+    description: "Run a command with optional background execution. Returns output, exit code, and session ID for background processes.",
     inputSchema: {
       type: "object" as const,
       properties: {
         command: { type: "string", description: "Shell command to execute" },
         background: {
           type: "boolean",
-          description: "Run in background (default: false)",
+          description: "Run in background (default: false). Returns a sessionId to check status later via the process tool.",
         },
         yieldMs: {
           type: "number",
-          description: "Wait this many ms then return partial output",
+          description: "Wait this many ms then return partial output (useful for long-running foreground commands)",
         },
       },
       required: ["command"],
@@ -89,18 +106,18 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "process",
-    description: "Check status of background processes",
+    description: "Check status of background processes started via the exec tool.",
     inputSchema: {
       type: "object" as const,
       properties: {
         action: {
           type: "string",
           enum: ["status", "list"],
-          description: "Action to perform",
+          description: "Action: 'list' returns all sessions, 'status' returns details for a specific session (requires sessionId)",
         },
         sessionId: {
           type: "string",
-          description: "Session ID (required for status)",
+          description: "Session ID (required for 'status' action, returned by exec when background=true)",
         },
       },
       required: ["action"],
