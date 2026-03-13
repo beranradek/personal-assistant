@@ -22,7 +22,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
-import { ensureWorkspace, ensureCodexSkills } from "./core/workspace.js";
+import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
 import { createBackend } from "./backends/factory.js";
@@ -61,9 +61,6 @@ export async function startDaemon(configDir: string): Promise<void> {
   // 1. Load config & ensure workspace
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
-  if (config.agent.backend === "codex") {
-    await ensureCodexSkills(config);
-  }
 
   // 2. Initialize memory system
   const embedder = await createEmbeddingProvider();

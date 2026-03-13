@@ -1,5 +1,4 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./types.js";
@@ -14,8 +13,6 @@ const FILE_MODE = 0o600;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = path.resolve(__dirname, "..", "templates");
-
-const CODEX_SKILLS_DIR = path.resolve(TEMPLATES_DIR, "codex-skills");
 
 // Template files to copy into the workspace root on first run
 const TEMPLATE_FILES = [
@@ -102,38 +99,4 @@ export async function ensureWorkspace(config: Config): Promise<void> {
     const content = await fs.readFile(src, "utf-8");
     await writeFileIfMissing(dest, content);
   }
-}
-
-// ---------------------------------------------------------------------------
-// ensureCodexSkills – seed Codex skill files (two-tier model)
-// ---------------------------------------------------------------------------
-
-/**
- * Ensure Codex skill directories and core skill files exist.
- *
- * Two-tier model:
- *   - Tier 1 (immutable): `~/.codex/skills/` — PA's core skills, managed by PA
- *   - Tier 2 (agent-writable): `{workspace}/.agents/skills/` — agent can create skills
- *
- * Safe to call on every startup – existing files are never overwritten.
- */
-export async function ensureCodexSkills(config: Config): Promise<void> {
-  const workspace = config.security.workspace;
-
-  // Tier 1: ~/.codex/skills/ — core PA skills
-  const codexSkillsDir = path.join(os.homedir(), ".codex", "skills");
-  await fs.mkdir(codexSkillsDir, { recursive: true, mode: DIR_MODE });
-
-  // Copy bundled Codex skill templates
-  const skillFiles = await fs.readdir(CODEX_SKILLS_DIR);
-  for (const name of skillFiles) {
-    const src = path.join(CODEX_SKILLS_DIR, name);
-    const dest = path.join(codexSkillsDir, name);
-    const content = await fs.readFile(src, "utf-8");
-    await writeFileIfMissing(dest, content);
-  }
-
-  // Tier 2: {workspace}/.agents/skills/ — agent-created skills
-  const agentSkillsDir = path.join(workspace, ".agents", "skills");
-  await fs.mkdir(agentSkillsDir, { recursive: true, mode: DIR_MODE });
 }

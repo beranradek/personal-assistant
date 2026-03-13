@@ -16,7 +16,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveConfigDir, loadConfig, DEFAULTS } from "./core/config.js";
-import { ensureWorkspace, ensureCodexSkills } from "./core/workspace.js";
+import { ensureWorkspace } from "./core/workspace.js";
 import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
 import { createLogger } from "./core/logger.js";
@@ -109,7 +109,6 @@ async function startMcpServer(configDir: string): Promise<void> {
 
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
-  await ensureCodexSkills(config);
 
   // Initialize memory system
   const embedder = await createEmbeddingProvider();
