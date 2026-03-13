@@ -57,7 +57,7 @@ export const DEFAULTS: Config = {
     baseUrl: null,
     sandboxMode: "workspace-write" as const,
     approvalPolicy: "never" as const,
-    networkAccess: false,
+    networkAccess: true,
     reasoningEffort: null,
     skipGitRepoCheck: true,
     configOverrides: {},
