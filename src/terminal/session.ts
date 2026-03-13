@@ -2,6 +2,8 @@ import * as path from "node:path";
 import { loadConfig } from "../core/config.js";
 import { ensureWorkspace } from "../core/workspace.js";
 import { readMemoryFiles } from "../memory/files.js";
+import { collectMemoryFiles } from "../memory/collect-files.js";
+import { createMemoryWatcher } from "../memory/watcher.js";
 import { createEmbeddingProvider } from "../memory/embeddings.js";
 import { createVectorStore } from "../memory/vector-store.js";
 import { createIndexer } from "../memory/indexer.js";
@@ -44,10 +46,13 @@ export async function createTerminalSession(
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
-  const memoryFiles = ["MEMORY.md", ...config.memory.extraPaths].map((f) =>
-    f.startsWith("/") ? f : path.join(config.security.workspace, f),
-  );
+  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
+
+  const memoryWatcher = createMemoryWatcher(config.security.workspace, () => {
+    const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+    indexer.syncFiles(files).catch(() => {});
+  });
 
   const memoryContent = await readMemoryFiles(config.security.workspace, {
     includeHeartbeat: false,
@@ -98,6 +103,7 @@ export async function createTerminalSession(
     backend,
     sessionKey: TERMINAL_SESSION_KEY,
     cleanup: async () => {
+      memoryWatcher.close();
       if (backend.close) await backend.close();
       cronManager.stop();
       store.close();

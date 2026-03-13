@@ -65,6 +65,14 @@ vi.mock("./backends/factory.js", () => ({
   createBackend: vi.fn(),
 }));
 
+vi.mock("./memory/collect-files.js", () => ({
+  collectMemoryFiles: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock("./memory/watcher.js", () => ({
+  createMemoryWatcher: vi.fn().mockReturnValue({ close: vi.fn() }),
+}));
+
 vi.mock("./core/logger.js", () => ({
   createLogger: vi.fn(() => ({
     info: vi.fn(),

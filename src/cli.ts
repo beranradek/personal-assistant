@@ -16,6 +16,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveConfigDir, loadConfig, DEFAULTS } from "./core/config.js";
+import { collectMemoryFiles } from "./memory/collect-files.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
@@ -116,9 +117,7 @@ async function startMcpServer(configDir: string): Promise<void> {
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
-  const memoryFiles = ["MEMORY.md", ...config.memory.extraPaths].map((f) =>
-    f.startsWith("/") ? f : path.join(config.security.workspace, f),
-  );
+  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
 
   // Create cron manager

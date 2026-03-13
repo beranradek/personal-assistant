@@ -24,6 +24,8 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
+import { collectMemoryFiles } from "./memory/collect-files.js";
+import { createMemoryWatcher } from "./memory/watcher.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
 import { createBackend } from "./backends/factory.js";
 import { createEmbeddingProvider } from "./memory/embeddings.js";
@@ -69,10 +71,15 @@ export async function startDaemon(configDir: string): Promise<void> {
   const indexer = createIndexer(store, embedder);
 
   // Sync memory files into the vector store on startup
-  const memoryFiles = ["MEMORY.md", ...config.memory.extraPaths].map((f) =>
-    f.startsWith("/") ? f : path.join(config.security.workspace, f),
-  );
+  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
+
+  // Watch for memory file changes and reindex
+  const memoryWatcher = createMemoryWatcher(config.security.workspace, () => {
+    const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+    log.info({ fileCount: files.length }, "Memory files changed, reindexing");
+    indexer.syncFiles(files).catch((err) => log.error({ err }, "Reindex failed"));
+  });
 
   // 3. Read memory files for system prompt
   const memoryContent = await readMemoryFiles(config.security.workspace, {
@@ -239,7 +246,8 @@ export async function startDaemon(configDir: string): Promise<void> {
       await backend.close();
     }
 
-    // Close memory system
+    // Close memory watcher and system
+    memoryWatcher.close();
     store.close();
     await embedder.close();
 
