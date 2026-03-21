@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Use vi.hoisted so the mock factory can reference these
-const { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread } = vi.hoisted(() => {
+const { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread, capturedCodexOptions } = vi.hoisted(() => {
+  /** Captured options passed to the Codex constructor (last call wins). */
+  const capturedCodexOptions: { value: Record<string, unknown> | undefined } = { value: undefined };
   /**
    * Creates a mock thread that yields a simple agent_message on both
    * runStreamed (async generator) and run (sync).
@@ -56,12 +58,14 @@ const { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThr
   const mockStartThread = vi.fn();
   const mockResumeThread = vi.fn();
 
-  return { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread };
+  return { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread, capturedCodexOptions };
 });
 
 vi.mock("@openai/codex-sdk", () => ({
   Codex: class {
-    constructor() {}
+    constructor(opts?: Record<string, unknown>) {
+      capturedCodexOptions.value = opts;
+    }
     startThread = mockStartThread;
     resumeThread = mockResumeThread;
   },
@@ -105,6 +109,26 @@ describe("createCodexBackend", () => {
   it("returns a backend with name 'codex'", async () => {
     const backend = await createCodexBackend(makeConfig());
     expect(backend.name).toBe("codex");
+  });
+
+  it("enables multi_agent feature flag by default", async () => {
+    await createCodexBackend(makeConfig());
+    const config = capturedCodexOptions.value?.config as Record<string, unknown>;
+    expect((config.features as Record<string, unknown>).multi_agent).toBe(true);
+  });
+
+  it("preserves user feature flag overrides over multi_agent default", async () => {
+    const cfg = makeConfig({
+      codex: {
+        ...DEFAULTS.codex,
+        configOverrides: { features: { multi_agent: false, custom_flag: true } },
+      },
+    } as Partial<Config>);
+    await createCodexBackend(cfg);
+    const config = capturedCodexOptions.value?.config as Record<string, unknown>;
+    const features = config.features as Record<string, unknown>;
+    expect(features.multi_agent).toBe(false);
+    expect(features.custom_flag).toBe(true);
   });
 
   it("has runTurn, runTurnSync, clearSession methods", async () => {

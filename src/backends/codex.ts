@@ -240,6 +240,11 @@ export async function createCodexBackend(
     mcpArgs.push("--config", options.configDir);
   }
 
+  // Enable multi_agent feature flag (allows spawn_agent with default/explorer/worker roles,
+  // plus custom roles defined in ~/.codex/config.toml [agents.*] sections)
+  const userFeatures = (config.codex.configOverrides?.features ?? {}) as Record<string, unknown>;
+  codexConfig.features = { multi_agent: true, ...userFeatures };
+
   // Inject PA's stdio MCP server
   const userMcpServers = (config.codex.configOverrides?.mcp_servers ?? {}) as Record<string, unknown>;
   codexConfig.mcp_servers = {

@@ -159,6 +159,99 @@ Change `agent.backend` in `settings.json` and restart:
 
 Session history from one backend is not transferable to the other. Switching backends effectively starts a fresh conversation.
 
+## Multi-Agent Support
+
+PA enables the Codex `multi_agent` feature flag by default. This gives the agent access to `spawn_agent`, `send_input`, `wait`, `close_agent`, and `spawn_agents_on_csv` tools for delegating work to subagents.
+
+### Built-in Agent Types
+
+Three roles are available out of the box:
+
+| Role | Purpose | Sandbox |
+|------|---------|---------|
+| `default` | General-purpose subagent for bounded tasks | inherits parent |
+| `explorer` | Read-only codebase exploration, tracing logic, answering architecture questions | read-only |
+| `worker` | Implementation work — code changes in an assigned scope | inherits parent |
+
+### Custom Agent Types
+
+Define custom agent types in `~/.codex/config.toml` with TOML config files:
+
+```toml
+# ~/.codex/config.toml
+
+[agents.architect]
+description = "Software architecture specialist for system design and technical decisions"
+config_file = ".codex/agents/architect.toml"
+
+[agents.code-reviewer]
+description = "Code review specialist for quality, security, and maintainability"
+config_file = ".codex/agents/code-reviewer.toml"
+
+[agents.planner]
+description = "Planning specialist for breaking down complex features into steps"
+config_file = ".codex/agents/planner.toml"
+```
+
+The `config_file` path is resolved **relative to the Codex working directory**, which PA sets to `config.security.workspace` (default `~/.personal-assistant/workspace/`). Place agent TOML files accordingly:
+
+```
+~/.personal-assistant/workspace/
+└── .codex/
+    └── agents/
+        ├── architect.toml
+        ├── code-reviewer.toml
+        └── planner.toml
+```
+
+### Agent TOML Format
+
+Each agent TOML file configures the subagent's behavior:
+
+```toml
+# .codex/agents/architect.toml
+name = "architect"
+description = "Software architecture specialist"
+model = "gpt-5.4"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+developer_instructions = """
+You are a senior software architect.
+
+## Your Role
+- Design system architecture for new features
+- Evaluate technical trade-offs
+- Recommend patterns and best practices
+"""
+```
+
+Available fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Agent display name |
+| `description` | string | Short description (shown in spawn_agent tool) |
+| `model` | string | Model override for this agent |
+| `model_reasoning_effort` | string | Reasoning effort (`minimal`/`low`/`medium`/`high`/`xhigh`) |
+| `sandbox_mode` | string | Sandbox level (`read-only`/`workspace-write`/`danger-full-access`) |
+| `developer_instructions` | string | System prompt / behavioral instructions |
+
+### Disabling Multi-Agent
+
+To disable multi-agent support, override the feature flag in `settings.json`:
+
+```json
+{
+  "codex": {
+    "configOverrides": {
+      "features": { "multi_agent": false }
+    }
+  }
+}
+```
+
+User overrides in `configOverrides.features` take precedence over PA's default.
+
 ## Known Limitations
 
 - **Memory refresh**: Memory files (MEMORY.md, USER.md) are re-read at the start of each turn and injected into Codex's `developer_instructions`. However, the Codex SDK applies these instructions at the process level, so mid-turn changes to memory files are not visible until the next turn.
