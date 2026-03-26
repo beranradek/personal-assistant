@@ -115,6 +115,13 @@ export interface ProcessingMessageAccumulator {
   start(): void;
   /** Stop timer and do a final flush if needed. */
   stop(): Promise<void>;
+  /**
+   * If the processing message ends with the given suffix, remove it and update
+   * the message. Used to strip the final response text that was already
+   * included in the accumulated processing content before the final message
+   * is sent as a separate Telegram message.
+   */
+  trimSuffixFromProcessingMessage(suffix: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +241,29 @@ export function createProcessingAccumulator(
         intervalHandle = null;
       }
       await flush();
+    },
+
+    async trimSuffixFromProcessingMessage(suffix: string): Promise<void> {
+      if (!messageId || !suffix || !flushedContent.endsWith(suffix)) return;
+
+      const trimmed = flushedContent.slice(0, flushedContent.length - suffix.length).trimEnd();
+      if (!trimmed) return;
+
+      try {
+        await adapter.updateProcessingMessage(
+          sourceId,
+          messageId,
+          truncateContent(trimmed),
+          metadata,
+        );
+        flushedContent = trimmed;
+        log.debug({ messageId, sourceId }, "trimmed suffix from processing message");
+      } catch (err) {
+        log.error(
+          { err, sourceId, messageId },
+          "failed to trim processing message suffix",
+        );
+      }
     },
   };
 }
