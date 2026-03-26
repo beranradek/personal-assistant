@@ -212,6 +212,12 @@ export function createMessageQueue(config: Config): MessageQueue {
             sawTool && finalText.trim()
               ? finalText
               : (resultEvent?.response ?? "");
+
+          // Remove the final response suffix from the processing message so the
+          // two messages don't repeat the same text.
+          if (sawTool && finalText.trim()) {
+            await accumulator.trimSuffixFromProcessingMessage(finalText);
+          }
           partial = resultEvent?.partial ?? false;
         } else {
           // Non-streaming fallback

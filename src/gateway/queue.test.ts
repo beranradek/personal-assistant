@@ -461,6 +461,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
@@ -507,6 +508,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
@@ -549,6 +551,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
@@ -563,6 +566,80 @@ describe("MessageQueue", () => {
           text: "Let me do that for you.",
         }),
       );
+    });
+
+    it("trims final response suffix from processing message when tools are used", async () => {
+      const config = makeConfig();
+      const events: StreamEvent[] = [
+        { type: "tool_start", toolName: "Glob" },
+        { type: "tool_input", toolName: "Glob", input: { pattern: "**/*.ts" } },
+        { type: "text_delta", text: "Here are the files" },
+        {
+          type: "result",
+          response: "Here are the files",
+          messages: [],
+          partial: false,
+        },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(backend, config, router);
+
+      expect(mockAcc.trimSuffixFromProcessingMessage).toHaveBeenCalledWith("Here are the files");
+    });
+
+    it("does not trim processing message when no tools are used", async () => {
+      const config = makeConfig();
+      const events: StreamEvent[] = [
+        { type: "text_delta", text: "Simple answer" },
+        {
+          type: "result",
+          response: "Simple answer",
+          messages: [],
+          partial: false,
+        },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(backend, config, router);
+
+      expect(mockAcc.trimSuffixFromProcessingMessage).not.toHaveBeenCalled();
     });
 
     it("falls back to full response when error follows tools", async () => {
@@ -585,6 +662,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
@@ -654,6 +732,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
@@ -697,6 +776,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 
@@ -739,6 +819,7 @@ describe("MessageQueue", () => {
         handleEvent: vi.fn(),
         start: vi.fn(),
         stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
       };
       vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
 

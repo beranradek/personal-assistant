@@ -306,6 +306,53 @@ describe("ProcessingMessageAccumulator", () => {
     expect(content).toContain("8s");
   });
 
+  it("trimSuffixFromProcessingMessage removes matching suffix and updates message", async () => {
+    const adapter = makeAdapter();
+    const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
+    acc.start();
+
+    acc.handleEvent({ type: "tool_start", toolName: "Glob" });
+    acc.handleEvent({ type: "text_delta", text: "Here are the files" });
+
+    await acc.stop();
+
+    // Processing message now contains "...Glob...\nHere are the files"
+    adapter.updateProcessingMessage.mockClear();
+
+    await acc.trimSuffixFromProcessingMessage("Here are the files");
+
+    expect(adapter.updateProcessingMessage).toHaveBeenCalledTimes(1);
+    const updatedText = adapter.updateProcessingMessage.mock.calls[0][2] as string;
+    expect(updatedText).not.toContain("Here are the files");
+    expect(updatedText).toContain("Glob");
+  });
+
+  it("trimSuffixFromProcessingMessage does nothing when suffix does not match", async () => {
+    const adapter = makeAdapter();
+    const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
+    acc.start();
+
+    acc.handleEvent({ type: "tool_start", toolName: "Glob" });
+    acc.handleEvent({ type: "text_delta", text: "Some content" });
+
+    await acc.stop();
+    adapter.updateProcessingMessage.mockClear();
+
+    await acc.trimSuffixFromProcessingMessage("Different text");
+
+    expect(adapter.updateProcessingMessage).not.toHaveBeenCalled();
+  });
+
+  it("trimSuffixFromProcessingMessage does nothing when no processing message was created", async () => {
+    const adapter = makeAdapter();
+    const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
+    // Never started or flushed, so no messageId
+
+    await acc.trimSuffixFromProcessingMessage("Some text");
+
+    expect(adapter.updateProcessingMessage).not.toHaveBeenCalled();
+  });
+
   it("handles adapter errors gracefully during flush", async () => {
     const adapter = makeAdapter();
     adapter.createProcessingMessage.mockRejectedValueOnce(
