@@ -75,6 +75,8 @@ export const CodexConfigSchema = z.object({
 export const SessionConfigSchema = z.object({
   maxHistoryMessages: z.number().int().positive(),
   compactionEnabled: z.boolean(),
+  summarizationEnabled: z.boolean().default(true),
+  summarizationModel: z.string().default("claude-haiku-4-5-20251001"),
 });
 
 export const HybridWeightsSchema = z.object({
@@ -256,7 +258,7 @@ export interface ProcessSession {
 
 /** Zod schema for a session message. */
 export const SessionMessageSchema = z.object({
-  role: z.enum(["user", "assistant", "tool_use", "tool_result"]),
+  role: z.enum(["user", "assistant", "tool_use", "tool_result", "compaction"]),
   content: z.string(),
   timestamp: z.string(),
   toolName: z.string().optional(),

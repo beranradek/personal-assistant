@@ -133,8 +133,10 @@ describe("config", () => {
       expect(config.gateway.processingUpdateIntervalMs).toBe(5000);
       expect(config.agent.model).toBeNull();
       expect(config.agent.maxTurns).toBe(200);
-      expect(config.session.maxHistoryMessages).toBe(50);
+      expect(config.session.maxHistoryMessages).toBe(20);
       expect(config.session.compactionEnabled).toBe(true);
+      expect(config.session.summarizationEnabled).toBe(true);
+      expect(config.session.summarizationModel).toBe("claude-haiku-4-5-20251001");
       expect(config.memory.search.enabled).toBe(true);
       expect(config.memory.search.hybridWeights).toEqual({ vector: 0.7, keyword: 0.3 });
       expect(config.memory.extraPaths).toEqual([]);

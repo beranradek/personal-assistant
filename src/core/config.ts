@@ -42,7 +42,12 @@ export const DEFAULTS: Config = {
     rateLimiter: { enabled: true, windowMs: 60_000, maxRequests: 20 },
   },
   agent: { backend: "claude" as const, model: null, maxTurns: 200 },
-  session: { maxHistoryMessages: 50, compactionEnabled: true },
+  session: {
+    maxHistoryMessages: 20,
+    compactionEnabled: true,
+    summarizationEnabled: true,
+    summarizationModel: "claude-haiku-4-5-20251001",
+  },
   memory: {
     search: {
       enabled: true,
