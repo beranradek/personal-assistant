@@ -18,7 +18,7 @@ export interface HybridSearchConfig {
    *
    * Note: This is treated as a soft threshold. If it would filter out all
    * candidates, the top candidates are returned anyway to avoid empty results
-   * for keyword-only / vector-only queries.
+   * for keyword-only queries (where keywordWeight < minScore).
    */
   minScore: number;
   /** Maximum number of results to return. Default: 6 */
@@ -176,12 +176,12 @@ export async function hybridSearch(
   // Step 7: Filter by minScore
   let filtered = merged.filter((r) => r.score >= config.minScore);
 
-  // If the threshold filters everything out, return the best candidates
-  // anyway. This avoids "no results" failures for queries where only one
-  // modality produces matches (e.g. keyword-only matches when keywordWeight
-  // < minScore).
-  if (filtered.length === 0 && merged.length > 0) {
-    filtered = merged;
+  // If the threshold filters everything out but we have keyword candidates,
+  // return the best candidates anyway. This avoids "no results" failures for
+  // keyword-only queries (where keywordWeight < minScore) without returning
+  // low-signal vector-only neighbors.
+  if (filtered.length === 0 && merged.length > 0 && keywordResults.length > 0) {
+    filtered = merged.filter((r) => keywordScores.has(r._id));
   }
 
   // Step 8: Sort by score descending

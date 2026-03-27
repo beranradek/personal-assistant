@@ -319,6 +319,20 @@ describe("VectorStore", () => {
       expect(results.some((r) => r.id === "colon1")).toBe(true);
     });
 
+    it("recovers from invalid/unterminated advanced queries via a lenient fallback", () => {
+      store.upsertChunk(
+        makeChunk({
+          id: "lenient1",
+          text: "calcium supports bones and teeth",
+        }),
+      );
+
+      // Unmatched quote should cause FTS5 MATCH to throw; we still want a
+      // reasonable best-effort search via tokenisation + prefix matching.
+      const results = store.searchKeyword("\"bone and calcium", 10);
+      expect(results.some((r) => r.id === "lenient1")).toBe(true);
+    });
+
     it("returns empty array when no chunks match", () => {
       store.upsertChunk(makeChunk({ id: "nomatch", text: "hello world" }));
 

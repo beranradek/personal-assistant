@@ -97,6 +97,27 @@ function buildFtsPrefixQuery(query: string): string {
   return finalTokens.map((t) => (t.length >= 3 ? `${t}*` : t)).join(" ");
 }
 
+function buildFtsPrefixQueryLenient(query: string): string {
+  const tokens = query.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (tokens.length === 0) return query;
+
+  const stopWords = new Set([
+    // English
+    "and",
+    "or",
+    "not",
+    // Czech (common connectors)
+    "nebo",
+    "ani",
+    "jako",
+    "jak",
+  ]);
+
+  const filteredTokens = tokens.filter((t) => !stopWords.has(t.toLowerCase()));
+  const finalTokens = filteredTokens.length > 0 ? filteredTokens : tokens;
+  return finalTokens.map((t) => (t.length >= 3 ? `${t}*` : t)).join(" ");
+}
+
 // ─── Factory ────────────────────────────────────────────────────────
 
 /**
@@ -354,6 +375,16 @@ export function createVectorStore(
       if (expanded !== query) {
         const prefixed = run(expanded);
         if (prefixed) return prefixed;
+      }
+
+      // If the raw query failed to parse, try a lenient token/prefix fallback
+      // even for "advanced-looking" inputs (e.g. unmatched quotes/parentheses).
+      if (raw === null) {
+        const lenient = buildFtsPrefixQueryLenient(query);
+        if (lenient !== query && lenient !== expanded) {
+          const prefixed = run(lenient);
+          if (prefixed) return prefixed;
+        }
       }
 
       return raw ?? [];

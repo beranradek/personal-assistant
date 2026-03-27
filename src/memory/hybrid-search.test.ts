@@ -255,6 +255,45 @@ describe("hybridSearch", () => {
     expect(results[0].score).toBeCloseTo(0.3, 5);
   });
 
+  it("does not return low-signal vector-only neighbors when minScore filters everything out", async () => {
+    const store = createMockStore({
+      vectorResults: [
+        { id: "c2", path: "/b.ts", text: "vector only", startLine: 1, endLine: 5, distance: 0.9 },
+      ],
+      keywordResults: [],
+    });
+
+    const results = await hybridSearch(
+      "test query",
+      store,
+      embedder,
+      defaultConfig({ minScore: 0.35 }),
+    );
+
+    expect(results).toEqual([]);
+  });
+
+  it("fallback returns only keyword-backed results (not vector-only neighbors)", async () => {
+    const store = createMockStore({
+      vectorResults: [
+        { id: "v1", path: "/v.ts", text: "vector only", startLine: 1, endLine: 5, distance: 0.95 },
+      ],
+      keywordResults: [
+        { id: "k1", path: "/k.ts", text: "keyword only", startLine: 1, endLine: 5, rank: -1.0 },
+      ],
+    });
+
+    const results = await hybridSearch(
+      "test query",
+      store,
+      embedder,
+      defaultConfig({ minScore: 0.35 }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].path).toBe("/k.ts");
+  });
+
   // --- Limiting ---
 
   it("returns max maxResults (6) results sorted by score descending", async () => {
