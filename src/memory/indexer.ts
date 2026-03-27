@@ -1,7 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
+import { createLogger } from "../core/logger.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { VectorStore } from "./vector-store.js";
+
+const log = createLogger("indexer");
 
 // ─── Public interfaces ──────────────────────────────────────────────
 
@@ -113,6 +116,8 @@ export function createIndexer(
         }
       }
 
+      log.debug({ fileCount: filePaths.length }, "Syncing memory files");
+
       // Process each file in the current set
       for (const filePath of filePaths) {
         let content: string;
@@ -121,8 +126,8 @@ export function createIndexer(
           content = await fs.readFile(filePath, "utf-8");
           const statResult = await fs.stat(filePath);
           stat = { mtimeMs: statResult.mtimeMs, size: statResult.size };
-        } catch {
-          // File doesn't exist or can't be read - skip
+        } catch (err) {
+          log.debug({ filePath, err }, "Skipping unreadable file");
           continue;
         }
 
@@ -132,7 +137,8 @@ export function createIndexer(
         // Check if the file has changed since last sync
         const existingHash = store.getFileHash(filePath);
         if (existingHash === hash) {
-          continue; // File unchanged, skip
+          log.debug({ filePath }, "File unchanged, skipping");
+          continue;
         }
 
         // Delete old chunks for this file
@@ -144,6 +150,7 @@ export function createIndexer(
         if (chunks.length === 0) {
           // Empty file - just update the hash
           store.setFileHash(filePath, hash, Math.floor(stat.mtimeMs), stat.size);
+          log.debug({ filePath }, "Empty file, hash updated");
           continue;
         }
 
@@ -166,6 +173,7 @@ export function createIndexer(
 
         // Update the file hash
         store.setFileHash(filePath, hash, Math.floor(stat.mtimeMs), stat.size);
+        log.info({ filePath, chunks: chunks.length }, "Indexed file");
       }
     },
 

@@ -81,6 +81,14 @@ export async function startDaemon(configDir: string): Promise<void> {
     indexer.syncFiles(files).catch((err) => log.error({ err }, "Reindex failed"));
   });
 
+  // Periodic re-sync as a safety net (fs.watch can miss events on Linux)
+  const MEMORY_RESYNC_INTERVAL_MS = 60_000;
+  const memorySyncTimer = setInterval(() => {
+    const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+    indexer.syncFiles(files).catch((err) => log.error({ err }, "Periodic reindex failed"));
+  }, MEMORY_RESYNC_INTERVAL_MS);
+  memorySyncTimer.unref();
+
   // 3. Read memory files for system prompt
   const memoryContent = await readMemoryFiles(config.security.workspace, {
     includeHeartbeat: true,
@@ -246,7 +254,8 @@ export async function startDaemon(configDir: string): Promise<void> {
       await backend.close();
     }
 
-    // Close memory watcher and system
+    // Close memory watcher/timer and system
+    clearInterval(memorySyncTimer);
     memoryWatcher.close();
     store.close();
     await embedder.close();

@@ -123,6 +123,16 @@ describe("workspace", () => {
       expect(stat.isDirectory()).toBe(true);
     });
 
+    it("creates memory/ subdirectory", async () => {
+      const config = makeConfig(workspaceDir, dataDir);
+
+      await ensureWorkspace(config);
+
+      const memoryDir = path.join(workspaceDir, "memory");
+      const stat = await fs.stat(memoryDir);
+      expect(stat.isDirectory()).toBe(true);
+    });
+
     it("creates .claude/skills/ subdirectory", async () => {
       const config = makeConfig(workspaceDir, dataDir);
 

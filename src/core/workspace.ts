@@ -83,6 +83,7 @@ export async function ensureWorkspace(config: Config): Promise<void> {
   const dirs = [
     workspace,
     path.join(workspace, "daily"),
+    path.join(workspace, "memory"),
     path.join(workspace, ".claude", "skills"),
     dataDir,
     path.join(dataDir, "sessions"),
