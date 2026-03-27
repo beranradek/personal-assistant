@@ -51,7 +51,7 @@ export const RateLimiterConfigSchema = z.object({
 export const GatewayConfigSchema = z.object({
   maxQueueSize: z.number().int().positive(),
   processingUpdateIntervalMs: z.number().int().positive().default(5000),
-  rateLimiter: RateLimiterConfigSchema.default({}),
+  rateLimiter: RateLimiterConfigSchema.default(() => RateLimiterConfigSchema.parse({})),
 });
 
 export const AgentConfigSchema = z.object({
@@ -66,7 +66,7 @@ export const CodexConfigSchema = z.object({
   baseUrl: z.string().nullable().default(null),
   sandboxMode: z.enum(["read-only", "workspace-write", "danger-full-access"]).default("workspace-write"),
   approvalPolicy: z.enum(["never", "on-request", "on-failure", "untrusted"]).default("never"),
-  networkAccess: z.boolean().default(false),
+  networkAccess: z.boolean().default(true),
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).nullable().default(null),
   skipGitRepoCheck: z.boolean().default(true),
   configOverrides: z.record(z.string(), z.unknown()).default({}),

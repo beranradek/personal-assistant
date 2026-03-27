@@ -143,7 +143,7 @@ describe("config", () => {
       expect(config.agent.backend).toBe("claude");
       expect(config.codex.sandboxMode).toBe("workspace-write");
       expect(config.codex.approvalPolicy).toBe("never");
-      expect(config.codex.networkAccess).toBe(false);
+      expect(config.codex.networkAccess).toBe(true);
       expect(config.codex.skipGitRepoCheck).toBe(true);
       expect(config.codex.codexPath).toBeNull();
       expect(config.codex.apiKey).toBeNull();
