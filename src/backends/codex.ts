@@ -236,10 +236,14 @@ export async function createCodexBackend(
     ...(config.codex.configOverrides ?? {}),
   };
 
-  // I5: Read memory initially for startup; will refresh per-turn below
+  // I5: Read memory initially for startup; will refresh per-turn below.
+  // baseInstructions tracks the latest memory content independently of any
+  // compaction summary so that developer_instructions is always rebuilt
+  // cleanly each turn (summary + base) rather than accumulated in-place.
   const initialMemory = await readMemoryFiles(config.security.workspace);
-  if (initialMemory) {
-    codexConfig.developer_instructions = initialMemory;
+  let baseInstructions: string = initialMemory ?? "";
+  if (baseInstructions) {
+    codexConfig.developer_instructions = baseInstructions;
   }
 
   // I3 fix: Pass --config to the MCP server subprocess if a config dir is known
@@ -338,12 +342,12 @@ export async function createCodexBackend(
     }
   }
 
-  /** I5: Refresh developer_instructions with latest memory content. */
+  /** I5: Refresh baseInstructions with latest memory content. */
   async function refreshMemory(): Promise<void> {
     try {
       const content = await readMemoryFiles(config.security.workspace);
       if (content) {
-        codexConfig.developer_instructions = content;
+        baseInstructions = content;
       }
     } catch (err) {
       log.warn({ err }, "Failed to refresh memory files for Codex turn");
@@ -366,13 +370,12 @@ export async function createCodexBackend(
       };
       const turnMessages: SessionMessage[] = [userMsg];
 
-      // Inject compaction summary into developer_instructions (if any)
+      // Rebuild developer_instructions from baseInstructions + summary each
+      // turn so it is never accumulated in-place across consecutive turns.
       const summary = summaries.get(sessionKey);
-      if (summary) {
-        codexConfig.developer_instructions =
-          `## Previous Conversation Summary\n\n${summary}\n\n` +
-          (codexConfig.developer_instructions ?? "");
-      }
+      codexConfig.developer_instructions = summary
+        ? `## Previous Conversation Summary\n\n${summary}\n\n${baseInstructions}`
+        : baseInstructions || undefined;
 
       let responseText = "";
 
@@ -521,13 +524,12 @@ export async function createCodexBackend(
       };
       const turnMessages: SessionMessage[] = [userMsg];
 
-      // Inject compaction summary into developer_instructions (if any)
+      // Rebuild developer_instructions from baseInstructions + summary each
+      // turn so it is never accumulated in-place across consecutive turns.
       const summary = summaries.get(sessionKey);
-      if (summary) {
-        codexConfig.developer_instructions =
-          `## Previous Conversation Summary\n\n${summary}\n\n` +
-          (codexConfig.developer_instructions ?? "");
-      }
+      codexConfig.developer_instructions = summary
+        ? `## Previous Conversation Summary\n\n${summary}\n\n${baseInstructions}`
+        : baseInstructions || undefined;
 
       try {
         const existingThreadId = threadIds.get(sessionKey);
@@ -587,6 +589,8 @@ export async function createCodexBackend(
     // I4 fix: properly clean up Codex resources
     async close(): Promise<void> {
       threadIds.clear();
+      turnCounts.clear();
+      summaries.clear();
       // The Codex SDK doesn't expose a close() method on the Codex class,
       // but clearing thread mappings ensures no stale references remain.
       // Any child processes spawned by the SDK are tied to individual turns
