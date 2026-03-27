@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SessionMessage } from "../core/types.js";
+import { SessionMessageSchema } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
 // Per-path write lock to prevent concurrent file corruption
@@ -43,6 +44,31 @@ export async function appendMessage(
       mode: 0o600,
     });
   });
+}
+
+/**
+ * Load all messages from a session JSONL file.
+ * Skips malformed lines. Returns an empty array if the file does not exist.
+ */
+export async function loadMessages(sessionPath: string): Promise<SessionMessage[]> {
+  try {
+    const raw = await fs.readFile(sessionPath, "utf-8");
+    const messages: SessionMessage[] = [];
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        const result = SessionMessageSchema.safeParse(parsed);
+        if (result.success) messages.push(result.data);
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return messages;
+  } catch {
+    return [];
+  }
 }
 
 /**

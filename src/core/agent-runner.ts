@@ -25,6 +25,14 @@ import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { bashSecurityHook } from "../security/bash-hook.js";
 import { fileToolSecurityHook } from "../security/file-tool-hook.js";
+import { sessionKeyToPath } from "../session/types.js";
+import {
+  loadConversationHistory,
+  summarizeConversation,
+  appendCompactionEntry,
+  loadLatestSummary,
+} from "../session/compactor.js";
+import { TtlMap, DAY_MS } from "./ttl-map.js";
 
 // ---------------------------------------------------------------------------
 // SDK session ID cache
@@ -36,13 +44,31 @@ import { fileToolSecurityHook } from "../security/file-tool-hook.js";
  * given key, the next `runAgentTurn` call will use the SDK's `resume` option
  * so the model sees the full conversation history.
  */
-const sdkSessionIds = new Map<string, string>();
+const sdkSessionIds = new TtlMap<string, string>(DAY_MS);
+
+/**
+ * Number of turns (user+assistant pairs) completed for each session key
+ * since the last compaction. Used to trigger periodic context pruning.
+ * Expires after one day of inactivity — the turn counter resets and the
+ * latest summary is reloaded from the JSONL on the next access.
+ */
+const sessionTurnCounts = new TtlMap<string, number>(DAY_MS);
+
+/**
+ * Most recent compaction summary for each session key, cached in memory.
+ * Injected into `systemPrompt.append` so the agent has context about prior
+ * conversation even after the SDK session was reset.
+ * Expires after one day of inactivity — reloaded from JSONL on next use.
+ */
+const sessionSummaries = new TtlMap<string, string>(DAY_MS);
 
 /**
  * Clear the SDK session ID cache. Exposed for testing and daemon restart.
  */
 export function clearSdkSessionIds(): void {
   sdkSessionIds.clear();
+  sessionTurnCounts.clear();
+  sessionSummaries.clear();
 }
 
 /**
@@ -52,6 +78,8 @@ export function clearSdkSessionIds(): void {
  */
 export function clearSdkSession(sessionKey: string): void {
   sdkSessionIds.delete(sessionKey);
+  sessionTurnCounts.delete(sessionKey);
+  sessionSummaries.delete(sessionKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +194,103 @@ export function buildAgentOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Context pruning helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Trigger context pruning for a session when its turn count has reached
+ * the compaction threshold (`maxHistoryMessages / 2`).
+ *
+ * Steps:
+ *   1. Read user/assistant messages from the JSONL audit trail
+ *   2. Call the Anthropic API to summarise them
+ *   3. Persist the summary as a `compaction` entry in the JSONL
+ *   4. Clear the SDK session ID so the next turn starts a fresh session
+ *   5. Cache the summary for injection into `systemPrompt.append`
+ *
+ * Failures are swallowed with a warning — the agent turn proceeds normally.
+ */
+async function compactSessionIfNeeded(
+  sessionKey: string,
+  config: Config,
+): Promise<void> {
+  if (!config.session.compactionEnabled) return;
+
+  const turnCount = sessionTurnCounts.get(sessionKey) ?? 0;
+  const compactionThreshold = Math.floor(config.session.maxHistoryMessages / 2);
+
+  // On first turn: load any existing summary persisted from a previous run
+  if (turnCount === 0) {
+    const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+    const existing = await loadLatestSummary(sessionPath);
+    if (existing) {
+      sessionSummaries.set(sessionKey, existing);
+    }
+    return;
+  }
+
+  // Compact at the start of every (compactionThreshold + 1)-th turn, i.e.
+  // after every `compactionThreshold` completed turns (turnCount is incremented
+  // after each turn, so turnCount=10 means 10 turns have finished).
+  if (turnCount % compactionThreshold !== 0) return;
+
+  const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+
+  try {
+    const messages = await loadConversationHistory(sessionPath);
+    // Need at least a few turns to produce a meaningful summary
+    if (messages.length < 4) return;
+
+    let summary: string;
+    if (config.session.summarizationEnabled) {
+      summary = await summarizeConversation(
+        messages,
+        config.session.summarizationModel,
+        "anthropic",
+      );
+    } else {
+      // Compaction without summarization: keep only the last exchange as context
+      const last = messages.slice(-2);
+      summary = last
+        .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+        .join("\n\n");
+    }
+
+    await appendCompactionEntry(sessionPath, summary);
+    sessionSummaries.set(sessionKey, summary);
+    // Reset the SDK session so the next turn starts fresh with only the summary
+    sdkSessionIds.delete(sessionKey);
+  } catch (err) {
+    // Non-fatal — log and continue without compacting
+    console.error(
+      `[agent-runner] Session compaction failed for ${sessionKey}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/**
+ * Build effective agent options for a turn, injecting the compaction summary
+ * into `systemPrompt.append` when one exists for this session.
+ */
+function buildEffectiveOptions(
+  agentOptions: AgentOptions,
+  sessionKey: string,
+): AgentOptions {
+  const summary = sessionSummaries.get(sessionKey);
+  if (!summary) return agentOptions;
+  return {
+    ...agentOptions,
+    systemPrompt: {
+      ...agentOptions.systemPrompt,
+      append:
+        `## Previous Conversation Summary\n\n${summary}\n\n` +
+        agentOptions.systemPrompt.append,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runAgentTurn
 // ---------------------------------------------------------------------------
 
@@ -193,14 +318,20 @@ export async function runAgentTurn(
     timestamp: new Date().toISOString(),
   };
 
-  // 2. Check for existing SDK session to resume
+  // 2. Context pruning: compact if threshold reached, load existing summary
+  await compactSessionIfNeeded(sessionKey, config);
+
+  // 3. Check for existing SDK session to resume
   const sdkSessionId = sdkSessionIds.get(sessionKey);
 
-  // 3. Call SDK query (with resume if we have a previous session)
+  // 4. Inject compaction summary into system prompt (if any)
+  const effectiveOptions = buildEffectiveOptions(agentOptions, sessionKey);
+
+  // 5. Call SDK query (with resume if we have a previous session)
   const result = query({
     prompt: message,
     options: {
-      ...agentOptions,
+      ...effectiveOptions,
       ...(sdkSessionId ? { resume: sdkSessionId } : {}),
     } as unknown as Options,
   });
@@ -292,7 +423,10 @@ export async function runAgentTurn(
   // 5. Save to session transcript (audit trail)
   await saveInteraction(sessionKey, turnMessages, config);
 
-  // 6. Append audit entry
+  // 6. Increment turn counter (used to trigger compaction on the next turn)
+  sessionTurnCounts.set(sessionKey, (sessionTurnCounts.get(sessionKey) ?? 0) + 1);
+
+  // 7. Append audit entry
   await appendAuditEntry(config.security.workspace, {
     timestamp: new Date().toISOString(),
     source: sessionKey.split("--")[0],
@@ -331,19 +465,25 @@ export async function* streamAgentTurn(
     timestamp: new Date().toISOString(),
   };
 
-  // 2. Check for existing SDK session to resume
+  // 2. Context pruning: compact if threshold reached, load existing summary
+  await compactSessionIfNeeded(sessionKey, config);
+
+  // 3. Check for existing SDK session to resume
   const sdkSessionId = sdkSessionIds.get(sessionKey);
 
-  // 3. Call SDK query (with resume if we have a previous session)
+  // 4. Inject compaction summary into system prompt (if any)
+  const effectiveOptions = buildEffectiveOptions(agentOptions, sessionKey);
+
+  // 5. Call SDK query (with resume if we have a previous session)
   const result = query({
     prompt: message,
     options: {
-      ...agentOptions,
+      ...effectiveOptions,
       ...(sdkSessionId ? { resume: sdkSessionId } : {}),
     } as unknown as Options,
   });
 
-  // 4. Iterate the async generator, yielding stream events
+  // 6. Iterate the async generator, yielding stream events
   let responseText = "";
   let partial = false;
   const turnMessages: SessionMessage[] = [userMsg];
@@ -501,6 +641,9 @@ export async function* streamAgentTurn(
 
   // Save to session transcript (audit trail)
   await saveInteraction(sessionKey, turnMessages, config);
+
+  // Increment turn counter (used to trigger compaction on the next turn)
+  sessionTurnCounts.set(sessionKey, (sessionTurnCounts.get(sessionKey) ?? 0) + 1);
 
   // Append audit entry
   await appendAuditEntry(config.security.workspace, {

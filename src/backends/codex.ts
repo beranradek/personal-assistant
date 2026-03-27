@@ -37,6 +37,14 @@ import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { createLogger } from "../core/logger.js";
+import { sessionKeyToPath } from "../session/types.js";
+import {
+  loadConversationHistory,
+  summarizeConversation,
+  appendCompactionEntry,
+  loadLatestSummary,
+} from "../session/compactor.js";
+import { TtlMap, DAY_MS } from "../core/ttl-map.js";
 
 const log = createLogger("codex-backend");
 
@@ -228,10 +236,14 @@ export async function createCodexBackend(
     ...(config.codex.configOverrides ?? {}),
   };
 
-  // I5: Read memory initially for startup; will refresh per-turn below
+  // I5: Read memory initially for startup; will refresh per-turn below.
+  // baseInstructions tracks the latest memory content independently of any
+  // compaction summary so that developer_instructions is always rebuilt
+  // cleanly each turn (summary + base) rather than accumulated in-place.
   const initialMemory = await readMemoryFiles(config.security.workspace);
-  if (initialMemory) {
-    codexConfig.developer_instructions = initialMemory;
+  let baseInstructions: string = initialMemory ?? "";
+  if (baseInstructions) {
+    codexConfig.developer_instructions = baseInstructions;
   }
 
   // I3 fix: Pass --config to the MCP server subprocess if a config dir is known
@@ -265,19 +277,79 @@ export async function createCodexBackend(
   });
 
   const threadOptions = buildThreadOptions(config);
-  const threadIds = new Map<string, string>();
+  const threadIds = new TtlMap<string, string>(DAY_MS);
+  const turnCounts = new TtlMap<string, number>(DAY_MS);
+  const summaries = new TtlMap<string, string>(DAY_MS);
 
   log.info(
     { sandbox: config.codex.sandboxMode, approval: config.codex.approvalPolicy },
     "Codex backend initialized",
   );
 
-  /** I5: Refresh developer_instructions with latest memory content. */
+  /**
+   * Trigger context pruning for a Codex session.
+   * On first turn: load any persisted summary from the JSONL.
+   * After every `maxHistoryMessages / 2` turns: summarise via OpenAI API,
+   * persist the summary, reset the thread ID so the next turn is fresh.
+   */
+  async function compactIfNeeded(sessionKey: string): Promise<void> {
+    if (!config.session.compactionEnabled) return;
+
+    const turnCount = turnCounts.get(sessionKey) ?? 0;
+    const threshold = Math.floor(config.session.maxHistoryMessages / 2);
+
+    if (turnCount === 0) {
+      const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+      const existing = await loadLatestSummary(sessionPath);
+      if (existing) summaries.set(sessionKey, existing);
+      return;
+    }
+
+    // Compact at the start of every (threshold + 1)-th turn, i.e. after every
+    // `threshold` completed turns (turnCount is incremented after each turn).
+    if (turnCount % threshold !== 0) return;
+
+    const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+    try {
+      const messages = await loadConversationHistory(sessionPath);
+      if (messages.length < 4) return;
+
+      let summary: string;
+      if (config.session.summarizationEnabled) {
+        // Use OpenAI API — Codex backend has an OpenAI-compatible key
+        const openaiApiKey =
+          config.codex.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+        summary = await summarizeConversation(
+          messages,
+          "gpt-4o-mini",
+          "openai",
+          openaiApiKey,
+          config.codex.baseUrl ?? undefined,
+        );
+      } else {
+        const last = messages.slice(-2);
+        summary = last
+          .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+          .join("\n\n");
+      }
+
+      await appendCompactionEntry(sessionPath, summary);
+      summaries.set(sessionKey, summary);
+      threadIds.delete(sessionKey);
+    } catch (err) {
+      log.warn(
+        { err, sessionKey },
+        "Codex session compaction failed — continuing without summary",
+      );
+    }
+  }
+
+  /** I5: Refresh baseInstructions with latest memory content. */
   async function refreshMemory(): Promise<void> {
     try {
       const content = await readMemoryFiles(config.security.workspace);
       if (content) {
-        codexConfig.developer_instructions = content;
+        baseInstructions = content;
       }
     } catch (err) {
       log.warn({ err }, "Failed to refresh memory files for Codex turn");
@@ -290,6 +362,8 @@ export async function createCodexBackend(
     async *runTurn(message: string, sessionKey: string): AsyncGenerator<StreamEvent> {
       // I5: Refresh memory at the start of each turn
       await refreshMemory();
+      // Context pruning: compact if threshold reached, load existing summary
+      await compactIfNeeded(sessionKey);
 
       const userMsg: SessionMessage = {
         role: "user",
@@ -297,6 +371,13 @@ export async function createCodexBackend(
         timestamp: new Date().toISOString(),
       };
       const turnMessages: SessionMessage[] = [userMsg];
+
+      // Rebuild developer_instructions from baseInstructions + summary each
+      // turn so it is never accumulated in-place across consecutive turns.
+      const summary = summaries.get(sessionKey);
+      codexConfig.developer_instructions = summary
+        ? `## Previous Conversation Summary\n\n${summary}\n\n${baseInstructions}`
+        : baseInstructions || undefined;
 
       let responseText = "";
 
@@ -414,6 +495,7 @@ export async function createCodexBackend(
       });
 
       await saveInteraction(sessionKey, turnMessages, config);
+      turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
       await appendAuditEntry(config.security.workspace, {
         timestamp: new Date().toISOString(),
         source: sessionKey.split("--")[0],
@@ -434,6 +516,8 @@ export async function createCodexBackend(
     async runTurnSync(message: string, sessionKey: string): Promise<AgentTurnResult> {
       // I5: Refresh memory at the start of each turn
       await refreshMemory();
+      // Context pruning: compact if threshold reached, load existing summary
+      await compactIfNeeded(sessionKey);
 
       const userMsg: SessionMessage = {
         role: "user",
@@ -441,6 +525,13 @@ export async function createCodexBackend(
         timestamp: new Date().toISOString(),
       };
       const turnMessages: SessionMessage[] = [userMsg];
+
+      // Rebuild developer_instructions from baseInstructions + summary each
+      // turn so it is never accumulated in-place across consecutive turns.
+      const summary = summaries.get(sessionKey);
+      codexConfig.developer_instructions = summary
+        ? `## Previous Conversation Summary\n\n${summary}\n\n${baseInstructions}`
+        : baseInstructions || undefined;
 
       try {
         const existingThreadId = threadIds.get(sessionKey);
@@ -472,6 +563,7 @@ export async function createCodexBackend(
         });
 
         await saveInteraction(sessionKey, turnMessages, config);
+        turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
         await appendAuditEntry(config.security.workspace, {
           timestamp: new Date().toISOString(),
           source: sessionKey.split("--")[0],
@@ -491,12 +583,16 @@ export async function createCodexBackend(
 
     clearSession(sessionKey: string): void {
       threadIds.delete(sessionKey);
+      turnCounts.delete(sessionKey);
+      summaries.delete(sessionKey);
       log.debug({ sessionKey }, "cleared Codex thread mapping");
     },
 
     // I4 fix: properly clean up Codex resources
     async close(): Promise<void> {
       threadIds.clear();
+      turnCounts.clear();
+      summaries.clear();
       // The Codex SDK doesn't expose a close() method on the Codex class,
       // but clearing thread mappings ensures no stale references remain.
       // Any child processes spawned by the SDK are tied to individual turns
