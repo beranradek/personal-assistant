@@ -40,9 +40,18 @@ export const HeartbeatConfigSchema = z.object({
   deliverTo: z.enum(["last", "telegram", "slack"]),
 });
 
+export const RateLimiterConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  /** Duration of the sliding window in milliseconds. */
+  windowMs: z.number().int().positive().default(60_000),
+  /** Maximum number of requests allowed per user within the window. */
+  maxRequests: z.number().int().positive().default(20),
+});
+
 export const GatewayConfigSchema = z.object({
   maxQueueSize: z.number().int().positive(),
   processingUpdateIntervalMs: z.number().int().positive().default(5000),
+  rateLimiter: RateLimiterConfigSchema.default({}),
 });
 
 export const AgentConfigSchema = z.object({

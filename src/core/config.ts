@@ -36,7 +36,11 @@ export const DEFAULTS: Config = {
     activeHours: "8-21",
     deliverTo: "last",
   },
-  gateway: { maxQueueSize: 20, processingUpdateIntervalMs: 5000 },
+  gateway: {
+    maxQueueSize: 20,
+    processingUpdateIntervalMs: 5000,
+    rateLimiter: { enabled: true, windowMs: 60_000, maxRequests: 20 },
+  },
   agent: { backend: "claude" as const, model: null, maxTurns: 200 },
   session: { maxHistoryMessages: 50, compactionEnabled: true },
   memory: {
