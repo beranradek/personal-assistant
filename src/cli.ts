@@ -92,7 +92,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     { createEmbeddingProvider },
     { createVectorStore },
     { createIndexer },
-    { hybridSearch },
+    { createRobustMemorySearch },
     { createCronToolManager },
     { handleExec },
     { getSession, listSessions },
@@ -101,7 +101,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     import("./memory/embeddings.js"),
     import("./memory/vector-store.js"),
     import("./memory/indexer.js"),
-    import("./memory/hybrid-search.js"),
+    import("./memory/robust-search.js"),
     import("./cron/tool.js"),
     import("./exec/tool.js"),
     import("./exec/process-registry.js"),
@@ -120,6 +120,19 @@ async function startMcpServer(configDir: string): Promise<void> {
   const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
 
+  const searchMemory = createRobustMemorySearch({
+    workspaceDir: config.security.workspace,
+    extraPaths: config.memory.extraPaths,
+    store,
+    embedder,
+    config: {
+      vectorWeight: config.memory.search.hybridWeights.vector,
+      keywordWeight: config.memory.search.hybridWeights.keyword,
+      minScore: config.memory.search.minScore,
+      maxResults: config.memory.search.maxResults,
+    },
+  });
+
   // Create cron manager
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
   const cronManager = createCronToolManager({ storePath: cronStorePath });
@@ -127,13 +140,7 @@ async function startMcpServer(configDir: string): Promise<void> {
 
   // Create and start the stdio MCP server
   const server = createStdioMcpServer({
-    search: async (query: string, maxResults?: number) =>
-      hybridSearch(query, store, embedder, {
-        vectorWeight: config.memory.search.hybridWeights.vector,
-        keywordWeight: config.memory.search.hybridWeights.keyword,
-        minScore: config.memory.search.minScore,
-        maxResults: maxResults ?? config.memory.search.maxResults,
-      }),
+    search: searchMemory,
     handleCronAction: cronManager.handleAction,
     handleExec: (options) => handleExec(options, config),
     getProcessSession: getSession,

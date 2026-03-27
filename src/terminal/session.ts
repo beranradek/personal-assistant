@@ -7,7 +7,7 @@ import { createMemoryWatcher } from "../memory/watcher.js";
 import { createEmbeddingProvider } from "../memory/embeddings.js";
 import { createVectorStore } from "../memory/vector-store.js";
 import { createIndexer } from "../memory/indexer.js";
-import { hybridSearch } from "../memory/hybrid-search.js";
+import { createRobustMemorySearch } from "../memory/robust-search.js";
 import { createMemoryServer } from "../tools/memory-server.js";
 import { createAssistantServer } from "../tools/assistant-server.js";
 import { createCronToolManager } from "../cron/tool.js";
@@ -58,15 +58,22 @@ export async function createTerminalSession(
     includeHeartbeat: false,
   });
 
+  const searchMemory = createRobustMemorySearch({
+    workspaceDir: config.security.workspace,
+    extraPaths: config.memory.extraPaths,
+    store,
+    embedder,
+    config: {
+      vectorWeight: config.memory.search.hybridWeights.vector,
+      keywordWeight: config.memory.search.hybridWeights.keyword,
+      minScore: config.memory.search.minScore,
+      maxResults: config.memory.search.maxResults,
+    },
+  });
+
   // Create MCP servers (memory + assistant + user-configured)
   const memoryServer = createMemoryServer({
-    search: async (query: string, maxResults?: number) =>
-      hybridSearch(query, store, embedder, {
-        vectorWeight: config.memory.search.hybridWeights.vector,
-        keywordWeight: config.memory.search.hybridWeights.keyword,
-        minScore: config.memory.search.minScore,
-        maxResults: maxResults ?? config.memory.search.maxResults,
-      }),
+    search: searchMemory,
   });
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
