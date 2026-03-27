@@ -188,22 +188,48 @@ export async function summarizeConversation(
 // ---------------------------------------------------------------------------
 
 /**
- * Append a compaction summary entry to a session JSONL file.
- * Written directly (not through the shared lock) because it is a
- * single append called only during the compaction path, which is
- * itself serialised by the gateway queue.
+ * Write a new compaction summary entry to a session JSONL file.
+ *
+ * Replaces any existing compaction entries so the file never accumulates
+ * stale summaries — only the latest one is kept. All user/assistant lines
+ * are preserved as the audit trail.
+ *
+ * Called only during the compaction path, which is itself serialised by
+ * the gateway queue, so no additional locking is required.
  */
 export async function appendCompactionEntry(
   sessionPath: string,
   summary: string,
 ): Promise<void> {
+  await fs.mkdir(path.dirname(sessionPath), { recursive: true, mode: 0o700 });
+
+  // Read existing lines, drop any previous compaction entries
+  let nonCompactionLines: string[] = [];
+  try {
+    const raw = await fs.readFile(sessionPath, "utf-8");
+    nonCompactionLines = raw.split("\n").filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      try {
+        const parsed = JSON.parse(trimmed) as { role?: string };
+        return parsed.role !== "compaction";
+      } catch {
+        return false; // drop malformed lines
+      }
+    });
+  } catch {
+    // File doesn't exist yet — start fresh
+  }
+
   const entry: SessionMessage = {
     role: "compaction",
     content: summary,
     timestamp: new Date().toISOString(),
   };
-  await fs.mkdir(path.dirname(sessionPath), { recursive: true, mode: 0o700 });
-  await fs.appendFile(sessionPath, JSON.stringify(entry) + "\n", {
+  const newContent =
+    [...nonCompactionLines, JSON.stringify(entry)].join("\n") + "\n";
+
+  await fs.writeFile(sessionPath, newContent, {
     encoding: "utf-8",
     mode: 0o600,
   });

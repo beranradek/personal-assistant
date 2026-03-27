@@ -44,6 +44,7 @@ import {
   appendCompactionEntry,
   loadLatestSummary,
 } from "../session/compactor.js";
+import { TtlMap, DAY_MS } from "../core/ttl-map.js";
 
 const log = createLogger("codex-backend");
 
@@ -272,9 +273,9 @@ export async function createCodexBackend(
   });
 
   const threadOptions = buildThreadOptions(config);
-  const threadIds = new Map<string, string>();
-  const turnCounts = new Map<string, number>();
-  const summaries = new Map<string, string>();
+  const threadIds = new TtlMap<string, string>(DAY_MS);
+  const turnCounts = new TtlMap<string, number>(DAY_MS);
+  const summaries = new TtlMap<string, string>(DAY_MS);
 
   log.info(
     { sandbox: config.codex.sandboxMode, approval: config.codex.approvalPolicy },

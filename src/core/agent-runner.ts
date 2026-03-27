@@ -32,6 +32,7 @@ import {
   appendCompactionEntry,
   loadLatestSummary,
 } from "../session/compactor.js";
+import { TtlMap, DAY_MS } from "./ttl-map.js";
 
 // ---------------------------------------------------------------------------
 // SDK session ID cache
@@ -43,20 +44,23 @@ import {
  * given key, the next `runAgentTurn` call will use the SDK's `resume` option
  * so the model sees the full conversation history.
  */
-const sdkSessionIds = new Map<string, string>();
+const sdkSessionIds = new TtlMap<string, string>(DAY_MS);
 
 /**
  * Number of turns (user+assistant pairs) completed for each session key
  * since the last compaction. Used to trigger periodic context pruning.
+ * Expires after one day of inactivity — the turn counter resets and the
+ * latest summary is reloaded from the JSONL on the next access.
  */
-const sessionTurnCounts = new Map<string, number>();
+const sessionTurnCounts = new TtlMap<string, number>(DAY_MS);
 
 /**
  * Most recent compaction summary for each session key, cached in memory.
  * Injected into `systemPrompt.append` so the agent has context about prior
  * conversation even after the SDK session was reset.
+ * Expires after one day of inactivity — reloaded from JSONL on next use.
  */
-const sessionSummaries = new Map<string, string>();
+const sessionSummaries = new TtlMap<string, string>(DAY_MS);
 
 /**
  * Clear the SDK session ID cache. Exposed for testing and daemon restart.
