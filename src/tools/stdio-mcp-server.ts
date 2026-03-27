@@ -36,7 +36,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "memory_search",
     description:
-      "Search long-term memory for past decisions, preferences, and context",
+      "Search long-term memory for past decisions, preferences, and context. Tip: overly broad multi-word queries can yield no results; try shortening to 1–3 key terms.",
     inputSchema: {
       type: "object" as const,
       properties: {

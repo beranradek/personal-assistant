@@ -19,7 +19,7 @@ export function createMemoryServer(deps: {
     tools: [
       tool(
         "memory_search",
-        "Search long-term memory for past decisions, preferences, and context",
+        "Search long-term memory for past decisions, preferences, and context. Tip: overly broad multi-word queries can yield no results; try shortening to 1–3 key terms.",
         {
           query: z.string().describe("Search query"),
           maxResults: z
