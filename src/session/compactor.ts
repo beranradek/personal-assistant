@@ -56,16 +56,25 @@ export async function loadConversationHistory(
 // summarizeConversation
 // ---------------------------------------------------------------------------
 
-/**
- * Call the Anthropic Messages API directly to produce a concise summary of
- * the conversation history. Uses Node 22's built-in `fetch`.
- *
- * @param messages - Array of user/assistant turns (oldest first)
- * @param model    - Anthropic model ID to use for summarization
- * @returns        - Compact summary string (≤400 words)
- */
-export async function summarizeConversation(
-  messages: ConversationTurn[],
+// ---------------------------------------------------------------------------
+// summarizeConversation
+// ---------------------------------------------------------------------------
+
+const SUMMARY_PROMPT =
+  "Create a concise summary of the following conversation. " +
+  "Focus on: key topics discussed, decisions made, tasks completed " +
+  "or in progress, and important context the assistant should " +
+  "remember. Keep the summary under 400 words.\n\n" +
+  "<conversation>\n";
+
+function buildConversationText(messages: ConversationTurn[]): string {
+  return messages
+    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+    .join("\n\n");
+}
+
+async function summarizeWithAnthropic(
+  conversationText: string,
   model: string,
 ): Promise<string> {
   const apiKey = process.env["ANTHROPIC_API_KEY"];
@@ -74,11 +83,6 @@ export async function summarizeConversation(
       "ANTHROPIC_API_KEY is not set — cannot summarize conversation",
     );
   }
-
-  const conversationText = messages
-    .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-    .join("\n\n");
-
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -92,24 +96,15 @@ export async function summarizeConversation(
       messages: [
         {
           role: "user",
-          content:
-            "Create a concise summary of the following conversation. " +
-            "Focus on: key topics discussed, decisions made, tasks completed " +
-            "or in progress, and important context the assistant should " +
-            "remember. Keep the summary under 400 words.\n\n" +
-            "<conversation>\n" +
-            conversationText +
-            "\n</conversation>",
+          content: SUMMARY_PROMPT + conversationText + "\n</conversation>",
         },
       ],
     }),
   });
-
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`Anthropic API error (${response.status}): ${body}`);
   }
-
   const data = (await response.json()) as {
     content: Array<{ type: string; text?: string }>;
   };
@@ -117,9 +112,75 @@ export async function summarizeConversation(
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("");
-
   if (!text) throw new Error("Empty summary returned from Anthropic API");
   return text;
+}
+
+async function summarizeWithOpenAI(
+  conversationText: string,
+  model: string,
+  apiKey: string,
+  baseUrl?: string,
+): Promise<string> {
+  const url = `${baseUrl ?? "https://api.openai.com"}/v1/chat/completions`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      messages: [
+        {
+          role: "user",
+          content: SUMMARY_PROMPT + conversationText + "\n</conversation>",
+        },
+      ],
+    }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OpenAI API error (${response.status}): ${body}`);
+  }
+  const data = (await response.json()) as {
+    choices: Array<{ message: { content: string } }>;
+  };
+  const text = data.choices?.[0]?.message?.content ?? "";
+  if (!text) throw new Error("Empty summary returned from OpenAI API");
+  return text;
+}
+
+/**
+ * Produce a concise summary of a conversation using either the Anthropic or
+ * OpenAI API. Uses Node 22's built-in `fetch`.
+ *
+ * @param messages  - Array of user/assistant turns (oldest first)
+ * @param model     - Model ID to use for summarization
+ * @param provider  - Which API to call ("anthropic" | "openai")
+ * @param apiKey    - API key for the chosen provider (OpenAI only; Anthropic
+ *                    reads ANTHROPIC_API_KEY from the environment)
+ * @param baseUrl   - Optional base URL override (for OpenAI-compatible endpoints)
+ */
+export async function summarizeConversation(
+  messages: ConversationTurn[],
+  model: string,
+  provider: "anthropic" | "openai" = "anthropic",
+  apiKey?: string,
+  baseUrl?: string,
+): Promise<string> {
+  const conversationText = buildConversationText(messages);
+  if (provider === "openai") {
+    const key = apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    if (!key) {
+      throw new Error(
+        "No OpenAI API key available — set OPENAI_API_KEY or configure codex.apiKey",
+      );
+    }
+    return summarizeWithOpenAI(conversationText, model, key, baseUrl);
+  }
+  return summarizeWithAnthropic(conversationText, model);
 }
 
 // ---------------------------------------------------------------------------

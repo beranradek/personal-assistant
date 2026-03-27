@@ -37,6 +37,13 @@ import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { createLogger } from "../core/logger.js";
+import { sessionKeyToPath } from "../session/types.js";
+import {
+  loadConversationHistory,
+  summarizeConversation,
+  appendCompactionEntry,
+  loadLatestSummary,
+} from "../session/compactor.js";
 
 const log = createLogger("codex-backend");
 
@@ -266,11 +273,69 @@ export async function createCodexBackend(
 
   const threadOptions = buildThreadOptions(config);
   const threadIds = new Map<string, string>();
+  const turnCounts = new Map<string, number>();
+  const summaries = new Map<string, string>();
 
   log.info(
     { sandbox: config.codex.sandboxMode, approval: config.codex.approvalPolicy },
     "Codex backend initialized",
   );
+
+  /**
+   * Trigger context pruning for a Codex session.
+   * On first turn: load any persisted summary from the JSONL.
+   * After every `maxHistoryMessages / 2` turns: summarise via OpenAI API,
+   * persist the summary, reset the thread ID so the next turn is fresh.
+   */
+  async function compactIfNeeded(sessionKey: string): Promise<void> {
+    if (!config.session.compactionEnabled) return;
+
+    const turnCount = turnCounts.get(sessionKey) ?? 0;
+    const threshold = Math.floor(config.session.maxHistoryMessages / 2);
+
+    if (turnCount === 0) {
+      const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+      const existing = await loadLatestSummary(sessionPath);
+      if (existing) summaries.set(sessionKey, existing);
+      return;
+    }
+
+    if (turnCount % threshold !== 0) return;
+
+    const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
+    try {
+      const messages = await loadConversationHistory(sessionPath);
+      if (messages.length < 4) return;
+
+      let summary: string;
+      if (config.session.summarizationEnabled) {
+        // Use OpenAI API — Codex backend has an OpenAI-compatible key
+        const openaiApiKey =
+          config.codex.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+        summary = await summarizeConversation(
+          messages,
+          "gpt-4o-mini",
+          "openai",
+          openaiApiKey,
+          config.codex.baseUrl ?? undefined,
+        );
+      } else {
+        const last = messages.slice(-2);
+        summary = last
+          .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
+          .join("\n\n");
+      }
+
+      await appendCompactionEntry(sessionPath, summary);
+      summaries.set(sessionKey, summary);
+      threadIds.delete(sessionKey);
+    } catch (err) {
+      log.warn(
+        { err, sessionKey },
+        "Codex session compaction failed — continuing without summary",
+      );
+    }
+  }
 
   /** I5: Refresh developer_instructions with latest memory content. */
   async function refreshMemory(): Promise<void> {
@@ -290,6 +355,8 @@ export async function createCodexBackend(
     async *runTurn(message: string, sessionKey: string): AsyncGenerator<StreamEvent> {
       // I5: Refresh memory at the start of each turn
       await refreshMemory();
+      // Context pruning: compact if threshold reached, load existing summary
+      await compactIfNeeded(sessionKey);
 
       const userMsg: SessionMessage = {
         role: "user",
@@ -297,6 +364,14 @@ export async function createCodexBackend(
         timestamp: new Date().toISOString(),
       };
       const turnMessages: SessionMessage[] = [userMsg];
+
+      // Inject compaction summary into developer_instructions (if any)
+      const summary = summaries.get(sessionKey);
+      if (summary) {
+        codexConfig.developer_instructions =
+          `## Previous Conversation Summary\n\n${summary}\n\n` +
+          (codexConfig.developer_instructions ?? "");
+      }
 
       let responseText = "";
 
@@ -414,6 +489,7 @@ export async function createCodexBackend(
       });
 
       await saveInteraction(sessionKey, turnMessages, config);
+      turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
       await appendAuditEntry(config.security.workspace, {
         timestamp: new Date().toISOString(),
         source: sessionKey.split("--")[0],
@@ -434,6 +510,8 @@ export async function createCodexBackend(
     async runTurnSync(message: string, sessionKey: string): Promise<AgentTurnResult> {
       // I5: Refresh memory at the start of each turn
       await refreshMemory();
+      // Context pruning: compact if threshold reached, load existing summary
+      await compactIfNeeded(sessionKey);
 
       const userMsg: SessionMessage = {
         role: "user",
@@ -441,6 +519,14 @@ export async function createCodexBackend(
         timestamp: new Date().toISOString(),
       };
       const turnMessages: SessionMessage[] = [userMsg];
+
+      // Inject compaction summary into developer_instructions (if any)
+      const summary = summaries.get(sessionKey);
+      if (summary) {
+        codexConfig.developer_instructions =
+          `## Previous Conversation Summary\n\n${summary}\n\n` +
+          (codexConfig.developer_instructions ?? "");
+      }
 
       try {
         const existingThreadId = threadIds.get(sessionKey);
@@ -472,6 +558,7 @@ export async function createCodexBackend(
         });
 
         await saveInteraction(sessionKey, turnMessages, config);
+        turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
         await appendAuditEntry(config.security.workspace, {
           timestamp: new Date().toISOString(),
           source: sessionKey.split("--")[0],
@@ -491,6 +578,8 @@ export async function createCodexBackend(
 
     clearSession(sessionKey: string): void {
       threadIds.delete(sessionKey);
+      turnCounts.delete(sessionKey);
+      summaries.delete(sessionKey);
       log.debug({ sessionKey }, "cleared Codex thread mapping");
     },
 

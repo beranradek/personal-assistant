@@ -240,6 +240,7 @@ async function compactSessionIfNeeded(
       summary = await summarizeConversation(
         messages,
         config.session.summarizationModel,
+        "anthropic",
       );
     } else {
       // Compaction without summarization: keep only the last exchange as context
