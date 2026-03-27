@@ -17,8 +17,7 @@ import { resolveSessionKey } from "../session/manager.js";
 import { createLogger } from "../core/logger.js";
 import { isHeartbeatOk } from "../heartbeat/prompts.js";
 import { createProcessingAccumulator } from "./processing-message.js";
-import { createRateLimiter } from "./rate-limiter.js";
-import type { RateLimiter } from "./rate-limiter.js";
+import { createRateLimiter, type RateLimiter } from "./rate-limiter.js";
 
 const log = createLogger("gateway-queue");
 
@@ -57,7 +56,7 @@ export function createMessageQueue(config: Config): MessageQueue {
   const maxSize = config.gateway.maxQueueSize;
   const messages: AdapterMessage[] = [];
   let running = false;
-  const rateLimiter: RateLimiter = createRateLimiter(config);
+  const rateLimiter = createRateLimiter(config);
 
   // For the continuous process loop: a resolver that is called when
   // a new message is enqueued (to wake up the loop).
@@ -90,9 +89,7 @@ export function createMessageQueue(config: Config): MessageQueue {
       if (message.source !== "heartbeat") {
         const rl = rateLimiter.check(message.sourceId);
         if (!rl.allowed) {
-          const seconds = rl.retryAfterMs != null
-            ? Math.ceil(rl.retryAfterMs / 1000)
-            : 60;
+          const seconds = Math.ceil(rl.retryAfterMs / 1000);
           return {
             accepted: false,
             reason: `Rate limit exceeded. Please wait ${seconds}s before sending another message.`,

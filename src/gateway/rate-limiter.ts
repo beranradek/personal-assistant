@@ -14,11 +14,9 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("rate-limiter");
 
-export interface RateLimitResult {
-  allowed: boolean;
-  /** Milliseconds until the user's oldest request expires (only set when denied). */
-  retryAfterMs?: number;
-}
+export type RateLimitResult =
+  | { allowed: true }
+  | { allowed: false; retryAfterMs: number };
 
 export interface RateLimiter {
   /** Check whether the given sourceId is within its rate limit. */
@@ -35,7 +33,8 @@ export interface RateLimiter {
 export function createRateLimiter(config: Config): RateLimiter {
   const { enabled, windowMs, maxRequests } = config.gateway.rateLimiter;
 
-  // Map from sourceId → sorted list of request timestamps within the window
+  // Per-user sorted timestamp lists. Entries are removed when the list empties
+  // to avoid unbounded growth for users who stop sending messages.
   const windows = new Map<string, number[]>();
 
   function evict(timestamps: number[], now: number): number[] {
@@ -55,8 +54,7 @@ export function createRateLimiter(config: Config): RateLimiter {
       const current = evict(windows.get(sourceId) ?? [], now);
 
       if (current.length >= maxRequests) {
-        const oldestTs = current[0]!;
-        const retryAfterMs = oldestTs + windowMs - now;
+        const retryAfterMs = current[0]! + windowMs - now;
         windows.set(sourceId, current);
         log.warn(
           { sourceId, count: current.length, maxRequests, retryAfterMs },
@@ -77,7 +75,9 @@ export function createRateLimiter(config: Config): RateLimiter {
     count(sourceId: string): number {
       const now = Date.now();
       const current = evict(windows.get(sourceId) ?? [], now);
-      windows.set(sourceId, current);
+      if (current.length === 0) {
+        windows.delete(sourceId);
+      }
       return current.length;
     },
   };
