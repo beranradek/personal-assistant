@@ -66,6 +66,7 @@ export async function writeFileIfMissing(
  * ├── MEMORY.md
  * ├── HEARTBEAT.md
  * ├── daily/
+ * ├── memory/
  * └── .claude/
  *     └── skills/
  *

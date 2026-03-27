@@ -74,18 +74,31 @@ export async function startDaemon(configDir: string): Promise<void> {
   const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
 
+  // Guard against concurrent syncFiles calls (watcher + periodic timer can overlap)
+  let syncInProgress = false;
+  const syncMemoryFiles = async (reason: string) => {
+    if (syncInProgress) return;
+    syncInProgress = true;
+    try {
+      const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+      log.info({ fileCount: files.length, reason }, "Reindexing memory files");
+      await indexer.syncFiles(files);
+    } catch (err) {
+      log.error({ err, reason }, "Reindex failed");
+    } finally {
+      syncInProgress = false;
+    }
+  };
+
   // Watch for memory file changes and reindex
   const memoryWatcher = createMemoryWatcher(config.security.workspace, () => {
-    const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
-    log.info({ fileCount: files.length }, "Memory files changed, reindexing");
-    indexer.syncFiles(files).catch((err) => log.error({ err }, "Reindex failed"));
+    syncMemoryFiles("watcher");
   });
 
   // Periodic re-sync as a safety net (fs.watch can miss events on Linux)
   const MEMORY_RESYNC_INTERVAL_MS = 60_000;
   const memorySyncTimer = setInterval(() => {
-    const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
-    indexer.syncFiles(files).catch((err) => log.error({ err }, "Periodic reindex failed"));
+    syncMemoryFiles("periodic");
   }, MEMORY_RESYNC_INTERVAL_MS);
   memorySyncTimer.unref();
 

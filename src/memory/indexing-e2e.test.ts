@@ -260,7 +260,12 @@ describe("memory indexing e2e", () => {
     );
   });
 
-  it("hybrid search with default minScore (0.35) finds relevant content", async () => {
+  it("keyword-only match scores below default minScore 0.35 — content is indexed but filtered", async () => {
+    // Documents a known characteristic: with mock embeddings (no real semantic
+    // similarity), keyword-only matches score at most 0.3 (keywordWeight * 1.0),
+    // which is below the default minScore of 0.35. In production, the real
+    // embedding model's vector component adds to the score. If it doesn't
+    // (e.g. poor language support), results get filtered out.
     const filePath = path.join(memoryDir, "topic.md");
     fs.writeFileSync(
       filePath,
@@ -273,37 +278,27 @@ describe("memory indexing e2e", () => {
     const files = collectMemoryFiles(workspaceDir, []);
     await indexer.syncFiles(files);
 
-    // With default minScore of 0.35 — keyword-only matches score 0.3 max
-    // (keywordWeight=0.3 * normalised=1.0), so they'd be filtered out!
-    const results = await hybridSearch(
+    // With minScore 0 the content IS found (proves indexing works)
+    const allResults = await hybridSearch(
+      "calcium",
+      store,
+      embedder,
+      defaultSearchConfig({ minScore: 0.0 }),
+    );
+    expect(allResults.length).toBeGreaterThan(0);
+    expect(allResults.find((r) => r.path === filePath)).toBeDefined();
+
+    // With default minScore 0.35, keyword-only score (max 0.3) is filtered out.
+    // The mock embedder produces pseudo-random vectors, so vector similarity
+    // is unpredictable — assert only that any returned results meet the threshold.
+    const filtered = await hybridSearch(
       "calcium",
       store,
       embedder,
       defaultSearchConfig({ minScore: 0.35 }),
     );
-
-    // This test documents the potential issue: with mock embeddings,
-    // keyword-only matches score at most 0.3, which is below the 0.35 threshold.
-    // In production with real embeddings, the vector component would add to the
-    // score. But if the embedding model doesn't handle the language well,
-    // the combined score could still be below threshold.
-    //
-    // If this assertion fails, it confirms the minScore threshold is too aggressive.
-    // The fix would be to lower minScore or adjust weights.
-
-    // With mock embeddings, the vector score varies. Check what we get:
-    if (results.length === 0) {
-      // Verify keyword-only would find it with lower threshold
-      const lowThreshold = await hybridSearch(
-        "calcium",
-        store,
-        embedder,
-        defaultSearchConfig({ minScore: 0.0 }),
-      );
-      expect(
-        lowThreshold.length,
-        "Content IS indexed but filtered by minScore — threshold may be too aggressive",
-      ).toBeGreaterThan(0);
+    for (const r of filtered) {
+      expect(r.score).toBeGreaterThanOrEqual(0.35);
     }
   });
 });
