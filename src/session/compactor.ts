@@ -56,9 +56,13 @@ export async function loadConversationHistory(
 // summarizeConversation
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// summarizeConversation
-// ---------------------------------------------------------------------------
+/**
+ * Maximum number of user/assistant turns passed to the summarization API.
+ * Older messages are discarded (only the tail is sent) to stay safely within
+ * the context window of cheap/fast models such as haiku or gpt-4o-mini.
+ * At ~500 chars/message this is roughly 50 KB of conversation text.
+ */
+const MAX_MESSAGES_FOR_SUMMARY = 100;
 
 const SUMMARY_PROMPT =
   "Create a concise summary of the following conversation. " +
@@ -170,7 +174,12 @@ export async function summarizeConversation(
   apiKey?: string,
   baseUrl?: string,
 ): Promise<string> {
-  const conversationText = buildConversationText(messages);
+  // Truncate to the most recent messages to avoid exceeding API context limits.
+  const tail =
+    messages.length > MAX_MESSAGES_FOR_SUMMARY
+      ? messages.slice(-MAX_MESSAGES_FOR_SUMMARY)
+      : messages;
+  const conversationText = buildConversationText(tail);
   if (provider === "openai") {
     const key = apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
     if (!key) {
@@ -194,8 +203,11 @@ export async function summarizeConversation(
  * stale summaries — only the latest one is kept. All user/assistant lines
  * are preserved as the audit trail.
  *
+ * Uses an atomic write pattern (write to a sibling .tmp file, then rename)
+ * so a crash mid-write never corrupts or truncates the session file.
+ *
  * Called only during the compaction path, which is itself serialised by
- * the gateway queue, so no additional locking is required.
+ * the gateway queue, preventing concurrent writes to the same session.
  */
 export async function appendCompactionEntry(
   sessionPath: string,
@@ -229,10 +241,12 @@ export async function appendCompactionEntry(
   const newContent =
     [...nonCompactionLines, JSON.stringify(entry)].join("\n") + "\n";
 
-  await fs.writeFile(sessionPath, newContent, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  // Atomic write: write to a sibling temp file then rename into place.
+  // On POSIX, rename(2) is atomic — the session file is never left in a
+  // partially-written state even if the process is killed mid-write.
+  const tmpPath = sessionPath + ".tmp";
+  await fs.writeFile(tmpPath, newContent, { encoding: "utf-8", mode: 0o600 });
+  await fs.rename(tmpPath, sessionPath);
 }
 
 // ---------------------------------------------------------------------------

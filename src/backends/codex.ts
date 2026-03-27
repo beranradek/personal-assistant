@@ -305,6 +305,8 @@ export async function createCodexBackend(
       return;
     }
 
+    // Compact at the start of every (threshold + 1)-th turn, i.e. after every
+    // `threshold` completed turns (turnCount is incremented after each turn).
     if (turnCount % threshold !== 0) return;
 
     const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);

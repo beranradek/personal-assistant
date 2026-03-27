@@ -229,7 +229,9 @@ async function compactSessionIfNeeded(
     return;
   }
 
-  // Compact when we've completed exactly `compactionThreshold` turns
+  // Compact at the start of every (compactionThreshold + 1)-th turn, i.e.
+  // after every `compactionThreshold` completed turns (turnCount is incremented
+  // after each turn, so turnCount=10 means 10 turns have finished).
   if (turnCount % compactionThreshold !== 0) return;
 
   const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
