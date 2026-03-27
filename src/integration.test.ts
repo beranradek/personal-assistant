@@ -117,7 +117,7 @@ function makeConfig(
       activeHours: "8-21",
       deliverTo: "last" as const,
     },
-    gateway: { maxQueueSize: 20 },
+    gateway: { maxQueueSize: 20, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },
     agent: { backend: "claude" as const, model: null, maxTurns: 200 },
     session: { maxHistoryMessages: 50, compactionEnabled: true },
     memory: {
@@ -646,7 +646,7 @@ describe("Integration: Queue processes messages in order", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config = makeConfig("/tmp/workspace", "/tmp/data", {
-      gateway: { maxQueueSize: 10 },
+      gateway: { maxQueueSize: 10, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },
     } as Partial<Config>);
   });
 
@@ -671,7 +671,7 @@ describe("Integration: Queue processes messages in order", () => {
 
   it("rejects messages when queue is full", () => {
     const smallConfig = makeConfig("/tmp/workspace", "/tmp/data", {
-      gateway: { maxQueueSize: 2 },
+      gateway: { maxQueueSize: 2, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },
     } as Partial<Config>);
     const queue = createMessageQueue(smallConfig);
 

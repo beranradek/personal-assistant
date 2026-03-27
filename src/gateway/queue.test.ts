@@ -78,7 +78,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       activeHours: "8-21",
       deliverTo: "last" as const,
     },
-    gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 5000 },
+    gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },
     agent: { backend: "claude" as const, model: null, maxTurns: 10 },
     session: { maxHistoryMessages: 50, compactionEnabled: false },
     memory: {
@@ -165,7 +165,7 @@ describe("MessageQueue", () => {
     });
 
     it("accepts messages up to maxQueueSize", () => {
-      const config = makeConfig({ gateway: { maxQueueSize: 3, processingUpdateIntervalMs: 5000 } });
+      const config = makeConfig({ gateway: { maxQueueSize: 3, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } } });
       const queue = createMessageQueue(config);
 
       const r1 = queue.enqueue(makeMessage({ text: "one" }));
@@ -178,7 +178,7 @@ describe("MessageQueue", () => {
     });
 
     it("rejects with { accepted: false } when queue is at maxQueueSize", () => {
-      const config = makeConfig({ gateway: { maxQueueSize: 2, processingUpdateIntervalMs: 5000 } });
+      const config = makeConfig({ gateway: { maxQueueSize: 2, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } } });
       const queue = createMessageQueue(config);
 
       queue.enqueue(makeMessage({ text: "one" }));
@@ -801,7 +801,7 @@ describe("MessageQueue", () => {
 
     it("passes processingUpdateIntervalMs from config to accumulator", async () => {
       const config = makeConfig({
-        gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 3000 },
+        gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 3000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },
       });
       const events: StreamEvent[] = [
         { type: "result", response: "ok", messages: [], partial: false },
