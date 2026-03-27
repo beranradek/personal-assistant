@@ -62,6 +62,41 @@ function embeddingToBuffer(embedding: number[]): Buffer {
   return buf;
 }
 
+function looksLikeAdvancedFtsQuery(query: string): boolean {
+  // Heuristic: if the user includes FTS5 syntax/operators, don't try to
+  // rewrite the query.
+  // Keep this conservative: most agent/user queries are natural language and
+  // should still benefit from token/prefix normalization.
+  return /["()*]/.test(query) || /\bNEAR\b/i.test(query);
+}
+
+function buildFtsPrefixQuery(query: string): string {
+  if (looksLikeAdvancedFtsQuery(query)) return query;
+
+  const tokens = query.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (tokens.length === 0) return query;
+
+  const stopWords = new Set([
+    // English
+    "and",
+    "or",
+    "not",
+    // Czech (common connectors)
+    "nebo",
+    "ani",
+    "jako",
+    "jak",
+  ]);
+
+  const filteredTokens = tokens.filter((t) => !stopWords.has(t.toLowerCase()));
+  const finalTokens = filteredTokens.length > 0 ? filteredTokens : tokens;
+
+  // Use prefix queries to make matches more robust against common
+  // inflections (e.g. "vápník" → "vápníku"). Keep short tokens exact to
+  // avoid overly broad matches.
+  return finalTokens.map((t) => (t.length >= 3 ? `${t}*` : t)).join(" ");
+}
+
 // ─── Factory ────────────────────────────────────────────────────────
 
 /**
@@ -287,28 +322,41 @@ export function createVectorStore(
     },
 
     searchKeyword(query: string, limit: number): KeywordSearchResult[] {
-      try {
-        const rows = searchFtsStmt.all(query, limit) as Array<{
-          id: string;
-          rank: number;
-          path: string;
-          text: string;
-          start_line: number;
-          end_line: number;
-        }>;
+      const run = (ftsQuery: string): KeywordSearchResult[] | null => {
+        try {
+          const rows = searchFtsStmt.all(ftsQuery, limit) as Array<{
+            id: string;
+            rank: number;
+            path: string;
+            text: string;
+            start_line: number;
+            end_line: number;
+          }>;
 
-        return rows.map((r) => ({
-          id: r.id,
-          path: r.path,
-          text: r.text,
-          startLine: r.start_line,
-          endLine: r.end_line,
-          rank: r.rank,
-        }));
-      } catch {
-        // FTS5 MATCH can throw on empty index or invalid query
-        return [];
+          return rows.map((r) => ({
+            id: r.id,
+            path: r.path,
+            text: r.text,
+            startLine: r.start_line,
+            endLine: r.end_line,
+            rank: r.rank,
+          }));
+        } catch {
+          // FTS5 MATCH can throw on empty index or invalid query
+          return null;
+        }
+      };
+
+      const raw = run(query);
+      if (raw && raw.length > 0) return raw;
+
+      const expanded = buildFtsPrefixQuery(query);
+      if (expanded !== query) {
+        const prefixed = run(expanded);
+        if (prefixed) return prefixed;
       }
+
+      return raw ?? [];
     },
 
     deleteChunksForFile(filePath: string): void {

@@ -13,7 +13,13 @@ export interface HybridSearchConfig {
   vectorWeight: number;
   /** Weight for keyword (BM25) search scores. Default: 0.3 */
   keywordWeight: number;
-  /** Minimum combined score to include in results. Default: 0.35 */
+  /**
+   * Minimum combined score to include in results. Default: 0.35
+   *
+   * Note: This is treated as a soft threshold. If it would filter out all
+   * candidates, the top candidates are returned anyway to avoid empty results
+   * for keyword-only / vector-only queries.
+   */
   minScore: number;
   /** Maximum number of results to return. Default: 6 */
   maxResults: number;
@@ -74,7 +80,7 @@ function normaliseBm25Ranks(
  *  3. Normalise scores from both result sets to [0, 1].
  *  4. Merge by chunk ID, computing:
  *       finalScore = vectorWeight * vectorScore + keywordWeight * keywordScore
- *  5. Filter out results below minScore.
+ *  5. Filter out results below minScore (soft threshold; see config).
  *  6. Sort descending by score.
  *  7. Return at most maxResults as SearchResult[].
  */
@@ -168,7 +174,15 @@ export async function hybridSearch(
   }
 
   // Step 7: Filter by minScore
-  const filtered = merged.filter((r) => r.score >= config.minScore);
+  let filtered = merged.filter((r) => r.score >= config.minScore);
+
+  // If the threshold filters everything out, return the best candidates
+  // anyway. This avoids "no results" failures for queries where only one
+  // modality produces matches (e.g. keyword-only matches when keywordWeight
+  // < minScore).
+  if (filtered.length === 0 && merged.length > 0) {
+    filtered = merged;
+  }
 
   // Step 8: Sort by score descending
   filtered.sort((a, b) => b.score - a.score);

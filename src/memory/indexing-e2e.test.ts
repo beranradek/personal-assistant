@@ -260,12 +260,9 @@ describe("memory indexing e2e", () => {
     );
   });
 
-  it("keyword-only match scores below default minScore 0.35 — content is indexed but filtered", async () => {
-    // Documents a known characteristic: with mock embeddings (no real semantic
-    // similarity), keyword-only matches score at most 0.3 (keywordWeight * 1.0),
-    // which is below the default minScore of 0.35. In production, the real
-    // embedding model's vector component adds to the score. If it doesn't
-    // (e.g. poor language support), results get filtered out.
+  it("returns keyword-only matches even when minScore > keywordWeight (fallback)", async () => {
+    // Ensures search is robust even when the configured minScore is higher than
+    // what keyword-only matches can reach (keywordWeight * 1.0).
     const filePath = path.join(memoryDir, "topic.md");
     fs.writeFileSync(
       filePath,
@@ -288,17 +285,17 @@ describe("memory indexing e2e", () => {
     expect(allResults.length).toBeGreaterThan(0);
     expect(allResults.find((r) => r.path === filePath)).toBeDefined();
 
-    // With default minScore 0.35, keyword-only score (max 0.3) is filtered out.
-    // The mock embedder produces pseudo-random vectors, so vector similarity
-    // is unpredictable — assert only that any returned results meet the threshold.
+    // Force keyword-only scoring by setting vectorWeight=0, keeping keywordWeight=0.3.
+    // Without the fallback, this would return an empty result set because max score
+    // is 0.3 and minScore is 0.35.
     const filtered = await hybridSearch(
       "calcium",
       store,
       embedder,
-      defaultSearchConfig({ minScore: 0.35 }),
+      defaultSearchConfig({ vectorWeight: 0.0, keywordWeight: 0.3, minScore: 0.35 }),
     );
-    for (const r of filtered) {
-      expect(r.score).toBeGreaterThanOrEqual(0.35);
-    }
+    expect(filtered.length).toBeGreaterThan(0);
+    expect(filtered.find((r) => r.path === filePath)).toBeDefined();
+    expect(filtered.some((r) => r.score < 0.35)).toBe(true);
   });
 });

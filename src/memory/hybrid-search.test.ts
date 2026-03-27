@@ -234,6 +234,27 @@ describe("hybridSearch", () => {
     expect(results[0].path).toBe("/a.ts");
   });
 
+  it("returns best candidates even if minScore filters everything out", async () => {
+    const store = createMockStore({
+      vectorResults: [],
+      keywordResults: [
+        { id: "c3", path: "/c.ts", text: "keyword only", startLine: 1, endLine: 5, rank: -1.5 },
+      ],
+    });
+
+    const results = await hybridSearch(
+      "test query",
+      store,
+      embedder,
+      defaultConfig({ minScore: 0.35 }),
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].path).toBe("/c.ts");
+    // keywordScore = 1.0 (only result), finalScore = 0.3, below threshold but still returned
+    expect(results[0].score).toBeCloseTo(0.3, 5);
+  });
+
   // --- Limiting ---
 
   it("returns max maxResults (6) results sorted by score descending", async () => {

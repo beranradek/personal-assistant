@@ -281,6 +281,44 @@ describe("VectorStore", () => {
       expect(typeof r.rank).toBe("number");
     });
 
+    it("falls back to prefix queries for common inflections", () => {
+      store.upsertChunk(
+        makeChunk({
+          id: "cz1",
+          text: "Zdroje dobře využitelného vápníku",
+        }),
+      );
+
+      // Without prefix matching, "vápník" would not match "vápníku"
+      // (FTS5 does not do stemming by default).
+      const results = store.searchKeyword("vápník", 10);
+      expect(results.some((r) => r.id === "cz1")).toBe(true);
+    });
+
+    it("handles natural-language queries containing connectors like 'and'", () => {
+      store.upsertChunk(
+        makeChunk({
+          id: "and1",
+          text: "calcium supports bones and teeth",
+        }),
+      );
+
+      const results = store.searchKeyword("bone and calcium", 10);
+      expect(results.some((r) => r.id === "and1")).toBe(true);
+    });
+
+    it("handles punctuation like colons in queries via fallback tokenization", () => {
+      store.upsertChunk(
+        makeChunk({
+          id: "colon1",
+          text: "error timeout handling and retries",
+        }),
+      );
+
+      const results = store.searchKeyword("error: timeout", 10);
+      expect(results.some((r) => r.id === "colon1")).toBe(true);
+    });
+
     it("returns empty array when no chunks match", () => {
       store.upsertChunk(makeChunk({ id: "nomatch", text: "hello world" }));
 
