@@ -34,6 +34,8 @@ export const DEFAULTS: Config = {
     enabled: true,
     intervalMinutes: 30,
     activeHours: "8-21",
+    morningHour: 8,
+    eveningHour: 20,
     deliverTo: "last",
   },
   gateway: {

@@ -21,6 +21,8 @@ const TEMPLATE_FILES = [
   "USER.md",
   "MEMORY.md",
   "HEARTBEAT.md",
+  "HEARTBEAT_MORNING.md",
+  "HEARTBEAT_EVENING.md",
 ] as const;
 
 // ---------------------------------------------------------------------------
