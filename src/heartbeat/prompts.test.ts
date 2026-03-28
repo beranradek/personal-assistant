@@ -263,10 +263,13 @@ describe("appendMorningEveningContent", () => {
 
   it("replaces {{DAILY_LOG}} placeholder with today's log path", async () => {
     const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
-    const now = new Date("2026-03-28T20:00:00.000Z");
+    // Use makeTime so getHours() returns 20 in local time (isEveningHeartbeat check)
+    const now = makeTime(20);
+    // getDailyLogRelativePath uses toISOString().slice(0,10) — compute the same way
+    const expectedDate = now.toISOString().slice(0, 10);
     await fs.writeFile(path.join(tmpDir, "HEARTBEAT_EVENING.md"), "Log: {{DAILY_LOG}}");
     const result = await appendMorningEveningContent("base", config, tmpDir, now);
-    expect(result).toContain("daily/2026-03-28.jsonl");
+    expect(result).toContain(`daily/${expectedDate}.jsonl`);
     expect(result).not.toContain("{{DAILY_LOG}}");
   });
 
