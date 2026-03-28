@@ -37,6 +37,8 @@ export const HeartbeatConfigSchema = z.object({
   enabled: z.boolean(),
   intervalMinutes: z.number().int().positive(),
   activeHours: z.string(),
+  morningHour: z.number().int().min(0).max(23).default(8),
+  eveningHour: z.number().int().min(0).max(23).default(20),
   deliverTo: z.enum(["last", "telegram", "slack"]),
 });
 

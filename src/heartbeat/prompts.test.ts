@@ -1,8 +1,15 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { SystemEvent } from "../core/types.js";
+import type { SystemEvent, Config } from "../core/types.js";
+import { DEFAULTS } from "../core/config.js";
 import {
   resolveHeartbeatPrompt,
   isHeartbeatOk,
+  isMorningHeartbeat,
+  isEveningHeartbeat,
+  appendMorningEveningContent,
   EXEC_EVENT_PROMPT,
   CRON_EVENT_PROMPT,
   HEARTBEAT_PROMPT,
@@ -138,5 +145,143 @@ describe("isHeartbeatOk", () => {
   it("returns false for unrelated text", () => {
     expect(isHeartbeatOk("everything is fine")).toBe(false);
     expect(isHeartbeatOk("OK")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isMorningHeartbeat / isEveningHeartbeat
+// ---------------------------------------------------------------------------
+
+function makeConfig(heartbeatOverrides?: Partial<Config["heartbeat"]>): Config {
+  return {
+    ...DEFAULTS,
+    heartbeat: {
+      ...DEFAULTS.heartbeat,
+      ...heartbeatOverrides,
+    },
+  };
+}
+
+function makeTime(hour: number): Date {
+  const d = new Date();
+  d.setHours(hour, 0, 0, 0);
+  return d;
+}
+
+describe("isMorningHeartbeat", () => {
+  it("returns true when current hour equals max(start, morningHour)", () => {
+    // activeHours "8-21" → start=8; morningHour=8 → morning at 8
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8 });
+    expect(isMorningHeartbeat(config, makeTime(8))).toBe(true);
+  });
+
+  it("returns true when morningHour is later than start", () => {
+    // activeHours "8-21" → start=8; morningHour=9 → morning at 9
+    const config = makeConfig({ activeHours: "8-21", morningHour: 9 });
+    expect(isMorningHeartbeat(config, makeTime(9))).toBe(true);
+    expect(isMorningHeartbeat(config, makeTime(8))).toBe(false);
+  });
+
+  it("returns true when start is later than morningHour", () => {
+    // activeHours "10-21" → start=10; morningHour=7 → morning at 10
+    const config = makeConfig({ activeHours: "10-21", morningHour: 7 });
+    expect(isMorningHeartbeat(config, makeTime(10))).toBe(true);
+    expect(isMorningHeartbeat(config, makeTime(7))).toBe(false);
+  });
+
+  it("returns false for non-morning hours", () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8 });
+    expect(isMorningHeartbeat(config, makeTime(9))).toBe(false);
+    expect(isMorningHeartbeat(config, makeTime(20))).toBe(false);
+  });
+});
+
+describe("isEveningHeartbeat", () => {
+  it("returns true when current hour equals min(end, eveningHour)", () => {
+    // activeHours "8-21" → end=21; eveningHour=20 → evening at 20
+    const config = makeConfig({ activeHours: "8-21", eveningHour: 20 });
+    expect(isEveningHeartbeat(config, makeTime(20))).toBe(true);
+  });
+
+  it("returns true when eveningHour is earlier than end", () => {
+    // activeHours "8-21" → end=21; eveningHour=19 → evening at 19
+    const config = makeConfig({ activeHours: "8-21", eveningHour: 19 });
+    expect(isEveningHeartbeat(config, makeTime(19))).toBe(true);
+    expect(isEveningHeartbeat(config, makeTime(21))).toBe(false);
+  });
+
+  it("returns true when end is less than eveningHour", () => {
+    // activeHours "8-18" → end=18; eveningHour=22 → evening at 18
+    const config = makeConfig({ activeHours: "8-18", eveningHour: 22 });
+    expect(isEveningHeartbeat(config, makeTime(18))).toBe(true);
+    expect(isEveningHeartbeat(config, makeTime(22))).toBe(false);
+  });
+
+  it("returns false for non-evening hours", () => {
+    const config = makeConfig({ activeHours: "8-21", eveningHour: 20 });
+    expect(isEveningHeartbeat(config, makeTime(8))).toBe(false);
+    expect(isEveningHeartbeat(config, makeTime(15))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// appendMorningEveningContent
+// ---------------------------------------------------------------------------
+
+describe("appendMorningEveningContent", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "prompts-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns basePrompt unchanged outside morning/evening hours", async () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT_MORNING.md"), "morning content");
+    const base = "base prompt";
+    const result = await appendMorningEveningContent(base, config, tmpDir, makeTime(12));
+    expect(result).toBe(base);
+  });
+
+  it("appends HEARTBEAT_MORNING.md content at morning hour", async () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT_MORNING.md"), "morning content");
+    const result = await appendMorningEveningContent("base", config, tmpDir, makeTime(8));
+    expect(result).toBe("base\n\nmorning content");
+  });
+
+  it("appends HEARTBEAT_EVENING.md content at evening hour", async () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT_EVENING.md"), "evening content");
+    const result = await appendMorningEveningContent("base", config, tmpDir, makeTime(20));
+    expect(result).toBe("base\n\nevening content");
+  });
+
+  it("replaces {{DAILY_LOG}} placeholder with today's log path", async () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
+    const now = new Date("2026-03-28T20:00:00.000Z");
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT_EVENING.md"), "Log: {{DAILY_LOG}}");
+    const result = await appendMorningEveningContent("base", config, tmpDir, now);
+    expect(result).toContain("daily/2026-03-28.jsonl");
+    expect(result).not.toContain("{{DAILY_LOG}}");
+  });
+
+  it("returns basePrompt unchanged when template file is missing", async () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
+    const base = "base prompt";
+    const result = await appendMorningEveningContent(base, config, tmpDir, makeTime(8));
+    expect(result).toBe(base);
+  });
+
+  it("returns basePrompt unchanged when template file is empty", async () => {
+    const config = makeConfig({ activeHours: "8-21", morningHour: 8, eveningHour: 20 });
+    await fs.writeFile(path.join(tmpDir, "HEARTBEAT_MORNING.md"), "");
+    const base = "base prompt";
+    const result = await appendMorningEveningContent(base, config, tmpDir, makeTime(8));
+    expect(result).toBe(base);
   });
 });

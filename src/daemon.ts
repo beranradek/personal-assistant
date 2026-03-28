@@ -40,7 +40,7 @@ import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
-import { resolveHeartbeatPrompt } from "./heartbeat/prompts.js";
+import { resolveHeartbeatPrompt, appendMorningEveningContent } from "./heartbeat/prompts.js";
 import { createCronToolManager } from "./cron/tool.js";
 import { handleExec } from "./exec/tool.js";
 import { getSession, listSessions } from "./exec/process-registry.js";
@@ -213,9 +213,14 @@ export async function startDaemon(configDir: string): Promise<void> {
   }
 
   // 8. Start heartbeat scheduler
-  const heartbeat = createHeartbeatScheduler(config, () => {
+  const heartbeat = createHeartbeatScheduler(config, async () => {
     const events = drainSystemEvents();
-    const prompt = resolveHeartbeatPrompt(events);
+    const basePrompt = resolveHeartbeatPrompt(events);
+    const prompt = await appendMorningEveningContent(
+      basePrompt,
+      config,
+      config.security.workspace,
+    );
     const heartbeatMessage: AdapterMessage = {
       source: "heartbeat",
       sourceId: config.heartbeat.deliverTo,
