@@ -1,4 +1,6 @@
-### Zakonči den zapsáním a zlepšením důležitého
+A teď už nastal večer...
+
+### Zakonči teď den zapsáním a zlepšením důležitého - navíc proveď:
 
 Na základě dnešních zkušeností a konverzací z daily logu se zkus proaktivně poučit a
 zapamatovat si důležité věci/ponaučení z chyb a problémů (lessons learned),
