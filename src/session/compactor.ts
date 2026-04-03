@@ -124,43 +124,10 @@ async function summarizeWithAnthropic(
   conversationText: string,
   model: string,
 ): Promise<string> {
-  const apiKey = process.env["ANTHROPIC_API_KEY"];
-  if (!apiKey) {
-    throw new Error(
-      "ANTHROPIC_API_KEY is not set — cannot summarize conversation",
-    );
-  }
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: SUMMARY_PROMPT + conversationText + "\n</conversation>",
-        },
-      ],
-    }),
-  });
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Anthropic API error (${response.status}): ${body}`);
-  }
-  const data = (await response.json()) as {
-    content: Array<{ type: string; text?: string }>;
-  };
-  const text = data.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("");
-  if (!text) throw new Error("Empty summary returned from Anthropic API");
-  return text;
+  return callAnthropicWithPrompt(
+    SUMMARY_PROMPT + conversationText + "\n</conversation>",
+    model,
+  );
 }
 
 async function summarizeWithOpenAI(
