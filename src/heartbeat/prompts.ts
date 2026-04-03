@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { SystemEvent, Config } from "../core/types.js";
 import { parseActiveHours } from "./scheduler.js";
+import { loadState, saveState, diffState } from "./state.js";
 
 /**
  * Standard heartbeat prompt — generates a fresh timestamp on each call
@@ -80,6 +81,61 @@ export function isEveningHeartbeat(config: Config, now?: Date): boolean {
 function getDailyLogRelativePath(now?: Date): string {
   const date = (now ?? new Date()).toISOString().slice(0, 10); // YYYY-MM-DD
   return `daily/${date}.jsonl`;
+}
+
+/**
+ * Build a diff-aware heartbeat prompt that highlights only what changed since
+ * the last heartbeat. If stateDiffing is disabled or there is no previous state,
+ * returns `basePrompt` unchanged. Always saves the new state before returning.
+ *
+ * @param basePrompt - The base prompt string (from resolveHeartbeatPrompt)
+ * @param dataDir - Directory where heartbeat-state.json is persisted
+ * @param currentContext - Current context items to diff against previous state
+ * @param enabled - Whether state diffing is enabled (config.heartbeat.stateDiffing)
+ */
+export async function buildDiffAwarePrompt(
+  basePrompt: string,
+  dataDir: string,
+  currentContext: string[],
+  enabled: boolean,
+): Promise<string> {
+  // Always save current state so next run has a baseline
+  const now = new Date().toISOString();
+
+  if (!enabled) {
+    await saveState(dataDir, { lastRun: now, snapshot: {}, notifiedItems: currentContext });
+    return basePrompt;
+  }
+
+  const previous = await loadState(dataDir);
+
+  // Save new state immediately (even before building prompt, so a crash doesn't lose state)
+  await saveState(dataDir, { lastRun: now, snapshot: {}, notifiedItems: currentContext });
+
+  if (!previous) {
+    // First run — no diff to report
+    return basePrompt;
+  }
+
+  const { newItems, resolvedItems, unchanged } = diffState(previous, currentContext);
+
+  // If nothing changed, no diff section needed
+  if (newItems.length === 0 && resolvedItems.length === 0) {
+    return basePrompt;
+  }
+
+  const parts: string[] = [
+    `Changes since last heartbeat at ${previous.lastRun}:`,
+  ];
+  if (newItems.length > 0) {
+    parts.push(`New: ${newItems.join("; ")}.`);
+  }
+  if (resolvedItems.length > 0) {
+    parts.push(`Resolved: ${resolvedItems.join("; ")}.`);
+  }
+  parts.push(`Unchanged: ${unchanged.length} item(s).`);
+
+  return `${basePrompt}\n\n${parts.join(" ")}`;
 }
 
 /**

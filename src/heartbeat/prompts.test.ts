@@ -10,6 +10,7 @@ import {
   isMorningHeartbeat,
   isEveningHeartbeat,
   appendMorningEveningContent,
+  buildDiffAwarePrompt,
   EXEC_EVENT_PROMPT,
   CRON_EVENT_PROMPT,
   HEARTBEAT_PROMPT,
@@ -286,5 +287,79 @@ describe("appendMorningEveningContent", () => {
     const base = "base prompt";
     const result = await appendMorningEveningContent(base, config, tmpDir, makeTime(8));
     expect(result).toBe(base);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDiffAwarePrompt
+// ---------------------------------------------------------------------------
+
+describe("buildDiffAwarePrompt", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "prompts-diff-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns basePrompt unchanged when stateDiffing is disabled", async () => {
+    const base = "base prompt";
+    const result = await buildDiffAwarePrompt(base, tmpDir, ["item A"], false);
+    expect(result).toBe(base);
+  });
+
+  it("saves state even when stateDiffing is disabled", async () => {
+    await buildDiffAwarePrompt("base", tmpDir, ["item A"], false);
+    const stateFile = path.join(tmpDir, "heartbeat-state.json");
+    await expect(fs.access(stateFile)).resolves.toBeUndefined();
+  });
+
+  it("returns basePrompt unchanged on first run (no previous state)", async () => {
+    const base = "base prompt";
+    const result = await buildDiffAwarePrompt(base, tmpDir, ["item A"], true);
+    expect(result).toBe(base);
+  });
+
+  it("saves state on first run", async () => {
+    await buildDiffAwarePrompt("base", tmpDir, ["item A"], true);
+    const stateFile = path.join(tmpDir, "heartbeat-state.json");
+    await expect(fs.access(stateFile)).resolves.toBeUndefined();
+  });
+
+  it("appends diff section when new items appear since last run", async () => {
+    // First run — establish baseline
+    await buildDiffAwarePrompt("base", tmpDir, ["meeting at 3pm"], true);
+    // Second run — new item added
+    const result = await buildDiffAwarePrompt("base", tmpDir, ["meeting at 3pm", "new email"], true);
+    expect(result).toContain("new email");
+    expect(result).toContain("New:");
+  });
+
+  it("appends diff section when items are resolved", async () => {
+    // First run
+    await buildDiffAwarePrompt("base", tmpDir, ["task A"], true);
+    // Second run — task A gone
+    const result = await buildDiffAwarePrompt("base", tmpDir, [], true);
+    expect(result).toContain("Resolved:");
+    expect(result).toContain("task A");
+  });
+
+  it("returns basePrompt unchanged when nothing changed between runs", async () => {
+    const items = ["meeting at 3pm", "task A"];
+    // First run
+    await buildDiffAwarePrompt("base", tmpDir, items, true);
+    // Second run — same items
+    const result = await buildDiffAwarePrompt("base", tmpDir, items, true);
+    expect(result).toBe("base");
+  });
+
+  it("includes last heartbeat timestamp in diff section", async () => {
+    await buildDiffAwarePrompt("base", tmpDir, ["item A"], true);
+    const result = await buildDiffAwarePrompt("base", tmpDir, ["item A", "item B"], true);
+    // Should reference when last heartbeat ran (ISO timestamp)
+    expect(result).toMatch(/Changes since last heartbeat at \d{4}-\d{2}-\d{2}T/);
   });
 });

@@ -40,7 +40,7 @@ import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
-import { resolveHeartbeatPrompt, appendMorningEveningContent } from "./heartbeat/prompts.js";
+import { resolveHeartbeatPrompt, appendMorningEveningContent, buildDiffAwarePrompt } from "./heartbeat/prompts.js";
 import { createCronToolManager } from "./cron/tool.js";
 import { handleExec } from "./exec/tool.js";
 import { getSession, listSessions } from "./exec/process-registry.js";
@@ -226,8 +226,15 @@ export async function startDaemon(configDir: string): Promise<void> {
   const heartbeat = createHeartbeatScheduler(config, async () => {
     const events = drainSystemEvents();
     const basePrompt = resolveHeartbeatPrompt(events);
-    const prompt = await appendMorningEveningContent(
+    const currentContext = events.map((e) => e.text);
+    const diffedPrompt = await buildDiffAwarePrompt(
       basePrompt,
+      config.security.dataDir,
+      currentContext,
+      config.heartbeat.stateDiffing,
+    );
+    const prompt = await appendMorningEveningContent(
+      diffedPrompt,
       config,
       config.security.workspace,
     );
