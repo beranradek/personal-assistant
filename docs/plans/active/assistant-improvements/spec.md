@@ -276,7 +276,7 @@ interface IntegrationModule {
   id: string;
   manifest: IntegrationManifest;       // Discovery metadata + rate limits
   authProfiles: AuthProfileConfig[];   // Credential configs
-  routes: (router: Router) => void;    // Register HTTP endpoints
+  routes: (router: SimpleRouter) => void; // Register HTTP endpoints
   healthCheck: () => Promise<boolean>; // Verify connectivity
 }
 ```
@@ -285,7 +285,7 @@ Modules are packaged by feature but connected to the integ-api at startup:
 
 ```
 src/integ-api/
-├── server.ts                    # HTTP server, localhost-only
+├── server.ts                    # Node.js built-in http module, localhost-only (zero new deps)
 ├── auth/
 │   ├── manager.ts               # Auth profile rotation, refresh, cooldown
 │   └── store.ts                 # Credential storage (0o600 permissions)
@@ -308,6 +308,8 @@ src/integ-api/
 ```
 
 Adding a future integration (e.g., Linear, Notion) = create a new folder under `integrations/`, implement `IntegrationModule`, register in `registry.ts`. No changes to core integ-api code.
+
+**HTTP framework decision:** Use Node.js built-in `http` module with a thin custom router (~50 lines). The project has zero HTTP server dependencies today — no reason to add Express for what is essentially a localhost-only API with ~10 routes. A `SimpleRouter` class handles method+path matching, param extraction (`:id`), and JSON request/response helpers. If routing complexity grows significantly (15+ routes, nested middleware chains), Express can be added later as a drop-in replacement.
 
 **How it works end-to-end:**
 1. `integ-api` starts as a separate process (spawned by daemon or standalone via `pa integapi serve`)
@@ -453,6 +455,23 @@ Phase 4: Draft Management (#4) + Habits Tracking (#5)
          -> Highest-value proactive features
          -> Depend on integrations for full power
 ```
+
+## Clarifications
+
+Q5: Integration API process isolation — for hard credential isolation, integ-api should ALWAYS run as separate child process from daemon (not in-process). Daemon spawns it, never loads credentials directly. Agree?
+A5: Agree.
+
+Q4: Habits auto-detection — should detection rules be limited to predefined safe commands (git, wc) or allow arbitrary user-configured shell commands? Arbitrary adds flexibility but expands attack surface.
+A4: We should use generous safe whitelist.
+
+Q3: Gmail access scope — Phase 3 uses gmail.readonly. Draft sending (Phase 4) would need gmail.send scope added later. Approved drafts initially just move to sent/ folder without actual sending. Agree?
+A3: Agree.
+
+Q2: Integration API HTTP framework — plan uses Node.js built-in http module (zero new deps) instead of Express. Project has no HTTP server deps currently. Start minimal, add Express later if needed?
+A2: Ok, start minimal.
+
+Q1: Daily Reflection writes — plan proposes always creating memory/reflection-YYYY-MM-DD.md files instead of appending to MEMORY.md, keeping MEMORY.md user-curated. Agree?
+A1: Yes, agree. Separate files will be good for this specific feature.
 
 ## What Was Deliberately Excluded
 
