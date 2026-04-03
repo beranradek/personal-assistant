@@ -44,6 +44,8 @@ import { resolveHeartbeatPrompt, appendMorningEveningContent, buildDiffAwareProm
 import { createCronToolManager } from "./cron/tool.js";
 import { handleExec } from "./exec/tool.js";
 import { getSession, listSessions } from "./exec/process-registry.js";
+import cron from "node-cron";
+import { runDailyReflection } from "./memory/daily-reflection.js";
 import { createLogger } from "./core/logger.js";
 import type { Adapter, AdapterMessage } from "./core/types.js";
 
@@ -246,15 +248,27 @@ export async function startDaemon(configDir: string): Promise<void> {
     queue.enqueue(heartbeatMessage);
   });
 
-  // 9. Load cron jobs and arm timer
+  // 9. Schedule daily reflection (before morning heartbeat by default: "0 7 * * *")
+  let reflectionTask: { stop(): void } | null = null;
+  if (config.reflection.enabled) {
+    reflectionTask = cron.schedule(config.reflection.schedule, () => {
+      log.info("Daily reflection firing");
+      Promise.resolve(runDailyReflection(config, config.security.workspace)).catch((err) => {
+        log.error({ err }, "Daily reflection failed");
+      });
+    });
+    log.info({ schedule: config.reflection.schedule }, "Daily reflection scheduled");
+  }
+
+  // 10. Load cron jobs and arm timer
   await cronManager.rearmTimer();
 
-  // 10. Start processing loop (non-blocking -- processLoop runs until stopped)
+  // 11. Start processing loop (non-blocking -- processLoop runs until stopped)
   queue.processLoop(backend, config, router);
 
   log.info("Daemon started");
 
-  // 11. Graceful shutdown
+  // 12. Graceful shutdown
   const SHUTDOWN_TIMEOUT_MS = 10_000;
   let shuttingDown = false;
 
@@ -287,6 +301,9 @@ export async function startDaemon(configDir: string): Promise<void> {
 
     // Stop heartbeat scheduler
     heartbeat.stop();
+
+    // Stop daily reflection cron
+    if (reflectionTask) reflectionTask.stop();
 
     // Stop cron timer
     cronManager.stop();
