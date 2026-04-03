@@ -41,6 +41,7 @@ import { createSlackAdapter } from "./adapters/slack.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
 import { resolveHeartbeatPrompt, appendMorningEveningContent } from "./heartbeat/prompts.js";
+import { pullWorkspace, pushWorkspace } from "./heartbeat/git-sync.js";
 import { createCronToolManager } from "./cron/tool.js";
 import { handleExec } from "./exec/tool.js";
 import { getSession, listSessions } from "./exec/process-registry.js";
@@ -214,6 +215,11 @@ export async function startDaemon(configDir: string): Promise<void> {
 
   // 8. Start heartbeat scheduler
   const heartbeat = createHeartbeatScheduler(config, async () => {
+    // Pull before heartbeat (with stash) so the workspace is current
+    if (config.heartbeat.gitSync.enabled) {
+      await pullWorkspace(config.security.workspace, config.heartbeat.gitSync.remote);
+    }
+
     const events = drainSystemEvents();
     const basePrompt = resolveHeartbeatPrompt(events);
     const prompt = await appendMorningEveningContent(
@@ -227,6 +233,19 @@ export async function startDaemon(configDir: string): Promise<void> {
       text: prompt,
     };
     queue.enqueue(heartbeatMessage);
+
+    // Push after the agent has had time to complete the heartbeat turn.
+    // Using a deferred push (60 s) avoids coupling to the queue processing loop.
+    if (config.heartbeat.gitSync.enabled) {
+      const { workspace, } = config.security;
+      const { remote } = config.heartbeat.gitSync;
+      const pushTimer = setTimeout(() => {
+        pushWorkspace(workspace, remote).catch((err) => {
+          log.error({ err }, "Unexpected error in pushWorkspace");
+        });
+      }, 60_000);
+      pushTimer.unref();
+    }
   });
 
   // 9. Load cron jobs and arm timer
