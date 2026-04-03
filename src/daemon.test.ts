@@ -95,6 +95,16 @@ vi.mock("./exec/process-registry.js", () => ({
   listSessions: vi.fn(),
 }));
 
+vi.mock("./memory/daily-reflection.js", () => ({
+  runDailyReflection: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("node-cron", () => ({
+  default: {
+    schedule: vi.fn().mockReturnValue({ stop: vi.fn() }),
+  },
+}));
+
 vi.mock("./backends/factory.js", () => ({
   createBackend: vi.fn(),
 }));
@@ -200,6 +210,24 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       skipGitRepoCheck: true,
       configOverrides: {},
     },
+    reflection: {
+      enabled: false,
+      schedule: "0 7 * * *",
+      maxDailyLogEntries: 500,
+    },
+    integApi: {
+      enabled: false,
+      port: 19100,
+      bind: "127.0.0.1",
+      inboundRateLimit: 100,
+      contentFilter: { redactPatterns: [], maxBodyLength: 50000 },
+      services: {
+        gmail: { enabled: false, scopes: [] },
+        calendar: { enabled: false, scopes: [] },
+      },
+    },
+    habits: { enabled: false, pillars: [] },
+    drafts: { enabled: false, ttlHours: 24, autoScan: false },
     ...overrides,
   };
 }
