@@ -18,6 +18,7 @@
  */
 
 import * as http from "node:http";
+import * as crypto from "node:crypto";
 import { createLogger } from "../../core/logger.js";
 import type { CredentialStore } from "./store.js";
 import type { OAuth2Credentials } from "./manager.js";
@@ -69,6 +70,15 @@ interface TokenExchangeResponse {
   expires_in: number;
   token_type: string;
   scope?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Escape HTML special characters to prevent XSS in browser responses. */
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +176,8 @@ export async function runGoogleOAuthSetup(
   const port = options.callbackPort ?? DEFAULT_CALLBACK_PORT;
   const redirectUri = `http://localhost:${port}/oauth/callback`;
 
-  // CSRF state
-  const state = Math.random().toString(36).slice(2);
+  // CSRF state (cryptographically secure random token)
+  const state = crypto.randomBytes(16).toString("hex");
 
   const authUrl = generateAuthUrl(options.clientId, options.scopes, redirectUri, state);
 
@@ -229,7 +239,7 @@ async function waitForCallback(
       if (errorParam) {
         res.writeHead(400, { "Content-Type": "text/html" });
         res.end(
-          `<h1>Authorization Failed</h1><p>Error: ${errorParam}</p>` +
+          `<h1>Authorization Failed</h1><p>Error: ${escapeHtml(errorParam)}</p>` +
             `<p>You can close this tab.</p>`,
         );
         server.close();
@@ -287,7 +297,7 @@ async function waitForCallback(
         resolve(credentials);
       } catch (err) {
         res.writeHead(500, { "Content-Type": "text/html" });
-        res.end(`<h1>Token Exchange Failed</h1><p>${String(err)}</p><p>You can close this tab.</p>`);
+        res.end(`<h1>Token Exchange Failed</h1><p>${escapeHtml(String(err))}</p><p>You can close this tab.</p>`);
         server.close();
         reject(err instanceof Error ? err : new Error(String(err)));
       }
