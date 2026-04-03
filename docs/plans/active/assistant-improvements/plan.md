@@ -1,0 +1,1 @@
+Spec itself is sufficiently detailed. No plan needed.
