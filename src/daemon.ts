@@ -71,7 +71,14 @@ export async function startDaemon(configDir: string): Promise<void> {
   const indexer = createIndexer(store, embedder);
 
   // Sync memory files into the vector store on startup
-  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+  const memoryFiles = collectMemoryFiles(
+    config.security.workspace,
+    config.memory.extraPaths,
+    {
+      indexDailyLogs: config.memory.indexDailyLogs,
+      dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
+    },
+  );
   await indexer.syncFiles(memoryFiles);
 
   // Guard against concurrent syncFiles calls (watcher + periodic timer can overlap)
@@ -80,7 +87,10 @@ export async function startDaemon(configDir: string): Promise<void> {
     if (syncInProgress) return;
     syncInProgress = true;
     try {
-      const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+      const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
+        indexDailyLogs: config.memory.indexDailyLogs,
+        dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
+      });
       log.info({ fileCount: files.length, reason }, "Reindexing memory files");
       await indexer.syncFiles(files);
     } catch (err) {

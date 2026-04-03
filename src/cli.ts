@@ -117,7 +117,10 @@ async function startMcpServer(configDir: string): Promise<void> {
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
-  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
+    indexDailyLogs: config.memory.indexDailyLogs,
+    dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
+  });
   await indexer.syncFiles(memoryFiles);
 
   const searchMemory = createRobustMemorySearch({

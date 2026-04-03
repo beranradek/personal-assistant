@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { createLogger } from "../core/logger.js";
 import type { EmbeddingProvider } from "./embeddings.js";
@@ -20,6 +21,58 @@ export interface Indexer {
   isDirty(): boolean;
   syncIfDirty(filePaths: string[]): Promise<void>;
   close(): void;
+}
+
+// ─── preprocessContent ──────────────────────────────────────────────
+
+/**
+ * Convert raw file content into searchable text before chunking.
+ *
+ * For .jsonl files (daily audit logs): parse each line as JSON, extract the
+ * meaningful text from interaction entries (timestamp + role + content), and
+ * skip tool_use/tool_result noise. Returns a human-readable multi-line string.
+ *
+ * For all other files: returns rawContent unchanged.
+ */
+export function preprocessContent(filePath: string, rawContent: string): string {
+  if (!path.extname(filePath).toLowerCase().endsWith(".jsonl")) {
+    return rawContent;
+  }
+
+  const lines = rawContent.split("\n");
+  const textParts: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      // Skip malformed lines
+      continue;
+    }
+
+    // Only process interaction entries — skip tool_call and error entries
+    if (entry["type"] !== "interaction") continue;
+
+    const timestamp = typeof entry["timestamp"] === "string" ? entry["timestamp"] : "";
+    const userMsg = typeof entry["userMessage"] === "string" ? entry["userMessage"].trim() : "";
+    const assistantMsg =
+      typeof entry["assistantResponse"] === "string"
+        ? entry["assistantResponse"].trim()
+        : "";
+
+    if (userMsg) {
+      textParts.push(`[${timestamp}] user: ${userMsg}`);
+    }
+    if (assistantMsg) {
+      textParts.push(`[${timestamp}] assistant: ${assistantMsg}`);
+    }
+  }
+
+  return textParts.join("\n");
 }
 
 // ─── chunkText ──────────────────────────────────────────────────────
@@ -144,8 +197,11 @@ export function createIndexer(
         // Delete old chunks for this file
         store.deleteChunksForFile(filePath);
 
+        // Extract searchable text (JSONL audit logs get role+content extraction)
+        const searchableText = preprocessContent(filePath, content);
+
         // Chunk the text
-        const chunks = chunkText(content, { tokens: 400, overlap: 80 });
+        const chunks = chunkText(searchableText, { tokens: 400, overlap: 80 });
 
         if (chunks.length === 0) {
           // Empty file - just update the hash

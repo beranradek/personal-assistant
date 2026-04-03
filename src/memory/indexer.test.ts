@@ -2,9 +2,80 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import { chunkText, createIndexer, type Chunk, type Indexer } from "./indexer.js";
+import { chunkText, createIndexer, preprocessContent, type Chunk, type Indexer } from "./indexer.js";
 import { createVectorStore, type VectorStore } from "./vector-store.js";
 import { createMockEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
+
+// ─── preprocessContent ───────────────────────────────────────────────
+
+describe("preprocessContent", () => {
+  it("returns raw content unchanged for .md files", () => {
+    const raw = "# Hello\nsome content";
+    expect(preprocessContent("/path/to/file.md", raw)).toBe(raw);
+  });
+
+  it("returns raw content unchanged for .ts files", () => {
+    const raw = "const x = 1;";
+    expect(preprocessContent("/path/to/file.ts", raw)).toBe(raw);
+  });
+
+  it("extracts user and assistant messages from .jsonl interaction entries", () => {
+    const entry = JSON.stringify({
+      timestamp: "2026-04-01T10:00:00Z",
+      type: "interaction",
+      source: "terminal",
+      sessionKey: "abc",
+      userMessage: "What is the weather?",
+      assistantResponse: "It's sunny today.",
+    });
+    const result = preprocessContent("/path/daily/2026-04-01.jsonl", entry);
+
+    expect(result).toContain("user: What is the weather?");
+    expect(result).toContain("assistant: It's sunny today.");
+    expect(result).toContain("2026-04-01T10:00:00Z");
+  });
+
+  it("skips tool_call entries from .jsonl files", () => {
+    const entry = JSON.stringify({
+      timestamp: "2026-04-01T10:00:00Z",
+      type: "tool_call",
+      source: "terminal",
+      sessionKey: "abc",
+      toolName: "bash",
+      toolInput: { command: "ls" },
+      toolResult: { output: "file.txt" },
+    });
+    const result = preprocessContent("/path/daily/2026-04-01.jsonl", entry);
+
+    expect(result).toBe("");
+  });
+
+  it("skips error entries from .jsonl files", () => {
+    const entry = JSON.stringify({
+      timestamp: "2026-04-01T10:00:00Z",
+      type: "error",
+      source: "terminal",
+      sessionKey: "abc",
+      errorMessage: "Something failed",
+    });
+    const result = preprocessContent("/path/daily/2026-04-01.jsonl", entry);
+
+    expect(result).toBe("");
+  });
+
+  it("skips malformed JSONL lines", () => {
+    const raw = "not valid json\n" + JSON.stringify({ timestamp: "2026-04-01T10:00:00Z", type: "interaction", source: "t", sessionKey: "k", userMessage: "hi", assistantResponse: "hello" });
+    const result = preprocessContent("/path/daily/2026-04-01.jsonl", raw);
+
+    expect(result).toContain("user: hi");
+    expect(result).toContain("assistant: hello");
+    expect(result).not.toContain("not valid json");
+  });
+
+  it("handles empty .jsonl file", () => {
+    expect(preprocessContent("/path/daily/2026-04-01.jsonl", "")).toBe("");
+  });
+});
 
 // ─── chunkText ───────────────────────────────────────────────────────
 
