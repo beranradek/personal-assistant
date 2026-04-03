@@ -23,6 +23,7 @@ const TEMPLATE_FILES = [
   "HEARTBEAT.md",
   "HEARTBEAT_MORNING.md",
   "HEARTBEAT_EVENING.md",
+  "HABITS.md",
 ] as const;
 
 // ---------------------------------------------------------------------------
