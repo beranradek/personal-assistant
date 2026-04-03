@@ -154,22 +154,20 @@ export function extractPlainText(part: GmailMessagePart): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch from the Gmail API with auth token and outbound rate limit check.
- * Throws AuthFailedError or GmailRateLimitError on failure.
+ * Fetch from the Gmail API with auth token.
+ * Throws AuthFailedError or a generic Error on auth failure.
  *
  * On 401 from Gmail, marks the profile as failed and throws so the caller
  * can retry with a fresh token.
+ * On 403 from Gmail (scope/permission error), throws AuthFailedError immediately
+ * (non-retryable — refreshing the token will not fix a scope misconfiguration).
  */
 async function gmailFetch(
   url: string,
   token: string,
   profileId: string,
   authManager: AuthManager,
-  rateLimiter: OutboundRateLimiter,
 ): Promise<Response> {
-  // Check outbound rate limit before making the call
-  rateLimiter.checkAndRecord();
-
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -177,9 +175,15 @@ async function gmailFetch(
     },
   });
 
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     authManager.markFailed(profileId);
     throw new Error(`Gmail API auth error: HTTP ${response.status}`);
+  }
+
+  if (response.status === 403) {
+    // 403 = valid token but insufficient scope — retrying with a different token
+    // will not help; this is a configuration error.
+    throw new AuthFailedError("gmail", 1);
   }
 
   return response;
@@ -187,29 +191,39 @@ async function gmailFetch(
 
 /**
  * Call Gmail API with automatic token refresh on 401.
- * Tries getAccessToken → fetch; if auth error, marks failed, retries once.
+ * Rate limit is checked once per logical request (not per retry attempt).
+ * Tries getAccessToken → fetch; if 401, marks failed, retries once with fresh token.
  */
 async function callGmailApi(
   url: string,
   authManager: AuthManager,
   rateLimiter: OutboundRateLimiter,
 ): Promise<Response> {
+  // Check outbound rate limit once for the logical request (not per retry attempt)
+  rateLimiter.checkAndRecord();
+
   let tokenResult = await authManager.getAccessToken("gmail");
 
   try {
-    const response = await gmailFetch(url, tokenResult.token, tokenResult.profileId, authManager, rateLimiter);
+    const response = await gmailFetch(url, tokenResult.token, tokenResult.profileId, authManager);
     authManager.markSuccess(tokenResult.profileId);
     return response;
   } catch (err) {
-    if (err instanceof GmailRateLimitError) {
-      throw err;
-    }
-    // Auth error — retry with next available token
+    if (err instanceof GmailRateLimitError) throw err;
+    // AuthFailedError from 403 (scope error) — non-retryable
+    if (err instanceof AuthFailedError) throw err;
+    // Generic auth error (401) — retry with next available token
     log.warn({ url }, "Gmail API auth error on first attempt, retrying with fresh token");
-    tokenResult = await authManager.getAccessToken("gmail");
-    const response = await gmailFetch(url, tokenResult.token, tokenResult.profileId, authManager, rateLimiter);
-    authManager.markSuccess(tokenResult.profileId);
-    return response;
+    try {
+      tokenResult = await authManager.getAccessToken("gmail");
+      const response = await gmailFetch(url, tokenResult.token, tokenResult.profileId, authManager);
+      authManager.markSuccess(tokenResult.profileId);
+      return response;
+    } catch (retryErr) {
+      if (retryErr instanceof GmailRateLimitError) throw retryErr;
+      if (retryErr instanceof AuthFailedError) throw retryErr;
+      throw new AuthFailedError("gmail", 2);
+    }
   }
 }
 
@@ -340,7 +354,9 @@ export function registerGmailRoutes(
       const from = getHeader(headers, "From");
       const to = getHeader(headers, "To");
       const date = getHeader(headers, "Date");
-      const body = msg.payload ? extractPlainText(msg.payload) : "";
+      // Truncate body to prevent memory exhaustion from large emails (newsletters, etc.)
+      const MAX_BODY_CHARS = 50_000;
+      const body = msg.payload ? extractPlainText(msg.payload).slice(0, MAX_BODY_CHARS) : "";
 
       res.json({
         id: msg.id,
