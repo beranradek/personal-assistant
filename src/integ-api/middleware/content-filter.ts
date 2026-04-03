@@ -61,7 +61,13 @@ export interface ContentFilter {
 
 /** Compile redactPatterns into RegExp objects (global flag for replaceAll). */
 function compilePatterns(patterns: string[]): RegExp[] {
-  return patterns.map((p) => new RegExp(p, "g"));
+  return patterns.map((p) => {
+    try {
+      return new RegExp(p, "g");
+    } catch (err) {
+      throw new Error(`content-filter: invalid redactPattern "${p}": ${(err as Error).message}`);
+    }
+  });
 }
 
 /** Recursively redact all string values in an arbitrary JSON value. */
@@ -117,7 +123,9 @@ export function createContentFilter(config: {
       const redacted = regexps.length > 0 ? redactValue(data, regexps) : data;
 
       // Step 2: Check serialized length
-      const serialized = JSON.stringify(redacted);
+      // JSON.stringify returns undefined for undefined input (not a string),
+      // so guard explicitly to avoid a TypeError on .length below.
+      const serialized = JSON.stringify(redacted) ?? "";
       if (serialized.length <= maxBodyLength) {
         return redacted;
       }
