@@ -181,7 +181,6 @@ export const ConfigSchema = z.object({
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
-export type IntegApiConfig = z.infer<typeof IntegApiConfigSchema>;
 
 // ---------------------------------------------------------------------------
 // Adapter types
