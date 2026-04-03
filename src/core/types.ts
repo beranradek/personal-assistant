@@ -33,6 +33,11 @@ export const AdaptersConfigSchema = z.object({
   slack: SlackConfigSchema,
 });
 
+export const HeartbeatGitSyncConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  remote: z.string().default("origin"),
+});
+
 export const HeartbeatConfigSchema = z.object({
   enabled: z.boolean(),
   intervalMinutes: z.number().int().positive(),
@@ -40,6 +45,8 @@ export const HeartbeatConfigSchema = z.object({
   morningHour: z.number().int().min(0).max(23).default(8),
   eveningHour: z.number().int().min(0).max(23).default(20),
   deliverTo: z.enum(["last", "telegram", "slack"]),
+  stateDiffing: z.boolean().default(true),
+  gitSync: HeartbeatGitSyncConfigSchema.default(() => HeartbeatGitSyncConfigSchema.parse({})),
 });
 
 export const RateLimiterConfigSchema = z.object({
@@ -79,6 +86,7 @@ export const SessionConfigSchema = z.object({
   compactionEnabled: z.boolean(),
   summarizationEnabled: z.boolean().default(true),
   summarizationModel: z.string().default("claude-haiku-4-5-20251001"),
+  preCompactionFlush: z.boolean().default(true),
 });
 
 export const HybridWeightsSchema = z.object({
@@ -98,9 +106,61 @@ export const SearchConfigSchema = z.object({
 export const MemoryConfigSchema = z.object({
   search: SearchConfigSchema,
   extraPaths: z.array(z.string()),
+  indexDailyLogs: z.boolean().default(true),
+  dailyLogRetentionDays: z.number().int().positive().default(90),
 });
 
 export const McpServerConfigSchema = z.record(z.string(), z.unknown());
+
+export const ReflectionConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  schedule: z.string().default("0 7 * * *"),
+  maxDailyLogEntries: z.number().int().positive().default(500),
+});
+
+export const IntegApiContentFilterConfigSchema = z.object({
+  redactPatterns: z.array(z.string()).default([]),
+  maxBodyLength: z.number().int().positive().default(50000),
+});
+
+export const IntegApiServiceConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  scopes: z.array(z.string()).default([]),
+});
+
+export const IntegApiServicesConfigSchema = z.object({
+  gmail: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
+  calendar: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
+});
+
+export const IntegApiConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  port: z.number().int().positive().default(19100),
+  bind: z.string().default("127.0.0.1"),
+  inboundRateLimit: z.number().int().positive().default(100),
+  contentFilter: IntegApiContentFilterConfigSchema.default(() =>
+    IntegApiContentFilterConfigSchema.parse({}),
+  ),
+  services: IntegApiServicesConfigSchema.default(() => IntegApiServicesConfigSchema.parse({})),
+});
+
+export const HabitPillarSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  autoDetect: z.boolean().default(false),
+  detectionCommand: z.string().optional(),
+});
+
+export const HabitsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  pillars: z.array(HabitPillarSchema).default([]),
+});
+
+export const DraftsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  ttlHours: z.number().int().positive().default(24),
+  autoScan: z.boolean().default(false),
+});
 
 export const ConfigSchema = z.object({
   security: SecurityConfigSchema,
@@ -112,6 +172,10 @@ export const ConfigSchema = z.object({
   memory: MemoryConfigSchema,
   mcpServers: McpServerConfigSchema,
   codex: CodexConfigSchema,
+  reflection: ReflectionConfigSchema.default(() => ReflectionConfigSchema.parse({})),
+  integApi: IntegApiConfigSchema.default(() => IntegApiConfigSchema.parse({})),
+  habits: HabitsConfigSchema.default(() => HabitsConfigSchema.parse({})),
+  drafts: DraftsConfigSchema.default(() => DraftsConfigSchema.parse({})),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

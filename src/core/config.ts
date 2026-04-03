@@ -37,6 +37,8 @@ export const DEFAULTS: Config = {
     morningHour: 8,
     eveningHour: 20,
     deliverTo: "last",
+    stateDiffing: true,
+    gitSync: { enabled: true, remote: "origin" },
   },
   gateway: {
     maxQueueSize: 20,
@@ -49,6 +51,7 @@ export const DEFAULTS: Config = {
     compactionEnabled: true,
     summarizationEnabled: true,
     summarizationModel: "claude-haiku-4-5-20251001",
+    preCompactionFlush: true,
   },
   memory: {
     search: {
@@ -60,6 +63,33 @@ export const DEFAULTS: Config = {
       chunkOverlap: 80,
     },
     extraPaths: [],
+    indexDailyLogs: true,
+    dailyLogRetentionDays: 90,
+  },
+  reflection: {
+    enabled: true,
+    schedule: "0 7 * * *",
+    maxDailyLogEntries: 500,
+  },
+  integApi: {
+    enabled: false,
+    port: 19100,
+    bind: "127.0.0.1",
+    inboundRateLimit: 100,
+    contentFilter: { redactPatterns: [], maxBodyLength: 50000 },
+    services: {
+      gmail: { enabled: false, scopes: [] },
+      calendar: { enabled: false, scopes: [] },
+    },
+  },
+  habits: {
+    enabled: false,
+    pillars: [],
+  },
+  drafts: {
+    enabled: false,
+    ttlHours: 24,
+    autoScan: false,
   },
   mcpServers: {},
   codex: {
