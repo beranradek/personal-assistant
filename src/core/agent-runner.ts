@@ -31,6 +31,7 @@ import {
   summarizeConversation,
   appendCompactionEntry,
   loadLatestSummary,
+  flushPreCompactionContext,
 } from "../session/compactor.js";
 import { TtlMap, DAY_MS } from "./ttl-map.js";
 
@@ -240,6 +241,16 @@ async function compactSessionIfNeeded(
     const messages = await loadConversationHistory(sessionPath);
     // Need at least a few turns to produce a meaningful summary
     if (messages.length < 4) return;
+
+    // Flush key context to daily log before compacting
+    if (config.session.preCompactionFlush) {
+      await flushPreCompactionContext(
+        messages,
+        config.security.workspace,
+        sessionKey,
+        config.session.summarizationModel,
+      );
+    }
 
     let summary: string;
     if (config.session.summarizationEnabled) {

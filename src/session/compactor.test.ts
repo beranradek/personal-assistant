@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -6,6 +6,7 @@ import {
   loadConversationHistory,
   appendCompactionEntry,
   loadLatestSummary,
+  flushPreCompactionContext,
 } from "./compactor.js";
 
 // ---------------------------------------------------------------------------
@@ -181,5 +182,121 @@ describe("loadLatestSummary", () => {
       { role: "compaction", content: "latest", timestamp: "t3" },
     ]);
     expect(await loadLatestSummary(sessionPath)).toBe("latest");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// flushPreCompactionContext
+// ---------------------------------------------------------------------------
+
+describe("flushPreCompactionContext", () => {
+  let tmpDir: string;
+  let workspaceDir: string;
+  const SESSION_KEY = "terminal--default";
+
+  /** Helper to build a minimal Anthropic API success response. */
+  function mockAnthropicResponse(text: string): Response {
+    return new Response(
+      JSON.stringify({
+        content: [{ type: "text", text }],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flush-test-"));
+    workspaceDir = tmpDir;
+    process.env["ANTHROPIC_API_KEY"] = "test-key";
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env["ANTHROPIC_API_KEY"];
+  });
+
+  it("appends audit entry with context 'pre-compaction' when API succeeds", async () => {
+    const messages = Array.from({ length: 30 }, (_, i) => ({
+      role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      content: `Message ${i}`,
+    }));
+
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      mockAnthropicResponse("• Decision 1\n• Action item A"),
+    );
+
+    await flushPreCompactionContext(
+      messages,
+      workspaceDir,
+      SESSION_KEY,
+      "claude-haiku-4-5-20251001",
+    );
+
+    const today = new Date().toISOString().slice(0, 10);
+    const logPath = path.join(workspaceDir, "daily", `${today}.jsonl`);
+    const raw = await fs.readFile(logPath, "utf-8");
+    const entry = JSON.parse(raw.trim().split("\n")[0]!);
+    expect(entry.context).toBe("pre-compaction");
+    expect(entry.type).toBe("interaction");
+    expect(entry.sessionKey).toBe(SESSION_KEY);
+    expect(entry.assistantResponse).toBe("• Decision 1\n• Action item A");
+  });
+
+  it("logs a warning and does not throw when the API returns an error", async () => {
+    const messages = [
+      { role: "user" as const, content: "Hello" },
+      { role: "assistant" as const, content: "Hi" },
+    ];
+
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response("Service Unavailable", { status: 503 }),
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(
+      flushPreCompactionContext(messages, workspaceDir, SESSION_KEY),
+    ).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Pre-compaction flush failed"),
+      expect.any(String),
+    );
+  });
+
+  it("still writes extraction for trivial messages", async () => {
+    const messages = [
+      { role: "user" as const, content: "hi" },
+      { role: "assistant" as const, content: "hello" },
+    ];
+
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      mockAnthropicResponse("• No significant decisions"),
+    );
+
+    await flushPreCompactionContext(messages, workspaceDir, SESSION_KEY);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const logPath = path.join(workspaceDir, "daily", `${today}.jsonl`);
+    const raw = await fs.readFile(logPath, "utf-8");
+    expect(raw).toContain("pre-compaction");
+  });
+
+  it("includes conversation text in the API request prompt", async () => {
+    const messages = [
+      { role: "user" as const, content: "My important decision" },
+      { role: "assistant" as const, content: "Acknowledged" },
+    ];
+
+    let capturedBody: any;
+    vi.spyOn(global, "fetch").mockImplementationOnce(async (_url, opts) => {
+      capturedBody = JSON.parse((opts as any).body);
+      return mockAnthropicResponse("• Important decision captured");
+    });
+
+    await flushPreCompactionContext(messages, workspaceDir, SESSION_KEY);
+
+    const promptContent = capturedBody.messages[0].content as string;
+    expect(promptContent).toContain("My important decision");
+    expect(promptContent).toContain("Extract key decisions");
   });
 });

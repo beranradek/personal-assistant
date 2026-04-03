@@ -19,6 +19,7 @@
 
 import type { SessionMessage } from "../core/types.js";
 import { loadMessages } from "./store.js";
+import { appendAuditEntry } from "../memory/daily-log.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -77,14 +78,18 @@ function buildConversationText(messages: ConversationTurn[]): string {
     .join("\n\n");
 }
 
-async function summarizeWithAnthropic(
-  conversationText: string,
+/**
+ * Send a single user message to the Anthropic API and return the text response.
+ * Used by both summarization and pre-compaction extraction.
+ */
+async function callAnthropicWithPrompt(
+  userContent: string,
   model: string,
 ): Promise<string> {
   const apiKey = process.env["ANTHROPIC_API_KEY"];
   if (!apiKey) {
     throw new Error(
-      "ANTHROPIC_API_KEY is not set — cannot summarize conversation",
+      "ANTHROPIC_API_KEY is not set — cannot call Anthropic API",
     );
   }
   const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -97,12 +102,7 @@ async function summarizeWithAnthropic(
     body: JSON.stringify({
       model,
       max_tokens: 1024,
-      messages: [
-        {
-          role: "user",
-          content: SUMMARY_PROMPT + conversationText + "\n</conversation>",
-        },
-      ],
+      messages: [{ role: "user", content: userContent }],
     }),
   });
   if (!response.ok) {
@@ -116,8 +116,18 @@ async function summarizeWithAnthropic(
     .filter((b) => b.type === "text")
     .map((b) => b.text ?? "")
     .join("");
-  if (!text) throw new Error("Empty summary returned from Anthropic API");
+  if (!text) throw new Error("Empty response returned from Anthropic API");
   return text;
+}
+
+async function summarizeWithAnthropic(
+  conversationText: string,
+  model: string,
+): Promise<string> {
+  return callAnthropicWithPrompt(
+    SUMMARY_PROMPT + conversationText + "\n</conversation>",
+    model,
+  );
 }
 
 async function summarizeWithOpenAI(
@@ -190,6 +200,63 @@ export async function summarizeConversation(
     return summarizeWithOpenAI(conversationText, model, key, baseUrl);
   }
   return summarizeWithAnthropic(conversationText, model);
+}
+
+// ---------------------------------------------------------------------------
+// flushPreCompactionContext
+// ---------------------------------------------------------------------------
+
+const EXTRACTION_PROMPT =
+  "Extract key decisions, action items, and important facts from these messages. " +
+  "Return as a bulleted list.\n\n" +
+  "<conversation>\n";
+
+/**
+ * Flush key context from the messages about to be compacted into today's
+ * daily audit log. This preserves important information before the session
+ * history is summarised and the older messages are discarded.
+ *
+ * Uses the Anthropic API (same model as summarization) to extract
+ * key decisions, action items, and facts, then appends an audit entry
+ * with context "pre-compaction" to the daily log.
+ *
+ * Failures are non-fatal — a warning is logged and the function returns
+ * without throwing so compaction can proceed normally.
+ *
+ * @param messages     - User/assistant turns about to be compacted
+ * @param workspaceDir - Workspace directory for the daily log
+ * @param sessionKey   - Session key used to identify the source in the log
+ * @param model        - Anthropic model ID for the extraction call
+ */
+export async function flushPreCompactionContext(
+  messages: ConversationTurn[],
+  workspaceDir: string,
+  sessionKey: string,
+  model: string = "claude-haiku-4-5-20251001",
+): Promise<void> {
+  try {
+    const tail =
+      messages.length > MAX_MESSAGES_FOR_SUMMARY
+        ? messages.slice(-MAX_MESSAGES_FOR_SUMMARY)
+        : messages;
+    const conversationText = buildConversationText(tail);
+    const prompt =
+      EXTRACTION_PROMPT + conversationText + "\n</conversation>";
+    const extracted = await callAnthropicWithPrompt(prompt, model);
+    await appendAuditEntry(workspaceDir, {
+      timestamp: new Date().toISOString(),
+      source: sessionKey.split("--")[0] ?? "compactor",
+      sessionKey,
+      type: "interaction",
+      assistantResponse: extracted,
+      context: "pre-compaction",
+    });
+  } catch (err) {
+    console.warn(
+      `[compactor] Pre-compaction flush failed for ${sessionKey} — continuing:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
