@@ -22,6 +22,12 @@ import type {
   IntegApiError,
 } from "./types.js";
 import type { IntegApiConfig } from "../core/types.js";
+import { createInboundRateLimiter } from "./middleware/inbound-rate-limiter.js";
+import {
+  createContentFilter,
+  createContentFilterMiddleware,
+  DEFAULT_REDACT_PATTERNS,
+} from "./middleware/content-filter.js";
 
 const log = createLogger("integ-api:server");
 
@@ -258,13 +264,39 @@ export interface IntegApiServer {
  * Validates that bind address is loopback-only, wires the SimpleRouter into
  * Node's http.Server, and registers the built-in /integ-api/health endpoint.
  *
- * @param config - The integApi section of the global config (or compatible subset)
+ * Middleware pipeline (in order):
+ *   1. Inbound rate limiter — rejects excess requests with 429
+ *   2. Content filter — redacts sensitive data & truncates large responses
+ *   (Additional middleware such as audit can be added via router.use() after creation)
+ *
+ * @param config - The integApi section of the global config (or compatible subset).
+ *   When only `bind` and `port` are provided (e.g. in tests), rate limiting and
+ *   content filtering are not applied.
  */
-export function createIntegApiServer(config: Pick<IntegApiConfig, "bind" | "port">): IntegApiServer {
+export function createIntegApiServer(
+  config: Pick<IntegApiConfig, "bind" | "port"> & Partial<Pick<IntegApiConfig, "inboundRateLimit" | "contentFilter">>,
+): IntegApiServer {
   assertLoopbackBind(config.bind);
 
   const router = new SimpleRouter();
   const startedAt = Date.now();
+
+  // Wire inbound rate limiter (if config provides the rate limit)
+  if (config.inboundRateLimit != null) {
+    router.use(createInboundRateLimiter(config.inboundRateLimit));
+  }
+
+  // Wire content filter (if config provides filter settings)
+  if (config.contentFilter != null) {
+    const filter = createContentFilter({
+      redactPatterns: [
+        ...DEFAULT_REDACT_PATTERNS,
+        ...config.contentFilter.redactPatterns,
+      ],
+      maxBodyLength: config.contentFilter.maxBodyLength,
+    });
+    router.use(createContentFilterMiddleware(filter));
+  }
 
   // Built-in health endpoint
   router.get("/integ-api/health", async (_req, res) => {

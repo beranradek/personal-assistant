@@ -144,6 +144,8 @@ export const IntegApiConfigSchema = z.object({
   services: IntegApiServicesConfigSchema.default(() => IntegApiServicesConfigSchema.parse({})),
 });
 
+export type IntegApiConfig = z.infer<typeof IntegApiConfigSchema>;
+
 export const HabitPillarSchema = z.object({
   id: z.string(),
   label: z.string(),
