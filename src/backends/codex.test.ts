@@ -131,6 +131,23 @@ describe("createCodexBackend", () => {
     expect(features.custom_flag).toBe(true);
   });
 
+  it("injects config.mcpServers into Codex mcp_servers", async () => {
+    const cfg = makeConfig({
+      mcpServers: {
+        "chrome-devtools": { command: "npx", args: ["-y", "chrome-devtools-mcp@latest"] },
+      },
+    } as Partial<Config>);
+
+    await createCodexBackend(cfg);
+
+    const config = capturedCodexOptions.value?.config as Record<string, unknown>;
+    const mcpServers = config.mcp_servers as Record<string, unknown>;
+
+    expect(mcpServers).toHaveProperty("personal-assistant");
+    expect(mcpServers).toHaveProperty("chrome-devtools");
+  });
+
+
   it("has runTurn, runTurnSync, clearSession methods", async () => {
     const backend = await createCodexBackend(makeConfig());
     expect(typeof backend.runTurn).toBe("function");

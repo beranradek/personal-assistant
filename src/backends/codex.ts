@@ -258,6 +258,11 @@ export async function createCodexBackend(
   codexConfig.features = { multi_agent: true, ...userFeatures };
 
   // Inject PA's stdio MCP server
+  //
+  // Note: `config.mcpServers` historically configures MCP servers for the Claude backend.
+  // Codex expects MCP servers under `codex.configOverrides.mcp_servers` (or ~/.codex/config.toml).
+  // To reduce duplication in settings, we also inject `config.mcpServers` here by default.
+  const claudeConfiguredMcpServers = (config.mcpServers ?? {}) as Record<string, unknown>;
   const userMcpServers = (config.codex.configOverrides?.mcp_servers ?? {}) as Record<string, unknown>;
   codexConfig.mcp_servers = {
     "personal-assistant": {
@@ -266,6 +271,7 @@ export async function createCodexBackend(
       startup_timeout_sec: 30,
       tool_timeout_sec: 120,
     },
+    ...claudeConfiguredMcpServers,
     ...userMcpServers,
   };
 
