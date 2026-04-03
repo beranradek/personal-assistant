@@ -84,13 +84,6 @@ function getDailyLogRelativePath(now?: Date): string {
 }
 
 /**
- * If the current heartbeat is a morning or evening heartbeat, load the
- * corresponding extra prompt file (HEARTBEAT_MORNING.md or HEARTBEAT_EVENING.md)
- * from the workspace, substitute the {{DAILY_LOG}} placeholder, and append it
- * to `basePrompt`.  Returns `basePrompt` unchanged when neither condition applies
- * or when the template file is absent.
- */
-/**
  * Build a diff-aware heartbeat prompt that highlights only what changed since
  * the last heartbeat. If stateDiffing is disabled or there is no previous state,
  * returns `basePrompt` unchanged. Always saves the new state before returning.
@@ -145,6 +138,13 @@ export async function buildDiffAwarePrompt(
   return `${basePrompt}\n\n${parts.join(" ")}`;
 }
 
+/**
+ * If the current heartbeat is a morning or evening heartbeat, load the
+ * corresponding extra prompt file (HEARTBEAT_MORNING.md or HEARTBEAT_EVENING.md)
+ * from the workspace, substitute the {{DAILY_LOG}} placeholder, and append it
+ * to `basePrompt`.  Returns `basePrompt` unchanged when neither condition applies
+ * or when the template file is absent.
+ */
 export async function appendMorningEveningContent(
   basePrompt: string,
   config: Config,
