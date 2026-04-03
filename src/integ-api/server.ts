@@ -137,13 +137,14 @@ function makeJsonResponse(raw: http.ServerResponse): JsonResponse {
       };
       const status = statusMap[err.error] ?? 500;
       const body = JSON.stringify(err);
-      raw.writeHead(status, {
+      const headers: Record<string, string | number> = {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(body),
-      });
+      };
       if (err.retryAfterMs != null) {
-        raw.setHeader("Retry-After", Math.ceil(err.retryAfterMs / 1000).toString());
+        headers["Retry-After"] = Math.ceil(err.retryAfterMs / 1000).toString();
       }
+      raw.writeHead(status, headers);
       raw.end(body);
     },
   };
