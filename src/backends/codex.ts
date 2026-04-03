@@ -131,7 +131,19 @@ function mapItemCompleted(item: ThreadItem): StreamEvent | null {
     // S4: Surface reasoning text as text_delta
     case "reasoning": {
       const r = item as ReasoningItem;
-      return { type: "text_delta", text: r.text };
+      const text = r.text ?? "";
+      // Ensure reasoning and the subsequent user-facing answer don't get glued
+      // together in adapters that concatenate streamed text without inserting
+      // a separator.
+      const separated =
+        text.trim().length === 0
+          ? "\n\n"
+          : text.endsWith("\n\n")
+            ? text
+            : text.endsWith("\n")
+              ? `${text}\n`
+              : `${text}\n\n`;
+      return { type: "text_delta", text: separated };
     }
     // S4: Surface todo list as tool_input
     case "todo_list": {

@@ -510,7 +510,7 @@ describe("createCodexBackend", () => {
 
       // item.completed for reasoning should yield text_delta with reasoning text
       const textDeltas = events.filter((e) => e.type === "text_delta");
-      const reasoningDelta = textDeltas.find((e) => e.text === "Let me think about this...");
+      const reasoningDelta = textDeltas.find((e) => e.text === "Let me think about this...\n\n");
       expect(reasoningDelta).toBeDefined();
     });
 
