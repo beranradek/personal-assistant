@@ -3,6 +3,13 @@ import * as path from "node:path";
 import type { SystemEvent, Config } from "../core/types.js";
 import { parseActiveHours } from "./scheduler.js";
 import { loadState, saveState, diffState } from "./state.js";
+import {
+  loadHabits,
+  checkAutoHabits,
+  resetDaily,
+  markHabit,
+  formatHabitStatus,
+} from "./habits.js";
 
 /**
  * Standard heartbeat prompt — generates a fresh timestamp on each call
@@ -175,4 +182,66 @@ export async function appendMorningEveningContent(
   if (!extra.trim()) return basePrompt;
 
   return `${basePrompt}\n\n${extra}`;
+}
+
+/**
+ * If habits tracking is enabled, append the current habit status to the prompt.
+ *
+ * - Morning heartbeat: call resetDaily() to archive yesterday and reset today's
+ *   checklist, then include fresh status.
+ * - Regular and evening heartbeats: run auto-detection, update HABITS.md for any
+ *   newly completed auto-pillars, then include status with an evening nudge.
+ *
+ * Returns `basePrompt` unchanged when habits are disabled or HABITS.md is absent.
+ */
+export async function appendHabitContent(
+  basePrompt: string,
+  config: Config,
+  workspacePath: string,
+  now?: Date,
+): Promise<string> {
+  if (!config.habits.enabled) return basePrompt;
+
+  const morning = isMorningHeartbeat(config, now);
+  const evening = isEveningHeartbeat(config, now);
+
+  // Morning: reset daily checklist first (idempotent)
+  if (morning) {
+    await resetDaily(workspacePath, now);
+  }
+
+  const data = await loadHabits(workspacePath);
+  if (!data || data.pillars.length === 0) return basePrompt;
+
+  // Run auto-detection and persist results to HABITS.md
+  if (!morning) {
+    const autoResults = await checkAutoHabits(workspacePath, data.pillars);
+    for (const [pillarId, done] of Object.entries(autoResults)) {
+      if (done) {
+        const pillar = data.pillars.find((p) => p.id === pillarId);
+        if (pillar) {
+          await markHabit(workspacePath, pillar.label, true);
+          // Update in-memory checklist too
+          data.checklist[pillar.label] = true;
+        }
+      }
+    }
+  }
+
+  const statusLine = formatHabitStatus(data.checklist, data.pillars);
+
+  const parts: string[] = [`Habits: ${statusLine}`];
+
+  if (evening) {
+    const unchecked = data.pillars.filter((p) => !data.checklist[p.label]);
+    if (unchecked.length > 0) {
+      parts.push(
+        `You have ${unchecked.length} unchecked habit(s) remaining today: ${unchecked.map((p) => p.label).join(", ")}. Consider nudging the user.`,
+      );
+    } else {
+      parts.push("All habits completed today! Congratulate the user.");
+    }
+  }
+
+  return `${basePrompt}\n\n${parts.join(" ")}`;
 }

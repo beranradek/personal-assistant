@@ -40,7 +40,8 @@ import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
-import { resolveHeartbeatPrompt, appendMorningEveningContent, buildDiffAwarePrompt } from "./heartbeat/prompts.js";
+import { resolveHeartbeatPrompt, appendMorningEveningContent, buildDiffAwarePrompt, appendHabitContent } from "./heartbeat/prompts.js";
+import { loadHabits, markHabit } from "./heartbeat/habits.js";
 import { createCronToolManager } from "./cron/tool.js";
 import { handleExec } from "./exec/tool.js";
 import { getSession, listSessions } from "./exec/process-registry.js";
@@ -147,6 +148,27 @@ export async function startDaemon(configDir: string): Promise<void> {
     handleExec: (options) => handleExec(options, config),
     getProcessSession: getSession,
     listProcessSessions: listSessions,
+    handleHabitCheck: async (pillarLabel, done) => {
+      if (!config.habits.enabled) {
+        return { success: false, message: "Habits tracking is disabled in config" };
+      }
+      await markHabit(config.security.workspace, pillarLabel, done);
+      return { success: true, message: `Habit "${pillarLabel}" marked as ${done ? "done" : "undone"}` };
+    },
+    handleHabitStatus: async () => {
+      if (!config.habits.enabled) {
+        return { error: "Habits tracking is disabled in config" };
+      }
+      const data = await loadHabits(config.security.workspace);
+      if (!data) return { error: "HABITS.md not found in workspace" };
+      return {
+        pillars: data.pillars.map((p) => ({
+          label: p.label,
+          type: p.type,
+          done: data.checklist[p.label] === true,
+        })),
+      };
+    },
   });
 
   // 5. Build agent options (built-in + user-configured MCP servers)
@@ -235,8 +257,13 @@ export async function startDaemon(configDir: string): Promise<void> {
       currentContext,
       config.heartbeat.stateDiffing,
     );
-    const prompt = await appendMorningEveningContent(
+    const morningEveningPrompt = await appendMorningEveningContent(
       diffedPrompt,
+      config,
+      config.security.workspace,
+    );
+    const prompt = await appendHabitContent(
+      morningEveningPrompt,
       config,
       config.security.workspace,
     );

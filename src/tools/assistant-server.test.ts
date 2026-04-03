@@ -62,6 +62,8 @@ function makeDeps(overrides?: Partial<AssistantServerDeps>): AssistantServerDeps
         },
       },
     ]),
+    handleHabitCheck: vi.fn(async () => ({ success: true, message: "ok" })),
+    handleHabitStatus: vi.fn(async () => ({ pillars: [] })),
     ...overrides,
   };
 }
@@ -104,9 +106,9 @@ describe("createAssistantServer", () => {
 
   // --- Tool registration ---
 
-  it("registers exactly 3 tools via the tool() helper", () => {
+  it("registers exactly 5 tools via the tool() helper", () => {
     createAssistantServer(makeDeps());
-    expect(mockTool).toHaveBeenCalledTimes(3);
+    expect(mockTool).toHaveBeenCalledTimes(5);
   });
 
   it("exposes a 'cron' tool", () => {
@@ -127,10 +129,22 @@ describe("createAssistantServer", () => {
     expect(toolNames).toContain("process");
   });
 
-  it("passes all 3 tools to createSdkMcpServer in the tools array", () => {
+  it("passes all 5 tools to createSdkMcpServer in the tools array", () => {
     createAssistantServer(makeDeps());
     const serverOpts = mockCreateSdkMcpServer.mock.calls[0][0];
-    expect(serverOpts.tools).toHaveLength(3);
+    expect(serverOpts.tools).toHaveLength(5);
+  });
+
+  it("exposes a 'habit_check' tool", () => {
+    createAssistantServer(makeDeps());
+    const toolNames = mockTool.mock.calls.map((c) => c[0]);
+    expect(toolNames).toContain("habit_check");
+  });
+
+  it("exposes a 'habit_status' tool", () => {
+    createAssistantServer(makeDeps());
+    const toolNames = mockTool.mock.calls.map((c) => c[0]);
+    expect(toolNames).toContain("habit_status");
   });
 
   // --- Cron tool ---

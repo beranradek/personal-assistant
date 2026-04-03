@@ -43,6 +43,12 @@ export interface AssistantServerDeps {
       exitedAt: string | null;
     };
   }>;
+
+  /** Habits: mark a self-reported pillar as done/undone */
+  handleHabitCheck: (pillarLabel: string, done: boolean) => Promise<{ success: boolean; message: string }>;
+
+  /** Habits: return current checklist + pillar list */
+  handleHabitStatus: () => Promise<{ pillars: Array<{ label: string; type: string; done: boolean }> } | { error: string }>;
 }
 
 /**
@@ -178,6 +184,36 @@ REMOVE — delete a job. Required params:
                 }),
               },
             ],
+          };
+        },
+      ),
+
+      tool(
+        "habit_check",
+        `Mark a self-reported habit pillar as done or undone for today.
+
+Use this when the user tells you they completed a habit (e.g. "I went for a run today").
+The pillar parameter should match the habit label in HABITS.md (e.g. "Exercise").`,
+        {
+          pillar: z.string().describe("Habit pillar label (e.g. 'Exercise', 'Reading')"),
+          done: z.boolean().describe("true to mark as done, false to unmark"),
+        },
+        async (args) => {
+          const result = await deps.handleHabitCheck(args.pillar, args.done);
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+          };
+        },
+      ),
+
+      tool(
+        "habit_status",
+        "Return the current daily habit checklist with completion status for each pillar.",
+        {},
+        async () => {
+          const result = await deps.handleHabitStatus();
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
           };
         },
       ),
