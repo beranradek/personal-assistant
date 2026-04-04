@@ -216,8 +216,12 @@ export function createIndexer(
         const chunkTexts = chunks.map((c) => c.text);
         const embeddings = await embedder.embedBatch(chunkTexts);
 
-        // Upsert each chunk to the store
+        // Upsert each chunk to the store (skip chunks with empty embeddings)
         for (let i = 0; i < chunks.length; i++) {
+          if (!embeddings[i] || embeddings[i].length === 0) {
+            log.warn({ filePath, chunkIndex: i }, "Empty embedding, skipping chunk");
+            continue;
+          }
           const chunkId = `${filePath}:${i}`;
           store.upsertChunk({
             id: chunkId,

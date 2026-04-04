@@ -75,7 +75,9 @@ export async function startDaemon(configDir: string): Promise<void> {
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
-  // Sync memory files into the vector store on startup
+  // Sync memory files into the vector store in the background — do not block
+  // adapter startup so that Telegram/Slack are responsive immediately while
+  // the index catches up.  Search uses whatever data is already in the DB.
   const memoryFiles = collectMemoryFiles(
     config.security.workspace,
     config.memory.extraPaths,
@@ -84,7 +86,9 @@ export async function startDaemon(configDir: string): Promise<void> {
       dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
     },
   );
-  await indexer.syncFiles(memoryFiles);
+  indexer.syncFiles(memoryFiles).catch((err) => {
+    log.error({ err }, "Initial memory indexing failed (non-fatal)");
+  });
 
   // Guard against concurrent syncFiles calls (watcher + periodic timer can overlap)
   let syncInProgress = false;

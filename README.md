@@ -35,7 +35,49 @@ pa daemon                # Start headless daemon mode
 pa --config <path> ...   # Use a custom settings.json location
 ```
 
-Logs of daemon can be observed via `journalctl --user -u pa-daemon -n 100 --no-pager`
+#### Running as a systemd user service
+
+Create the service unit:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/pa-daemon.service << 'EOF'
+[Unit]
+Description=Personal Assistant Daemon
+After=network.target
+
+[Service]
+Environment=PATH=/home/<user>/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.personal-assistant/.env
+ExecStart=/home/<user>/.nvm/versions/node/v24.14.0/bin/pa daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+EOF
+```
+
+Adjust the `PATH` and `ExecStart` paths to match your Node.js installation. The `EnvironmentFile` line loads API keys from `~/.personal-assistant/.env` (the `-` prefix means the service still starts if the file is missing).
+
+Create the env file for secrets that the daemon needs at runtime:
+
+```bash
+cat > ~/.personal-assistant/.env << 'EOF'
+# Format: KEY=value (no quotes, no "export" prefix)
+OPENAI_API_KEY=sk-...
+EOF
+chmod 600 ~/.personal-assistant/.env
+```
+
+Enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now pa-daemon
+```
+
+Logs can be observed via `journalctl --user -u pa-daemon -n 100 --no-pager`
 
 ### Terminal Mode
 
