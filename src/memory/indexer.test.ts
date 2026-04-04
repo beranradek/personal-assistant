@@ -176,6 +176,25 @@ describe("chunkText", () => {
     expect(chunks).toHaveLength(1);
     expect(chunks[0].text).toBe(text);
   });
+
+  it("does not loop infinitely when chunk fits inside the overlap window", () => {
+    // Build short lines where several consecutive lines total less than
+    // overlapChars (320). This previously caused the backtrack to reset
+    // lineIdx to chunkStartIdx, producing an infinite loop.
+    const lines: string[] = [];
+    for (let i = 0; i < 200; i++) {
+      lines.push(`short line ${i}`); // ~14 chars each
+    }
+    const text = lines.join("\n");
+
+    const chunks = chunkText(text, { tokens: 400, overlap: 80 });
+
+    // Must terminate and produce a reasonable number of chunks
+    expect(chunks.length).toBeLessThan(200);
+    expect(chunks.length).toBeGreaterThan(0);
+    // Last chunk must cover the final line
+    expect(chunks[chunks.length - 1].endLine).toBe(200);
+  });
 });
 
 // ─── createIndexer / syncFiles ───────────────────────────────────────

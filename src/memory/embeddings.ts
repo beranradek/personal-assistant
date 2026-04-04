@@ -40,7 +40,11 @@ export async function createEmbeddingProvider(options?: {
     options?.modelPath ?? (await resolveModelFile(DEFAULT_MODEL_URI));
 
   const llama = await getLlama();
-  const model = await llama.loadModel({ modelPath });
+  const model = await llama.loadModel({
+    modelPath,
+    useMmap: true,
+    gpuLayers: 0,
+  });
   const context = await model.createEmbeddingContext();
   const dimensions = model.embeddingVectorSize;
 

@@ -134,8 +134,10 @@ export function chunkText(
         backtrackChars += prevLineLen;
         backtrackIdx--;
       }
-      // Don't backtrack to same position or before - must make progress
-      if (backtrackIdx < lineIdx) {
+      // Don't backtrack to chunkStartIdx or before — must make at least
+      // one line of forward progress, otherwise we loop forever when the
+      // whole chunk fits inside the overlap window.
+      if (backtrackIdx > chunkStartIdx && backtrackIdx < lineIdx) {
         lineIdx = backtrackIdx;
       }
     }
