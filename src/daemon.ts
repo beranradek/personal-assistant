@@ -382,6 +382,9 @@ export async function startDaemon(configDir: string): Promise<void> {
       await backend.close();
     }
 
+    // Abort any in-flight indexing before disposing the embedder
+    indexer.abort();
+
     // Close memory watcher/timer and system
     clearInterval(memorySyncTimer);
     memoryWatcher.close();

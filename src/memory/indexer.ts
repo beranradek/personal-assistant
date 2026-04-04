@@ -20,6 +20,8 @@ export interface Indexer {
   markDirty(): void;
   isDirty(): boolean;
   syncIfDirty(filePaths: string[]): Promise<void>;
+  /** Signal the indexer to abort any in-flight syncFiles call. */
+  abort(): void;
   close(): void;
 }
 
@@ -156,6 +158,7 @@ export function createIndexer(
   embedder: EmbeddingProvider,
 ): Indexer {
   let dirty = false;
+  let aborted = false;
 
   return {
     async syncFiles(filePaths: string[]): Promise<void> {
@@ -175,6 +178,10 @@ export function createIndexer(
 
       // Process each file in the current set
       for (const filePath of filePaths) {
+        if (aborted) {
+          log.info("Indexing aborted by shutdown");
+          return;
+        }
         let content: string;
         let stat: { mtimeMs: number; size: number };
         try {
@@ -251,6 +258,10 @@ export function createIndexer(
       if (!dirty) return;
       await this.syncFiles(filePaths);
       dirty = false;
+    },
+
+    abort(): void {
+      aborted = true;
     },
 
     close(): void {
