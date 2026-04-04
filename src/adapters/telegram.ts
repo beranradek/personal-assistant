@@ -38,6 +38,7 @@ export interface TelegramAdapterAudioConfig {
 export interface TelegramAdapterConfig {
   botToken: string;
   allowedUserIds: number[];
+  mode?: "polling";
   audio?: TelegramAdapterAudioConfig;
 }
 

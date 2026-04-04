@@ -41,6 +41,8 @@ export const TelegramConfigSchema = z.object({
   enabled: z.boolean(),
   botToken: z.string(),
   allowedUserIds: z.array(z.number()),
+  /** Transport mode (currently polling only). */
+  mode: z.enum(["polling"]).default("polling"),
   audio: TelegramAudioConfigSchema.default(() => TelegramAudioConfigSchema.parse({})),
 });
 
@@ -52,9 +54,24 @@ export const SlackConfigSchema = z.object({
   socketMode: z.boolean(),
 });
 
+export const GithubWebhookConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Bind address for the webhook HTTP server. */
+  bind: z.string().default("127.0.0.1"),
+  /** Port for the webhook HTTP server. */
+  port: z.number().int().positive().default(19210),
+  /** URL path to receive GitHub webhooks on. */
+  path: z.string().default("/personal-assistant/github/webhook"),
+  /** GitHub login of the bot user (used for mention parsing and loop prevention). */
+  botLogin: z.string().default(""),
+  /** Env var name holding the GitHub webhook secret used for signature verification. */
+  secretEnvVar: z.string().default("PA_GITHUB_WEBHOOK_SECRET"),
+});
+
 export const AdaptersConfigSchema = z.object({
   telegram: TelegramConfigSchema,
   slack: SlackConfigSchema,
+  githubWebhook: GithubWebhookConfigSchema.default(() => GithubWebhookConfigSchema.parse({})),
 });
 
 export const HeartbeatGitSyncConfigSchema = z.object({

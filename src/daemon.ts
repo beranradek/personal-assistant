@@ -39,6 +39,7 @@ import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
+import { createGithubWebhookAdapter } from "./adapters/github-webhook.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
 import { resolveHeartbeatPrompt, appendMorningEveningContent, buildDiffAwarePrompt, appendHabitContent } from "./heartbeat/prompts.js";
@@ -305,6 +306,25 @@ export async function startDaemon(configDir: string): Promise<void> {
     await slack.start();
     activeAdapters.push(slack);
     log.info("Slack adapter started");
+  }
+
+  if (config.adapters.githubWebhook.enabled) {
+    const github = createGithubWebhookAdapter(
+      config.adapters.githubWebhook,
+      {
+        dataDir: config.security.dataDir,
+        onMessage: (msg) => {
+          const result = queue.enqueue(msg);
+          if (!result.accepted) {
+            log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
+          }
+        },
+      },
+    );
+    router.register(github);
+    await github.start();
+    activeAdapters.push(github);
+    log.info("GitHub webhook adapter started");
   }
 
   // 8. Start heartbeat scheduler

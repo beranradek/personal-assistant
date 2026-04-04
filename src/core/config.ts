@@ -13,7 +13,9 @@ export const DEFAULTS: Config = {
       "ls", "cat", "grep", "head", "tail", "wc", "sort", "uniq", "find",
       "echo", "pwd", "date", "whoami", "env", "which", "file", "stat",
       "du", "df", "diff", "tr", "cut", "sed", "awk", "xargs",
-      "node", "npm", "npx", "git", "pa",
+      "node", "npm", "npx", "git",
+      "gh",
+      "pa",
       "curl", "wget", "tar", "gzip", "gunzip", "zip", "unzip", "jq",
       "python", "python3", "pip", "pip3", "make",
       "mkdir", "rmdir", "touch", "cp", "mv", "rm", "chmod", "ln", "tee",
@@ -31,6 +33,7 @@ export const DEFAULTS: Config = {
       enabled: false,
       botToken: "",
       allowedUserIds: [],
+      mode: "polling",
       audio: {
         enabled: true,
         sttModel: "whisper-1",
@@ -45,6 +48,14 @@ export const DEFAULTS: Config = {
       },
     },
     slack: { enabled: false, botToken: "", appToken: "", allowedUserIds: [], socketMode: true },
+    githubWebhook: {
+      enabled: false,
+      bind: "127.0.0.1",
+      port: 19210,
+      path: "/personal-assistant/github/webhook",
+      botLogin: "",
+      secretEnvVar: "PA_GITHUB_WEBHOOK_SECRET",
+    },
   },
   heartbeat: {
     enabled: true,

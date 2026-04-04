@@ -62,6 +62,10 @@ vi.mock("./adapters/slack.js", () => ({
   createSlackAdapter: vi.fn(),
 }));
 
+vi.mock("./adapters/github-webhook.js", () => ({
+  createGithubWebhookAdapter: vi.fn(),
+}));
+
 vi.mock("./heartbeat/scheduler.js", () => ({
   createHeartbeatScheduler: vi.fn(),
 }));
@@ -144,6 +148,7 @@ import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
+import { createGithubWebhookAdapter } from "./adapters/github-webhook.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { loadCronStore } from "./cron/store.js";
 import { armTimer } from "./cron/timer.js";
@@ -176,6 +181,14 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         botToken: "",
         appToken: "",
         socketMode: false,
+      },
+      githubWebhook: {
+        enabled: false,
+        bind: "127.0.0.1",
+        port: 19210,
+        path: "/personal-assistant/github/webhook",
+        botLogin: "",
+        secretEnvVar: "PA_GITHUB_WEBHOOK_SECRET",
       },
     },
     heartbeat: {
@@ -264,7 +277,8 @@ function makeMockIndexer() {
     syncFiles: vi.fn().mockResolvedValue(undefined),
     markDirty: vi.fn(),
     isDirty: vi.fn(() => false),
-    syncIfDirty: vi.fn(),
+    syncIfDirty: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn(),
     close: vi.fn(),
     abort: vi.fn(),
   };
@@ -345,6 +359,7 @@ function setupMocks(config: Config) {
   vi.mocked(createAssistantServer).mockReturnValue({} as any);
   vi.mocked(createMessageQueue).mockReturnValue(mockQueue as any);
   vi.mocked(createRouter).mockReturnValue(mockRouter);
+  vi.mocked(createGithubWebhookAdapter).mockReturnValue(makeMockAdapter("github") as any);
   vi.mocked(createHeartbeatScheduler).mockReturnValue({ stop: vi.fn() });
   vi.mocked(loadCronStore).mockResolvedValue([]);
   vi.mocked(armTimer).mockReturnValue({ disarm: vi.fn() });
@@ -428,6 +443,14 @@ describe("daemon", () => {
           appToken: "",
           socketMode: false,
         },
+        githubWebhook: {
+          enabled: false,
+          bind: "127.0.0.1",
+          port: 19210,
+          path: "/personal-assistant/github/webhook",
+          botLogin: "",
+          secretEnvVar: "PA_GITHUB_WEBHOOK_SECRET",
+        },
       },
     });
 
@@ -447,6 +470,9 @@ describe("daemon", () => {
 
     // Slack should NOT be created since it's disabled
     expect(createSlackAdapter).not.toHaveBeenCalled();
+
+    // GitHub webhook should NOT be created since it's disabled
+    expect(createGithubWebhookAdapter).not.toHaveBeenCalled();
   });
 
   // -----------------------------------------------------------------------
@@ -502,6 +528,14 @@ describe("daemon", () => {
           botToken: "",
           appToken: "",
           socketMode: false,
+        },
+        githubWebhook: {
+          enabled: false,
+          bind: "127.0.0.1",
+          port: 19210,
+          path: "/personal-assistant/github/webhook",
+          botLogin: "",
+          secretEnvVar: "PA_GITHUB_WEBHOOK_SECRET",
         },
       },
     });

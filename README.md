@@ -142,6 +142,27 @@ Audio messages require `OPENAI_API_KEY` in the environment. Voice options includ
 }
 ```
 
+**adapters.githubWebhook** - GitHub Webhook trigger (recommended behind HTTPS reverse proxy):
+```json
+{
+  "adapters": {
+    "githubWebhook": {
+      "enabled": true,
+      "bind": "127.0.0.1",
+      "port": 19210,
+      "path": "/personal-assistant/github/webhook",
+      "botLogin": "your-bot-login",
+      "secretEnvVar": "PA_GITHUB_WEBHOOK_SECRET"
+    }
+  }
+}
+```
+Set the secret in `~/.personal-assistant/.env`:
+```bash
+PA_GITHUB_WEBHOOK_SECRET=...
+```
+See `docs/settings/github_webhook_configuration.md` for full setup (reverse proxy, webhook events, and `gh` authentication).
+
 **heartbeat** - Periodic check schedule:
 ```json
 {
