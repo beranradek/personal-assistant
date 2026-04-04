@@ -223,7 +223,12 @@ export async function startDaemon(configDir: string): Promise<void> {
             source: msg.source,
             sourceId: msg.sourceId,
             text: "I'm currently busy processing other messages. Please try again in a moment.",
-            metadata: msg.metadata,
+            metadata: {
+              ...(msg.metadata && typeof msg.metadata === "object"
+                ? (msg.metadata as Record<string, unknown>)
+                : {}),
+              responseKind: "system",
+            },
           }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
         }
       },
@@ -245,7 +250,12 @@ export async function startDaemon(configDir: string): Promise<void> {
             source: msg.source,
             sourceId: msg.sourceId,
             text: "I'm currently busy processing other messages. Please try again in a moment.",
-            metadata: msg.metadata,
+            metadata: {
+              ...(msg.metadata && typeof msg.metadata === "object"
+                ? (msg.metadata as Record<string, unknown>)
+                : {}),
+              responseKind: "system",
+            },
           }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
         }
       },

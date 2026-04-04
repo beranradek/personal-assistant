@@ -64,12 +64,25 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         botToken: "",
         allowedUserIds: [],
         mode: "polling" as const,
+        audio: {
+          enabled: true,
+          sttModel: "whisper-1",
+          sttLanguage: "cs",
+          ttsModel: "gpt-4o-mini-tts",
+          ttsVoice: "nova",
+          ttsSpeed: 1.0,
+          ttsFormat: "opus" as const,
+          maxInputSizeMb: 20,
+          openaiBaseUrl: null,
+          timeoutMs: 30_000,
+        },
       },
       slack: {
         enabled: false,
         botToken: "",
         appToken: "",
         socketMode: false,
+        allowedUserIds: [],
       },
     },
     heartbeat: {
@@ -91,8 +104,21 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         chunkOverlap: 64,
       },
       extraPaths: [],
+      indexDailyLogs: true,
+      dailyLogRetentionDays: 90,
     },
     mcpServers: {},
+    reflection: { enabled: false, schedule: "0 7 * * *", maxDailyLogEntries: 500 },
+    integApi: {
+      enabled: false,
+      port: 19100,
+      bind: "127.0.0.1",
+      inboundRateLimit: 100,
+      contentFilter: { redactPatterns: [], maxBodyLength: 50000 },
+      services: { gmail: { enabled: false, scopes: [] }, calendar: { enabled: false, scopes: [] } },
+    },
+    habits: { enabled: false, pillars: [] },
+    drafts: { enabled: false, ttlHours: 24, autoScan: false },
     codex: {
       codexPath: null,
       apiKey: null,
@@ -480,6 +506,48 @@ describe("MessageQueue", () => {
       expect(adapter.sendResponse).toHaveBeenCalledWith(
         expect.objectContaining({
           text: "Here are the files",
+        }),
+      );
+    });
+
+    it("does not use processing messages for audio input (silent streaming)", async () => {
+      const config = makeConfig();
+      const events: StreamEvent[] = [
+        { type: "text_delta", text: "Draft" },
+        { type: "tool_start", toolName: "Bash" },
+        { type: "text_delta", text: "Final answer" },
+        {
+          type: "result",
+          response: "DraftFinal answer",
+          messages: [],
+          partial: false,
+        },
+      ];
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          for (const e of events) yield e;
+        }) as unknown as AgentBackend["runTurn"],
+      });
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(
+        makeMessage({
+          source: "telegram",
+          sourceId: "123456",
+          metadata: { inputType: "audio" },
+        }),
+      );
+
+      await queue.processNext(backend, config, router);
+
+      expect(backend.runTurn).toHaveBeenCalled();
+      expect(vi.mocked(createProcessingAccumulator)).not.toHaveBeenCalled();
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "Final answer",
         }),
       );
     });

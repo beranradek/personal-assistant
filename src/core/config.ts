@@ -27,7 +27,23 @@ export const DEFAULTS: Config = {
     additionalWriteDirs: [],
   },
   adapters: {
-    telegram: { enabled: false, botToken: "", allowedUserIds: [] },
+    telegram: {
+      enabled: false,
+      botToken: "",
+      allowedUserIds: [],
+      audio: {
+        enabled: true,
+        sttModel: "whisper-1",
+        sttLanguage: "cs",
+        ttsModel: "gpt-4o-mini-tts",
+        ttsVoice: "nova",
+        ttsSpeed: 1.0,
+        ttsFormat: "opus",
+        maxInputSizeMb: 20,
+        openaiBaseUrl: null,
+        timeoutMs: 30_000,
+      },
+    },
     slack: { enabled: false, botToken: "", appToken: "", allowedUserIds: [], socketMode: true },
   },
   heartbeat: {

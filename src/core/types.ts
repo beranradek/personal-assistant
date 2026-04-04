@@ -14,10 +14,34 @@ export const SecurityConfigSchema = z.object({
   additionalWriteDirs: z.array(z.string()),
 });
 
+export const TelegramAudioConfigSchema = z.object({
+  /** Enable speech-to-text for inbound audio and voice replies. */
+  enabled: z.boolean().default(true),
+  /** OpenAI model for speech-to-text (e.g. whisper-1, gpt-4o-mini-transcribe). */
+  sttModel: z.string().default("whisper-1"),
+  /** Language code for transcription (default: Czech). */
+  sttLanguage: z.string().default("cs"),
+  /** OpenAI model for text-to-speech (e.g. tts-1, gpt-4o-mini-tts). */
+  ttsModel: z.string().default("gpt-4o-mini-tts"),
+  /** OpenAI voice name (e.g. alloy, ash, echo, fable, onyx, nova, shimmer). */
+  ttsVoice: z.string().default("nova"),
+  /** Speech speed (0.25 to 4.0). */
+  ttsSpeed: z.number().min(0.25).max(4).default(1.0),
+  /** Output format for TTS (recommended: opus for Telegram voice). */
+  ttsFormat: z.enum(["mp3", "opus", "aac", "flac", "wav", "pcm"]).default("opus"),
+  /** Max Telegram audio size to download/transcribe. */
+  maxInputSizeMb: z.number().int().positive().default(20),
+  /** Optional OpenAI base URL override (host only, without /v1). */
+  openaiBaseUrl: z.string().nullable().default(null),
+  /** Timeout for OpenAI audio calls (ms). */
+  timeoutMs: z.number().int().positive().default(30_000),
+});
+
 export const TelegramConfigSchema = z.object({
   enabled: z.boolean(),
   botToken: z.string(),
   allowedUserIds: z.array(z.number()),
+  audio: TelegramAudioConfigSchema.default(() => TelegramAudioConfigSchema.parse({})),
 });
 
 export const SlackConfigSchema = z.object({

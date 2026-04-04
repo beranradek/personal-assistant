@@ -68,11 +68,21 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
       "enabled": true,
       "botToken": "YOUR_BOT_TOKEN",
       "allowedUserIds": [123456789],
-      "mode": "polling"
+      "mode": "polling",
+      "audio": {
+        "enabled": true,
+        "sttModel": "whisper-1",
+        "sttLanguage": "cs",
+        "ttsModel": "gpt-4o-mini-tts",
+        "ttsVoice": "nova",
+        "ttsFormat": "opus",
+        "ttsSpeed": 1.0
+      }
     }
   }
 }
 ```
+Audio messages require `OPENAI_API_KEY` in the environment. Voice options include `alloy`, `ash`, `echo`, `fable`, `onyx`, `nova`, `shimmer`.
 
 **adapters.slack** - Slack bot configuration (socket mode):
 ```json

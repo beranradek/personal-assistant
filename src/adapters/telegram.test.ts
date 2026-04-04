@@ -17,14 +17,33 @@ const mocks = vi.hoisted(() => {
   const botStart = vi.fn().mockResolvedValue(undefined);
   const botStop = vi.fn().mockResolvedValue(undefined);
   const botApiSendMessage = vi.fn().mockResolvedValue(undefined);
+  const botApiSendVoice = vi.fn().mockResolvedValue(undefined);
+  const botApiSendAudio = vi.fn().mockResolvedValue(undefined);
   const botApiEditMessageText = vi.fn().mockResolvedValue(undefined);
+  const botApiGetFile = vi.fn().mockResolvedValue({ file_path: "voice/file_1.oga" });
   const BotCtor = vi.fn(function (this: Record<string, unknown>) {
     this.on = botOn;
     this.start = botStart;
     this.stop = botStop;
-    this.api = { sendMessage: botApiSendMessage, editMessageText: botApiEditMessageText };
+    this.api = {
+      sendMessage: botApiSendMessage,
+      editMessageText: botApiEditMessageText,
+      sendVoice: botApiSendVoice,
+      sendAudio: botApiSendAudio,
+      getFile: botApiGetFile,
+    };
   });
-  return { botOn, botStart, botStop, botApiSendMessage, botApiEditMessageText, BotCtor };
+  return {
+    botOn,
+    botStart,
+    botStop,
+    botApiSendMessage,
+    botApiSendVoice,
+    botApiSendAudio,
+    botApiEditMessageText,
+    botApiGetFile,
+    BotCtor,
+  };
 });
 
 vi.mock("../core/logger.js", () => ({
@@ -33,6 +52,9 @@ vi.mock("../core/logger.js", () => ({
 
 vi.mock("grammy", () => ({
   Bot: mocks.BotCtor,
+  InputFile: class InputFile {
+    constructor(_file: unknown, _filename?: string) {}
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -51,6 +73,18 @@ function makeConfig() {
     botToken: "123456:ABC-DEF",
     allowedUserIds: [111, 222],
     mode: "polling" as const,
+    audio: {
+      enabled: true,
+      sttModel: "whisper-1",
+      sttLanguage: "cs",
+      ttsModel: "gpt-4o-mini-tts",
+      ttsVoice: "nova",
+      ttsSpeed: 1.0,
+      ttsFormat: "opus" as const,
+      maxInputSizeMb: 20,
+      openaiBaseUrl: null,
+      timeoutMs: 30_000,
+    },
   };
 }
 
@@ -264,6 +298,42 @@ describe("Telegram Adapter", () => {
       await adapter.sendResponse(message);
 
       expect(mocks.botApiSendMessage).toHaveBeenCalledWith(12345, "Reply");
+    });
+
+    it("sends voice reply when inputType is audio", async () => {
+      const prevKey = process.env["OPENAI_API_KEY"];
+      process.env["OPENAI_API_KEY"] = "sk-test";
+
+      const prevFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => {
+        const bytes = new Uint8Array([1, 2, 3]);
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes.buffer,
+          text: async () => "",
+          json: async () => ({}),
+        } as unknown as Response;
+      }) as unknown as typeof fetch;
+
+      try {
+        const onMessage = vi.fn();
+        const adapter = createTelegramAdapter(makeConfig(), onMessage);
+
+        await adapter.sendResponse({
+          source: "telegram",
+          sourceId: "999",
+          text: "Voice please",
+          metadata: { inputType: "audio" },
+        });
+
+        expect(mocks.botApiSendMessage).toHaveBeenCalledWith(999, "Voice please");
+        expect(mocks.botApiSendVoice).toHaveBeenCalledTimes(1);
+      } finally {
+        globalThis.fetch = prevFetch;
+        if (prevKey === undefined) delete process.env["OPENAI_API_KEY"];
+        else process.env["OPENAI_API_KEY"] = prevKey;
+      }
     });
   });
 

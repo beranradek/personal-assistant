@@ -153,7 +153,12 @@ export function createMessageQueue(config: Config): MessageQueue {
             source: message.source,
             sourceId: message.sourceId,
             text: "Conversation cleared. Starting fresh.",
-            metadata: message.metadata,
+            metadata: {
+              ...(message.metadata && typeof message.metadata === "object"
+                ? (message.metadata as Record<string, unknown>)
+                : {}),
+              responseKind: "system",
+            },
           });
         } catch (routeErr) {
           log.error({ err: routeErr }, "failed to send /clear confirmation");
@@ -174,7 +179,12 @@ export function createMessageQueue(config: Config): MessageQueue {
         let responseText: string;
         let partial = false;
 
-        if (supportsProcessing && routeTarget) {
+        const isAudioInput =
+          message.metadata != null &&
+          typeof message.metadata === "object" &&
+          (message.metadata as Record<string, unknown>)["inputType"] === "audio";
+
+        if (supportsProcessing && routeTarget && !isAudioInput) {
           // Streaming path with processing message
           const accumulator = createProcessingAccumulator(
             targetAdapter as {
@@ -234,6 +244,37 @@ export function createMessageQueue(config: Config): MessageQueue {
             await accumulator.trimSuffixFromProcessingMessage(finalText);
           }
           partial = resultEvent?.partial ?? false;
+        } else if (routeTarget && message.source !== "heartbeat" && isAudioInput) {
+          // Silent streaming path (no processing message).
+          // For audio inputs, we only send the final response text without
+          // intermediate tool output or partial deltas.
+          let resultEvent:
+            | { response: string; messages: unknown[]; partial: boolean }
+            | undefined;
+          let finalText = "";
+          let sawTool = false;
+
+          for await (const event of backend.runTurn(message.text, sessionKey)) {
+            if (event.type === "tool_start") {
+              finalText = "";
+              sawTool = true;
+            }
+            if (event.type === "text_delta") {
+              finalText += event.text;
+            }
+            if (event.type === "result") {
+              resultEvent = event;
+            }
+            if (event.type === "error") {
+              resultEvent = { response: event.error, messages: [], partial: true };
+            }
+          }
+
+          responseText =
+            sawTool && finalText.trim()
+              ? finalText
+              : (resultEvent?.response ?? "");
+          partial = resultEvent?.partial ?? false;
         } else {
           // Non-streaming fallback
           const result: AgentTurnResult = await backend.runTurnSync(
@@ -260,7 +301,12 @@ export function createMessageQueue(config: Config): MessageQueue {
               source: routeTarget.source,
               sourceId: routeTarget.sourceId,
               text: responseText,
-              metadata: message.metadata,
+              metadata: {
+                ...(message.metadata && typeof message.metadata === "object"
+                  ? (message.metadata as Record<string, unknown>)
+                  : {}),
+                responseKind: "final",
+              },
             };
             await router.route(response);
           } else {
@@ -282,7 +328,12 @@ export function createMessageQueue(config: Config): MessageQueue {
                 source: emptyTarget.source,
                 sourceId: emptyTarget.sourceId,
                 text: "I processed your message but had nothing to respond with. Could you try rephrasing?",
-                metadata: message.metadata,
+                metadata: {
+                  ...(message.metadata && typeof message.metadata === "object"
+                    ? (message.metadata as Record<string, unknown>)
+                    : {}),
+                  responseKind: "system",
+                },
               });
             } catch (routeErr) {
               log.error(
@@ -303,7 +354,12 @@ export function createMessageQueue(config: Config): MessageQueue {
               source: errorTarget.source,
               sourceId: errorTarget.sourceId,
               text: "Sorry, something went wrong while processing your message. Please try again.",
-              metadata: message.metadata,
+              metadata: {
+                ...(message.metadata && typeof message.metadata === "object"
+                  ? (message.metadata as Record<string, unknown>)
+                  : {}),
+                responseKind: "system",
+              },
             };
             await router.route(errorResponse);
           } catch (routeErr) {
