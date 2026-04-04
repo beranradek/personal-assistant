@@ -98,7 +98,7 @@ describe("IntegrationRegistry", () => {
     const server = createIntegApiServer({ bind: "127.0.0.1", port });
     const registry = createRegistry(server.router);
     const gmailModule = makeTestModule("gmail", ["list", "read", "search", "labels"]);
-    registry.register(gmailModule, server.router);
+    registry.register(gmailModule);
     await server.start();
     try {
       const res = await request(port, "GET", "/integ-api/integrations");
@@ -116,8 +116,8 @@ describe("IntegrationRegistry", () => {
     const port = nextPort();
     const server = createIntegApiServer({ bind: "127.0.0.1", port });
     const registry = createRegistry(server.router);
-    registry.register(makeTestModule("gmail"), server.router);
-    registry.register(makeTestModule("calendar"), server.router);
+    registry.register(makeTestModule("gmail"));
+    registry.register(makeTestModule("calendar"));
     await server.start();
     try {
       const res = await request(port, "GET", "/integ-api/integrations");
@@ -141,15 +141,15 @@ describe("IntegrationRegistry", () => {
     const router = new SimpleRouter();
     const registry = createRegistry(router);
     const mod = makeTestModule("gmail");
-    registry.register(mod, router);
+    registry.register(mod);
     expect(registry.getModule("gmail")).toBe(mod);
   });
 
   it("getAllManifests returns all registered manifests", () => {
     const router = new SimpleRouter();
     const registry = createRegistry(router);
-    registry.register(makeTestModule("gmail"), router);
-    registry.register(makeTestModule("calendar"), router);
+    registry.register(makeTestModule("gmail"));
+    registry.register(makeTestModule("calendar"));
     const manifests = registry.getAllManifests();
     expect(manifests).toHaveLength(2);
     expect(manifests.map((m) => m.id)).toContain("gmail");
@@ -161,8 +161,8 @@ describe("IntegrationRegistry", () => {
     const registry = createRegistry(router);
     const mod1 = makeTestModule("gmail", ["read"]);
     const mod2 = makeTestModule("gmail", ["read", "write"]);
-    registry.register(mod1, router);
-    registry.register(mod2, router);
+    registry.register(mod1);
+    registry.register(mod2);
     expect(registry.getModule("gmail")).toBe(mod2);
     expect(registry.getAllManifests()).toHaveLength(1);
     expect(registry.getAllManifests()[0]?.capabilities).toEqual(["read", "write"]);

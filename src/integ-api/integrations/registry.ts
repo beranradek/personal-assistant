@@ -2,16 +2,19 @@
  * Integ-API Integration Registry
  * ================================
  *
- * Central registry for all integration modules. Provides:
- * - Module registration and lookup
- * - GET /integ-api/integrations discovery endpoint
+ * Central registry for all integration modules.
+ * Provides module registration, lookup by ID, and the
+ * GET /integ-api/integrations discovery endpoint.
  *
- * Modules implement IntegrationModule from types.ts and self-register their routes.
+ * Usage:
+ *   const registry = createRegistry(router);
+ *   registry.register(calendarModule);
+ *   registry.register(gmailModule);
  */
 
 import { createLogger } from "../../core/logger.js";
-import type { IntegrationModule, IntegrationManifest } from "../types.js";
 import type { SimpleRouter } from "../server.js";
+import type { IntegrationModule, IntegrationManifest } from "../types.js";
 
 const log = createLogger("integ-api:registry");
 
@@ -20,11 +23,13 @@ const log = createLogger("integ-api:registry");
 // ---------------------------------------------------------------------------
 
 export interface IntegrationRegistry {
-  /** Register a module and mount its routes on the router. */
-  register(module: IntegrationModule, router: SimpleRouter): void;
-  /** Look up a module by its id. */
+  /** Register an integration module and mount its routes. */
+  register(module: IntegrationModule): void;
+
+  /** Look up a registered module by its ID. Returns undefined if not found. */
   getModule(id: string): IntegrationModule | undefined;
-  /** Return all registered manifests (for discovery endpoint). */
+
+  /** Return manifests for all registered integrations. */
   getAllManifests(): IntegrationManifest[];
 }
 
@@ -33,27 +38,26 @@ export interface IntegrationRegistry {
 // ---------------------------------------------------------------------------
 
 /**
- * Create an integration registry and mount the discovery endpoint on `router`.
+ * Create an integration registry and wire the discovery endpoint.
  *
- * @param router - The SimpleRouter to register the discovery endpoint on.
+ * @param router - The SimpleRouter to register routes on.
  */
 export function createRegistry(router: SimpleRouter): IntegrationRegistry {
   const modules = new Map<string, IntegrationModule>();
 
-  // Register discovery endpoint
-  // GET /integ-api/integrations → { integrations: IntegrationManifest[] }
+  // Discovery endpoint: GET /integ-api/integrations
   router.get("/integ-api/integrations", async (_req, res) => {
-    const integrations = registry.getAllManifests();
+    const integrations = [...modules.values()].map((m) => m.manifest);
     res.json({ integrations });
   });
 
   const registry: IntegrationRegistry = {
-    register(module: IntegrationModule, moduleRouter: SimpleRouter): void {
+    register(module: IntegrationModule): void {
       if (modules.has(module.id)) {
-        log.warn({ id: module.id }, "Integration module already registered, overwriting");
+        log.warn({ id: module.id }, "Integration module already registered — overwriting");
       }
       modules.set(module.id, module);
-      module.routes(moduleRouter);
+      module.routes(router);
       log.info({ id: module.id, endpoints: module.manifest.endpoints.length }, "Integration module registered");
     },
 
