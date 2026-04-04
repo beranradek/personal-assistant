@@ -2,8 +2,9 @@
  * Integ-API CLI Facade
  * ====================
  *
- * CLI wrapper around the integ-api HTTP server. The assistant's MCP tools
- * invoke this CLI — it wraps HTTP calls so the agent never touches credentials.
+ * CLI wrapper around the integ-api HTTP server. Both the user and the
+ * assistant invoke this CLI — it wraps HTTP calls so the agent never touches
+ * credentials. The assistant discovers these commands via the integrations skill.
  *
  * Commands:
  *   pa integapi serve                 — start the HTTP server

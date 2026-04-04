@@ -26,6 +26,12 @@ const TEMPLATE_FILES = [
   "HABITS.md",
 ] as const;
 
+// Skill templates to copy into .claude/skills/ on first run
+// Each entry is a relative path under src/templates/skills/
+const SKILL_FILES = [
+  "integrations/SKILL.md",
+] as const;
+
 // ---------------------------------------------------------------------------
 // writeFileIfMissing – write-exclusive file creation
 // ---------------------------------------------------------------------------
@@ -101,6 +107,17 @@ export async function ensureWorkspace(config: Config): Promise<void> {
   for (const name of TEMPLATE_FILES) {
     const src = path.join(TEMPLATES_DIR, name);
     const dest = path.join(workspace, name);
+    const content = await fs.readFile(src, "utf-8");
+    await writeFileIfMissing(dest, content);
+  }
+
+  // 3. Copy skill templates into .claude/skills/ (write-exclusive)
+  for (const relPath of SKILL_FILES) {
+    const src = path.join(TEMPLATES_DIR, "skills", relPath);
+    const dest = path.join(workspace, ".claude", "skills", relPath);
+    const destDir = path.dirname(dest);
+    await fs.mkdir(destDir, { recursive: true, mode: DIR_MODE });
+    await fs.chmod(destDir, DIR_MODE);
     const content = await fs.readFile(src, "utf-8");
     await writeFileIfMissing(dest, content);
   }

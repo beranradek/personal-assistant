@@ -13,7 +13,7 @@ export const DEFAULTS: Config = {
       "ls", "cat", "grep", "head", "tail", "wc", "sort", "uniq", "find",
       "echo", "pwd", "date", "whoami", "env", "which", "file", "stat",
       "du", "df", "diff", "tr", "cut", "sed", "awk", "xargs",
-      "node", "npm", "npx", "git",
+      "node", "npm", "npx", "git", "pa",
       "curl", "wget", "tar", "gzip", "gunzip", "zip", "unzip", "jq",
       "python", "python3", "pip", "pip3", "make",
       "mkdir", "rmdir", "touch", "cp", "mv", "rm", "chmod", "ln", "tee",

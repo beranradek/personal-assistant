@@ -261,11 +261,12 @@ function makeMockAdapter(name: string) {
 
 function makeMockIndexer() {
   return {
-    syncFiles: vi.fn(),
+    syncFiles: vi.fn().mockResolvedValue(undefined),
     markDirty: vi.fn(),
     isDirty: vi.fn(() => false),
     syncIfDirty: vi.fn(),
     close: vi.fn(),
+    abort: vi.fn(),
   };
 }
 

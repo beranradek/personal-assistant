@@ -20,6 +20,7 @@
  */
 
 import * as path from "node:path";
+import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
@@ -34,7 +35,6 @@ import { createIndexer } from "./memory/indexer.js";
 import { createRobustMemorySearch } from "./memory/robust-search.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
-import { createIntegServer } from "./tools/integ-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
@@ -69,7 +69,51 @@ export async function startDaemon(configDir: string): Promise<void> {
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
 
-  // 2. Initialize memory system
+  // Shared shutdown flag (used by child process restart logic and shutdown handler)
+  let shuttingDown = false;
+
+  // 2. Fork integ-api server as child process (if enabled)
+  let integApiChild: ChildProcess | null = null;
+
+  if (config.integApi.enabled) {
+    const cliEntry = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "cli.js");
+    let backoffMs = 1_000;
+    const MAX_BACKOFF_MS = 30_000;
+    let lastStartedAt = 0;
+    const UPTIME_RESET_MS = 60_000;
+
+    const spawnIntegApi = () => {
+      lastStartedAt = Date.now();
+      const child = fork(cliEntry, ["--config", configDir, "integapi", "serve"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env },
+      });
+      child.stdout?.on("data", (data: Buffer) => {
+        log.info({ source: "integ-api" }, data.toString().trimEnd());
+      });
+      child.stderr?.on("data", (data: Buffer) => {
+        log.error({ source: "integ-api" }, data.toString().trimEnd());
+      });
+      child.on("exit", (code, signal) => {
+        if (shuttingDown) return;
+        log.warn({ code, signal }, "integ-api child exited, restarting...");
+        // Reset backoff if it was up for long enough
+        if (Date.now() - lastStartedAt >= UPTIME_RESET_MS) {
+          backoffMs = 1_000;
+        }
+        setTimeout(() => {
+          integApiChild = spawnIntegApi();
+        }, backoffMs);
+        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+      });
+      return child;
+    };
+
+    integApiChild = spawnIntegApi();
+    log.info({ port: config.integApi.port }, "integ-api child process forked");
+  }
+
+  // 3. Initialize memory system
   const embedder = await createEmbeddingProvider();
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
@@ -184,13 +228,6 @@ export async function startDaemon(configDir: string): Promise<void> {
     assistant: assistantServer,
   };
 
-  // Wire integ-api MCP server (only if enabled — tools call the integ-api HTTP server)
-  if (config.integApi.enabled) {
-    mcpServers.integrations = createIntegServer({
-      port: config.integApi.port,
-      bind: config.integApi.bind,
-    });
-  }
   const agentOptions = buildAgentOptions(
     config,
     config.security.workspace,
@@ -339,7 +376,6 @@ export async function startDaemon(configDir: string): Promise<void> {
 
   // 12. Graceful shutdown
   const SHUTDOWN_TIMEOUT_MS = 10_000;
-  let shuttingDown = false;
 
   const shutdown = async () => {
     if (shuttingDown) {
@@ -380,6 +416,22 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Close backend
     if (backend.close) {
       await backend.close();
+    }
+
+    // Stop integ-api child process
+    if (integApiChild && !integApiChild.killed) {
+      integApiChild.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        const killTimer = setTimeout(() => {
+          integApiChild?.kill("SIGKILL");
+          resolve();
+        }, 5_000);
+        killTimer.unref();
+        integApiChild!.once("exit", () => {
+          clearTimeout(killTimer);
+          resolve();
+        });
+      });
     }
 
     // Abort any in-flight indexing before disposing the embedder
