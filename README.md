@@ -35,6 +35,8 @@ pa daemon                # Start headless daemon mode
 pa --config <path> ...   # Use a custom settings.json location
 ```
 
+Logs of daemon can be observed via `journalctl --user -u pa-daemon -n 100 --no-pager`
+
 ### Terminal Mode
 
 Interactive terminal for direct conversation. Type messages and get responses. Press `Ctrl+C` to exit.
