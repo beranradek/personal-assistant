@@ -34,6 +34,7 @@ import { createIndexer } from "./memory/indexer.js";
 import { createRobustMemorySearch } from "./memory/robust-search.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
+import { createIntegServer } from "./tools/integ-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
@@ -178,6 +179,14 @@ export async function startDaemon(configDir: string): Promise<void> {
     memory: memoryServer,
     assistant: assistantServer,
   };
+
+  // Wire integ-api MCP server (only if enabled — tools call the integ-api HTTP server)
+  if (config.integApi.enabled) {
+    mcpServers.integrations = createIntegServer({
+      port: config.integApi.port,
+      bind: config.integApi.bind,
+    });
+  }
   const agentOptions = buildAgentOptions(
     config,
     config.security.workspace,

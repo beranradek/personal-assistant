@@ -24,7 +24,7 @@ import { createLogger } from "./core/logger.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -53,6 +53,7 @@ Commands:
   daemon                Start headless daemon mode
   init                  Create default settings.json in config directory
   mcp-server            Start stdio MCP server (for Codex backend integration)
+  integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -198,6 +199,21 @@ async function main(): Promise<void> {
     case "mcp-server":
       await startMcpServer(configDir);
       break;
+    case "integapi": {
+      const { runIntegApiCli } = await import("./integ-api/cli.js");
+      const config = loadConfig(configDir);
+      // Extract args after "integapi" (skip --config and its value)
+      const integArgs: string[] = [];
+      const rawArgs = process.argv.slice(2);
+      let foundIntegapi = false;
+      for (let i = 0; i < rawArgs.length; i++) {
+        if (rawArgs[i] === "--config") { i++; continue; }
+        if (!foundIntegapi && rawArgs[i] === "integapi") { foundIntegapi = true; continue; }
+        if (foundIntegapi) integArgs.push(rawArgs[i]!);
+      }
+      await runIntegApiCli(config, integArgs);
+      break;
+    }
   }
 }
 
