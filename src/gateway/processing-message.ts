@@ -137,6 +137,7 @@ export function createProcessingAccumulator(
   sourceId: string,
   metadata: Record<string, unknown> | undefined,
   intervalMs: number,
+  redact?: (text: string) => string,
 ): ProcessingMessageAccumulator {
   let flushedContent = "";
   const buffer: string[] = [];
@@ -174,6 +175,7 @@ export function createProcessingAccumulator(
       }
 
       displayContent = truncateContent(displayContent);
+      if (redact) displayContent = redact(displayContent);
 
       if (!messageId) {
         messageId = await adapter.createProcessingMessage(
@@ -250,10 +252,11 @@ export function createProcessingAccumulator(
       if (!trimmed) return;
 
       try {
+        const display = truncateContent(trimmed);
         await adapter.updateProcessingMessage(
           sourceId,
           messageId,
-          truncateContent(trimmed),
+          redact ? redact(display) : display,
           metadata,
         );
         flushedContent = trimmed;
