@@ -1,12 +1,12 @@
 ---
 name: "integrations"
-description: "Data integrations for your lookups and summarization. Use whenever user wants info about his Google Calendar events (schedule) or GMail emails."
+description: "Data integrations for your lookups and summarization. Use whenever user wants info about his Google Calendar events (schedule), GMail emails, or Slack messages."
 version: "2026-04-05"
 ---
 
 # Integrations (integ-api)
 
-Access Google Workspace services (Calendar, Gmail) via the `pa integapi` CLI.
+Access Google Workspace services (Calendar, Gmail) and Slack via the `pa integapi` CLI.
 Do not start integ-api HTTP server or configure it yourself — it's managed by the daemon/user.
 
 ## Commands
@@ -58,6 +58,26 @@ pa integapi gmail read <messageId>
 pa integapi gmail labels
 ```
 
+### Slack
+
+```bash
+# Unread messages summary across all configured Slack workspaces
+# Shows channels with unread counts, highlights DMs and channels with @mentions
+pa integapi slack unreads
+
+# Unread summary for a specific workspace only
+pa integapi slack unreads --workspace mycompany
+
+# Read unread messages in a specific channel (text only, no attachments/images)
+pa integapi slack messages <channelId>
+
+# With workspace filter and message limit
+pa integapi slack messages <channelId> --workspace mycompany --limit 30
+```
+
+Multiple Slack workspaces can be configured (company, client, personal). The unreads
+command aggregates across all of them. Messages are never marked as read.
+
 ## Output
 
 All commands return JSON to stdout. Prefer `--format compact-json` for easy parsing.
@@ -75,7 +95,7 @@ PY
 
 ## Default Assistant Style (Calendar)
 
-- Default to a concise “agenda” view: **time + title + location/meet link**.
+- Default to a concise "agenda" view: **time + title + location/meet link**.
 - Omit **attendees** and long **description** fields unless the user explicitly asks.
 - Fetch full details only on demand via `pa integapi calendar event <eventId>`.
 
@@ -91,4 +111,7 @@ PY
 - **Heartbeat checks:** Use `pa integapi calendar today` to see upcoming events.
 - **User asks about schedule:** Use calendar commands to answer.
 - **User asks about email:** Use gmail commands to check inbox.
-- **Proactive awareness:** During heartbeat, check calendar for context.
+- **User asks about Slack messages:** Use `slack unreads` for overview, then `slack messages <id>` for details.
+- **Proactive awareness:** During heartbeat, check calendar and Slack unreads for context.
+- **Pending messages feed:** Use `slack unreads` to provide an aggregated overview of pending
+  Slack activity across workspaces, highlighting what needs attention (DMs, mentions).

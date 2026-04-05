@@ -107,6 +107,7 @@ export const DEFAULTS: Config = {
     services: {
       gmail: { enabled: false, scopes: [] },
       calendar: { enabled: false, scopes: [] },
+      slack: { enabled: false, scopes: [] },
     },
   },
   habits: {

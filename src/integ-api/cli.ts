@@ -16,7 +16,10 @@
  *   pa integapi calendar today        — today's events
  *   pa integapi calendar week         — week's events
  *   pa integapi calendar event <id>   — event details
+ *   pa integapi slack unreads         — unread message summary across workspaces
+ *   pa integapi slack messages <chId> — read unread messages in a channel
  *   pa integapi auth google           — run OAuth2 setup flow
+ *   pa integapi auth slack            — add a Slack workspace token
  */
 
 import type { Config } from "../core/types.js";
@@ -65,6 +68,8 @@ async function runServe(config: Config): Promise<void> {
   const { createRegistry } = await import("./integrations/registry.js");
   const { createGmailModule } = await import("./integrations/gmail/index.js");
   const { createCalendarModule } = await import("./integrations/calendar/index.js");
+  const { createSlackModule } = await import("./integrations/slack/index.js");
+  const { loadSlackWorkspaces } = await import("./integrations/slack/client.js");
 
   const { loadStoredProfiles } = await import("./auth/loader.js");
 
@@ -85,6 +90,10 @@ async function runServe(config: Config): Promise<void> {
   }
   if (config.integApi.services.calendar.enabled) {
     registry.register(createCalendarModule(authMgr));
+  }
+  if (config.integApi.services.slack.enabled) {
+    const slackWorkspaces = await loadSlackWorkspaces(credStore);
+    registry.register(createSlackModule(slackWorkspaces));
   }
 
   await server.start();
@@ -305,6 +314,40 @@ async function runCalendarEvent(config: Config, eventId: string): Promise<void> 
 }
 
 // ---------------------------------------------------------------------------
+// Slack commands
+// ---------------------------------------------------------------------------
+
+async function runSlackUnreads(config: Config, args: string[]): Promise<void> {
+  const params = new URLSearchParams();
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--workspace" || args[i] === "-w") && args[i + 1]) {
+      params.set("workspace", args[++i]!);
+    }
+  }
+
+  const qs = params.toString();
+  const path = `/slack/unreads${qs ? `?${qs}` : ""}`;
+  const data = await integGet(config.integApi.port, path, config.integApi.bind);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function runSlackMessages(config: Config, channelId: string, args: string[]): Promise<void> {
+  const params = new URLSearchParams();
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--workspace" || args[i] === "-w") && args[i + 1]) {
+      params.set("workspace", args[++i]!);
+    } else if (args[i] === "--limit" && args[i + 1]) {
+      params.set("limit", args[++i]!);
+    }
+  }
+
+  const qs = params.toString();
+  const path = `/slack/messages/${encodeURIComponent(channelId)}${qs ? `?${qs}` : ""}`;
+  const data = await integGet(config.integApi.port, path, config.integApi.bind);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+// ---------------------------------------------------------------------------
 // Auth command
 // ---------------------------------------------------------------------------
 
@@ -348,6 +391,71 @@ async function runAuthGoogle(config: Config): Promise<void> {
   );
 }
 
+async function runAuthSlack(config: Config): Promise<void> {
+  const { createCredentialStore } = await import("./auth/store.js");
+  const { validateSlackToken, saveSlackWorkspace } = await import(
+    "./integrations/slack/client.js"
+  );
+  const readline = await import("node:readline");
+
+  const credStore = createCredentialStore(config.security.dataDir);
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  const ask = (prompt: string): Promise<string> =>
+    new Promise((resolve) => rl.question(prompt, resolve));
+
+  try {
+    console.log("Slack workspace setup");
+    console.log("=====================");
+    console.log("");
+    console.log("You need a Slack user token (xoxp-...) with these scopes:");
+    console.log("  channels:read, channels:history, groups:read, groups:history,");
+    console.log("  im:read, im:history, mpim:read, mpim:history, users:read");
+    console.log("");
+    console.log("Get one from: https://api.slack.com/apps → your app → OAuth & Permissions");
+    console.log("");
+
+    const workspaceId = await ask("Workspace ID (short name, e.g. 'mycompany'): ");
+    if (!workspaceId.trim()) {
+      console.error("Workspace ID is required.");
+      process.exit(1);
+    }
+
+    const token = await ask("User token (xoxp-...): ");
+    if (!token.trim().startsWith("xoxp-") && !token.trim().startsWith("xoxb-")) {
+      console.error("Token must start with xoxp- (user token) or xoxb- (bot token).");
+      process.exit(1);
+    }
+
+    console.log("\nValidating token...");
+    const authInfo = await validateSlackToken(token.trim());
+    console.log(`  Team: ${authInfo.teamName} (${authInfo.teamId})`);
+    console.log(`  User: ${authInfo.userName} (${authInfo.userId})`);
+
+    const workspaceName = await ask(
+      `Workspace display name [${authInfo.teamName}]: `,
+    );
+
+    await saveSlackWorkspace(credStore, {
+      type: "slack",
+      workspaceId: workspaceId.trim(),
+      workspaceName: (workspaceName.trim() || authInfo.teamName),
+      token: token.trim(),
+      userId: authInfo.userId,
+      teamId: authInfo.teamId,
+    });
+
+    console.log(`\nSlack workspace "${workspaceId.trim()}" saved successfully.`);
+    console.log("Restart the integ-api server to pick up the new workspace.");
+  } finally {
+    rl.close();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main dispatcher
 // ---------------------------------------------------------------------------
@@ -383,8 +491,10 @@ export async function runIntegApiCli(config: Config, args: string[]): Promise<vo
       const provider = args[1];
       if (provider === "google") {
         await runAuthGoogle(config);
+      } else if (provider === "slack") {
+        await runAuthSlack(config);
       } else {
-        console.error(`Unknown auth provider: ${provider}. Supported: google`);
+        console.error(`Unknown auth provider: ${provider}. Supported: google, slack`);
         process.exit(1);
       }
       break;
@@ -422,6 +532,19 @@ export async function runIntegApiCli(config: Config, args: string[]): Promise<vo
       break;
     }
 
+    case "slack": {
+      const slackCmd = args[1];
+      if (slackCmd === "unreads") {
+        await runSlackUnreads(config, args.slice(2));
+      } else if (slackCmd === "messages" && args[2]) {
+        await runSlackMessages(config, args[2], args.slice(3));
+      } else {
+        console.error(`Unknown slack command: ${slackCmd}. Try: unreads, messages <channelId>`);
+        process.exit(1);
+      }
+      break;
+    }
+
     default:
       console.error(`Unknown integ-api command: ${sub}`);
       printUsage();
@@ -437,6 +560,7 @@ Commands:
   list                          List available integrations
   health                        Check server health
   auth google                   Run Google OAuth2 setup
+  auth slack                    Add a Slack workspace token
   gmail list [--query Q] [--max N]  List Gmail messages
   gmail read <id>               Read a Gmail message
   gmail labels                  List Gmail labels
@@ -444,5 +568,8 @@ Commands:
   calendar week [--format F]    Events from now through next 7 days (F: json|compact|compact-json)
   calendar range --timeMin A --timeMax B [--max N] [--format F]
                                Events in explicit RFC3339 time range (F: json|compact|compact-json)
-  calendar event <id>           Event details`);
+  calendar event <id>           Event details
+  slack unreads [--workspace W] Unread messages summary across Slack workspaces
+  slack messages <channelId> [--workspace W] [--limit N]
+                               Read unread messages in a channel (text only)`);
 }

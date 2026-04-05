@@ -172,6 +172,7 @@ export const IntegApiServiceConfigSchema = z.object({
 export const IntegApiServicesConfigSchema = z.object({
   gmail: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
   calendar: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
+  slack: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
 });
 
 export const IntegApiConfigSchema = z.object({
