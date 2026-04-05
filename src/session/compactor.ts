@@ -236,6 +236,7 @@ export async function flushPreCompactionContext(
   workspaceDir: string,
   sessionKey: string,
   model: string = "claude-haiku-4-5-20251001",
+  redact?: (text: string) => string,
 ): Promise<void> {
   try {
     const tail =
@@ -253,7 +254,7 @@ export async function flushPreCompactionContext(
       type: "interaction",
       assistantResponse: extracted,
       context: "pre-compaction",
-    });
+    }, redact);
   } catch (err) {
     console.warn(
       `[compactor] Pre-compaction flush failed for ${sessionKey} — continuing:`,

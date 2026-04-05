@@ -214,6 +214,7 @@ export function buildAgentOptions(
 async function compactSessionIfNeeded(
   sessionKey: string,
   config: Config,
+  redact?: (text: string) => string,
 ): Promise<void> {
   if (!config.session.compactionEnabled) return;
 
@@ -249,6 +250,7 @@ async function compactSessionIfNeeded(
         config.security.workspace,
         sessionKey,
         config.session.summarizationModel,
+        redact,
       );
     }
 
@@ -331,7 +333,7 @@ export async function runAgentTurn(
   };
 
   // 2. Context pruning: compact if threshold reached, load existing summary
-  await compactSessionIfNeeded(sessionKey, config);
+  await compactSessionIfNeeded(sessionKey, config, redact);
 
   // 3. Check for existing SDK session to resume
   const sdkSessionId = sdkSessionIds.get(sessionKey);
@@ -480,7 +482,7 @@ export async function* streamAgentTurn(
   };
 
   // 2. Context pruning: compact if threshold reached, load existing summary
-  await compactSessionIfNeeded(sessionKey, config);
+  await compactSessionIfNeeded(sessionKey, config, redact);
 
   // 3. Check for existing SDK session to resume
   const sdkSessionId = sdkSessionIds.get(sessionKey);
