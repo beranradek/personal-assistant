@@ -68,7 +68,12 @@ const AGGRESSIVE_ONLY_SOURCES: Array<[string, string]> = [
   [`gh[ps]_[A-Za-z0-9_]{36,}`, "g"],
   // Czech password disclosure
   [
-    `(?:heslo|dočasné heslo|nové heslo|vaše heslo|heslo je|aktuální heslo)\\s*[=:]\\s*\\S+`,
+    `(?:heslo k certifikátu je|heslo k certifikátu|dočasné heslo|nové heslo|vaše heslo|heslo je|aktuální heslo|heslo)\\s*[=:]\\s*\\S+`,
+    "gi",
+  ],
+  // English enrollment/certificate code disclosure
+  [
+    `(?:enrollment code|activation code|certificate password|temporary password)\\s*[=:]\\s*\\S+`,
     "gi",
   ],
   // Czech PIN/access code

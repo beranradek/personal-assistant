@@ -386,6 +386,42 @@ MIIBIjANBgkqhki
           "Zapomněl jsem heslo",
         );
       });
+
+      it("redacts heslo k certifikátu: value", () => {
+        const result = redact("heslo k certifikátu: MyCertPass123");
+        expect(result).toContain(R);
+        expect(result).not.toContain("MyCertPass123");
+      });
+
+      it("redacts heslo k certifikátu je: value", () => {
+        const result = redact("Heslo k certifikátu je: SecretCert456");
+        expect(result).toContain(R);
+        expect(result).not.toContain("SecretCert456");
+      });
+
+      it("redacts enrollment code: value", () => {
+        const result = redact("Enrollment code: ABC-123-XYZ");
+        expect(result).toContain(R);
+        expect(result).not.toContain("ABC-123-XYZ");
+      });
+
+      it("redacts certificate password: value", () => {
+        const result = redact("certificate password: p@ssw0rd");
+        expect(result).toContain(R);
+        expect(result).not.toContain("p@ssw0rd");
+      });
+
+      it("redacts activation code: value", () => {
+        const result = redact("Activation code: ABCD-1234");
+        expect(result).toContain(R);
+        expect(result).not.toContain("ABCD-1234");
+      });
+
+      it("redacts temporary password: value", () => {
+        const result = redact("Your temporary password: TmpPass99!");
+        expect(result).toContain(R);
+        expect(result).not.toContain("TmpPass99!");
+      });
     });
   });
 
