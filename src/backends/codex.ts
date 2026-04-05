@@ -477,14 +477,16 @@ export async function createCodexBackend(
             case "turn.failed": {
               if (stopProgress) { stopProgress(); stopProgress = null; }
               const tf = te as TurnFailedEvent;
-              yield { type: "error", error: tf.error?.message ?? "Turn failed" };
+              const tfMsg = tf.error?.message ?? "Turn failed";
+              yield { type: "error", error: redact ? redact(tfMsg) : tfMsg };
               break;
             }
 
             case "error": {
               if (stopProgress) { stopProgress(); stopProgress = null; }
               const err = te as ThreadErrorEvent;
-              yield { type: "error", error: err.message ?? "Codex error" };
+              const errMsg = err.message ?? "Codex error";
+              yield { type: "error", error: redact ? redact(errMsg) : errMsg };
               break;
             }
 
@@ -504,7 +506,7 @@ export async function createCodexBackend(
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         log.error({ err, sessionKey }, "Codex turn failed");
-        yield { type: "error", error: errorMessage };
+        yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
         return;
       }
 
@@ -598,7 +600,8 @@ export async function createCodexBackend(
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         log.error({ err, sessionKey }, "Codex turn failed (sync)");
-        throw new Error(`Codex agent turn failed: ${errorMessage}`);
+        const safeMessage = redact ? redact(errorMessage) : errorMessage;
+        throw new Error(`Codex agent turn failed: ${safeMessage}`);
       }
     },
 

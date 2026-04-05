@@ -26,6 +26,7 @@ function redactAuditEntry(
 ): AuditEntry {
   return {
     ...entry,
+    ...(entry.userMessage ? { userMessage: redact(entry.userMessage) } : {}),
     ...(entry.errorMessage ? { errorMessage: redact(entry.errorMessage) } : {}),
     ...(entry.assistantResponse ? { assistantResponse: redact(entry.assistantResponse) } : {}),
     ...(entry.toolResult && typeof entry.toolResult === "string"

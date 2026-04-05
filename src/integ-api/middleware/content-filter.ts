@@ -16,7 +16,6 @@
 
 import type { Middleware } from "../types.js";
 import { redactDeep } from "../../security/content-redaction.js";
-export { AGGRESSIVE_PATTERNS as DEFAULT_REDACT_PATTERNS } from "../../security/content-redaction.js";
 
 // ---------------------------------------------------------------------------
 // ContentFilter interface
