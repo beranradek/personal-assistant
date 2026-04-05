@@ -25,7 +25,7 @@ const GMAIL_MANIFEST: IntegrationManifest = {
   id: "gmail",
   name: "Gmail",
   status: "active",
-  capabilities: ["list", "read", "search", "labels"],
+  capabilities: ["list", "read", "search", "labels", "unreads"],
   endpoints: [
     {
       method: "GET",
@@ -46,6 +46,11 @@ const GMAIL_MANIFEST: IntegrationManifest = {
       path: "/gmail/search",
       params: ["q", "max"],
     },
+    {
+      method: "GET",
+      path: "/gmail/unreads",
+      params: ["max"],
+    },
   ],
   rateLimits: {
     requestsPerMinute: GMAIL_REQUESTS_PER_MINUTE,
@@ -60,8 +65,12 @@ const GMAIL_MANIFEST: IntegrationManifest = {
  * Create the Gmail integration module.
  *
  * @param authManager - Auth manager used to obtain access tokens for "gmail" service.
+ * @param userEmails  - User's email addresses for TO/CC detection (from config).
  */
-export function createGmailModule(authManager: AuthManager): IntegrationModule {
+export function createGmailModule(
+  authManager: AuthManager,
+  userEmails: string[] = [],
+): IntegrationModule {
   const rateLimiter = createOutboundRateLimiter();
 
   return {
@@ -69,7 +78,7 @@ export function createGmailModule(authManager: AuthManager): IntegrationModule {
     manifest: GMAIL_MANIFEST,
 
     routes(router: SimpleRouter): void {
-      registerGmailRoutes(router, authManager, rateLimiter);
+      registerGmailRoutes(router, authManager, rateLimiter, userEmails);
     },
 
     async healthCheck(): Promise<boolean> {

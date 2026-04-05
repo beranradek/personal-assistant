@@ -27,6 +27,7 @@ import {
   GmailRateLimitError,
   type OutboundRateLimiter,
 } from "./rate-limits.js";
+import { getGmailUnreads } from "./unreads.js";
 
 const log = createLogger("integ-api:gmail");
 
@@ -273,6 +274,7 @@ export function registerGmailRoutes(
   router: SimpleRouter,
   authManager: AuthManager,
   rateLimiter: OutboundRateLimiter = createOutboundRateLimiter(),
+  userEmails: string[] = [],
 ): void {
   // -------------------------------------------------------------------------
   // GET /gmail/messages — list messages
@@ -445,6 +447,40 @@ export function registerGmailRoutes(
       });
     } catch (err) {
       log.error({ err }, "Gmail search error");
+      res.error(toIntegError(err));
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /gmail/unreads — categorized unread email overview
+  //
+  // Fetches unread INBOX emails across all Gmail accounts, categorizes them
+  // by priority, and returns an aggregated report.
+  //
+  // Categories 1–3 (action_required, invoices, fyi) are returned with detail.
+  // Categories 4–5 (newsletters, automated) are returned as counts only.
+  //
+  // Query params:
+  //   max (optional) — max unread messages per account (default: 50, max: 100)
+  //
+  // Does NOT mark any messages as read.
+  //
+  // Gmail API methods used:
+  //   users.getProfile — get account email
+  //     https://developers.google.com/gmail/api/reference/rest/v1/users/getProfile
+  //   users.messages.list — list unread inbox messages
+  //     https://developers.google.com/gmail/api/reference/rest/v1/users.messages/list
+  //   users.messages.get — get message metadata
+  //     https://developers.google.com/gmail/api/reference/rest/v1/users.messages/get
+  // -------------------------------------------------------------------------
+  router.get("/gmail/unreads", async (req, res) => {
+    try {
+      const max = Math.min(parseInt(req.query.get("max") ?? "50", 10) || 50, 100);
+
+      const result = await getGmailUnreads(authManager, userEmails, rateLimiter, max);
+      res.json(result);
+    } catch (err) {
+      log.error({ err }, "Gmail unreads error");
       res.error(toIntegError(err));
     }
   });

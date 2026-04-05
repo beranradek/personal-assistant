@@ -116,6 +116,14 @@ export interface AuthManager {
   markSuccess(profileId: string): void;
 
   /**
+   * Get a valid access token for a specific profile (refreshing if needed).
+   * Unlike getAccessToken, this targets a single profile without rotation.
+   *
+   * @throws Error if the profile is in cooldown or refresh fails
+   */
+  getAccessTokenForProfile(profileId: string): Promise<TokenResult>;
+
+  /**
    * List all registered profile IDs for a service.
    */
   listProfiles(serviceId: string): string[];
@@ -312,6 +320,22 @@ export function createAuthManager(store: CredentialStore): AuthManager {
       }
       state.consecutiveFailures = 0;
       state.cooldownUntil = 0;
+    },
+
+    async getAccessTokenForProfile(profileId: string): Promise<TokenResult> {
+      const state = getProfile(profileId);
+      const now = Date.now();
+
+      if (state.cooldownUntil > now) {
+        throw new Error(`Profile "${profileId}" is in cooldown until ${new Date(state.cooldownUntil).toISOString()}`);
+      }
+
+      if (isExpired(state.credentials)) {
+        log.debug({ profileId }, "Token expired, refreshing for specific profile");
+        await manager.refreshToken(profileId);
+      }
+
+      return { token: state.credentials.accessToken, profileId };
     },
 
     listProfiles(serviceId: string): string[] {

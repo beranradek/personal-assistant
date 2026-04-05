@@ -17,12 +17,20 @@ Edit `~/.personal-assistant/settings.json`:
   "integApi": {
     "enabled": true,
     "services": {
-      "gmail": { "enabled": true },
+      "gmail": {
+        "enabled": true,
+        "userEmails": ["your@gmail.com", "your@company.cz"]
+      },
       "calendar": { "enabled": true }
     }
   }
 }
 ```
+
+The `userEmails` array lists all your email addresses across Gmail accounts. This enables
+the `gmail unreads` command to correctly detect whether you are in TO vs CC for email
+categorization. The account's own email is always auto-detected; `userEmails` is needed
+when you have additional aliases or multiple accounts whose unreads you want aggregated.
 
 Optional: override scopes per service:
 
@@ -103,6 +111,7 @@ Restart pa daemon.
 pa daemon
 pa integapi health
 pa integapi calendar today
+pa integapi gmail unreads
 pa integapi gmail list --query "is:unread" --max 5 --labels INBOX
 ```
 

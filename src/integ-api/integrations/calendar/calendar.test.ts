@@ -79,6 +79,10 @@ function makeAuthManager(opts: {
       if (opts.throwError) throw opts.throwError;
       return { token: opts.token ?? "test-token", profileId: "profile-1" };
     },
+    async getAccessTokenForProfile(_profileId: string): Promise<TokenResult> {
+      if (opts.throwError) throw opts.throwError;
+      return { token: opts.token ?? "test-token", profileId: "profile-1" };
+    },
     async registerProfile() {},
     async refreshToken() {
       return opts.token ?? "test-token";

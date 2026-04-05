@@ -105,7 +105,7 @@ export const DEFAULTS: Config = {
     inboundRateLimit: 100,
     contentFilter: { redactPatterns: [], maxBodyLength: 50000 },
     services: {
-      gmail: { enabled: false, scopes: [] },
+      gmail: { enabled: false, scopes: [], userEmails: [] },
       calendar: { enabled: false, scopes: [] },
       slack: { enabled: false, scopes: [] },
     },

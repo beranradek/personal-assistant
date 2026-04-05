@@ -13,6 +13,7 @@
  *   pa integapi gmail list [options]  — list Gmail messages
  *   pa integapi gmail read <id>       — read a Gmail message
  *   pa integapi gmail labels          — list Gmail labels
+ *   pa integapi gmail unreads         — categorized unread email overview
  *   pa integapi calendar today        — today's events
  *   pa integapi calendar week         — week's events
  *   pa integapi calendar event <id>   — event details
@@ -86,7 +87,8 @@ async function runServe(config: Config): Promise<void> {
   const registry = createRegistry(server.router);
 
   if (config.integApi.services.gmail.enabled) {
-    registry.register(createGmailModule(authMgr));
+    const gmailUserEmails = config.integApi.services.gmail.userEmails;
+    registry.register(createGmailModule(authMgr, gmailUserEmails));
   }
   if (config.integApi.services.calendar.enabled) {
     registry.register(createCalendarModule(authMgr));
@@ -169,6 +171,20 @@ async function runGmailRead(config: Config, messageId: string): Promise<void> {
 
 async function runGmailLabels(config: Config): Promise<void> {
   const data = await integGet(config.integApi.port, "/gmail/labels", config.integApi.bind);
+  console.log(JSON.stringify(data, null, 2));
+}
+
+async function runGmailUnreads(config: Config, args: string[]): Promise<void> {
+  const params = new URLSearchParams();
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--max" && args[i + 1]) {
+      params.set("max", args[++i]!);
+    }
+  }
+
+  const qs = params.toString();
+  const path = `/gmail/unreads${qs ? `?${qs}` : ""}`;
+  const data = await integGet(config.integApi.port, path, config.integApi.bind);
   console.log(JSON.stringify(data, null, 2));
 }
 
@@ -508,8 +524,10 @@ export async function runIntegApiCli(config: Config, args: string[]): Promise<vo
         await runGmailRead(config, args[2]);
       } else if (gmailCmd === "labels") {
         await runGmailLabels(config);
+      } else if (gmailCmd === "unreads") {
+        await runGmailUnreads(config, args.slice(2));
       } else {
-        console.error(`Unknown gmail command: ${gmailCmd}. Try: list, read <id>, labels`);
+        console.error(`Unknown gmail command: ${gmailCmd}. Try: list, read <id>, labels, unreads`);
         process.exit(1);
       }
       break;
@@ -564,6 +582,7 @@ Commands:
   gmail list [--query Q] [--max N]  List Gmail messages
   gmail read <id>               Read a Gmail message
   gmail labels                  List Gmail labels
+  gmail unreads [--max N]       Categorized unread email overview (aggregated across accounts)
   calendar today [--format F]   Today's calendar events (F: json|compact|compact-json)
   calendar week [--format F]    Events from now through next 7 days (F: json|compact|compact-json)
   calendar range --timeMin A --timeMax B [--max N] [--format F]

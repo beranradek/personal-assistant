@@ -341,4 +341,45 @@ describe("AuthManager", () => {
     const saved = await store.loadCredentials("rp1") as { accessToken: string };
     expect(saved?.accessToken).toBe("refreshed");
   });
+
+  // -------------------------------------------------------------------------
+  // getAccessTokenForProfile — targets a specific profile
+  // -------------------------------------------------------------------------
+
+  it("getAccessTokenForProfile returns token for a specific profile", async () => {
+    const manager = createAuthManager(store);
+    await manager.registerProfile(makeProfile("p0", "gmail", { accessToken: "tok-p0" }));
+    await manager.registerProfile(makeProfile("p1", "gmail", { accessToken: "tok-p1" }));
+
+    const result = await manager.getAccessTokenForProfile("p1");
+    expect(result.token).toBe("tok-p1");
+    expect(result.profileId).toBe("p1");
+  });
+
+  it("getAccessTokenForProfile throws when profile is in cooldown", async () => {
+    const manager = createAuthManager(store);
+    await manager.registerProfile(makeProfile("p0", "gmail", { accessToken: "tok" }));
+
+    // Enter cooldown
+    manager.markFailed("p0");
+    manager.markFailed("p0");
+    manager.markFailed("p0");
+
+    await expect(manager.getAccessTokenForProfile("p0")).rejects.toThrow("cooldown");
+  });
+
+  it("getAccessTokenForProfile refreshes expired token", async () => {
+    const manager = createAuthManager(store);
+    await manager.registerProfile(makeProfile("p0", "gmail", { expiresAt: Date.now() - 1000 }));
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600, token_type: "Bearer" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const result = await manager.getAccessTokenForProfile("p0");
+    expect(result.token).toBe("fresh");
+  });
 });

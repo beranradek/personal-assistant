@@ -94,6 +94,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 ### Setup guides
 
 - Google integrations (Gmail + Calendar): `docs/settings/google_integrations.md`
+  - Gmail unreads: categorized unread email overview with multi-account support
 - Slack integration (unread messages feed): `docs/settings/slack_integration.md`
   - Copy and use src/templates/skills/integrations/SKILL.md so the assistant knows how to use these services 
 - Telegram adapter: `docs/settings/telegram_configuration.md`

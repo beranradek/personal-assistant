@@ -169,8 +169,13 @@ export const IntegApiServiceConfigSchema = z.object({
   scopes: z.array(z.string()).default([]),
 });
 
+export const IntegApiGmailServiceConfigSchema = IntegApiServiceConfigSchema.extend({
+  /** User's email addresses for TO/CC detection across Gmail accounts. */
+  userEmails: z.array(z.string().email()).default([]),
+});
+
 export const IntegApiServicesConfigSchema = z.object({
-  gmail: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
+  gmail: IntegApiGmailServiceConfigSchema.default(() => IntegApiGmailServiceConfigSchema.parse({})),
   calendar: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
   slack: IntegApiServiceConfigSchema.default(() => IntegApiServiceConfigSchema.parse({})),
 });

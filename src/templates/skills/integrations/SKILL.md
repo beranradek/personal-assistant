@@ -45,6 +45,13 @@ pa integapi calendar event <eventId>
 ### Gmail
 
 ```bash
+# Categorized unread email overview (aggregated across all configured Gmail accounts)
+# Returns action_required/invoices/fyi in detail, newsletters/automated as counts only
+pa integapi gmail unreads
+
+# Limit max unread messages fetched per account (default: 50, max: 100)
+pa integapi gmail unreads --max 30
+
 # List recent messages (default: 10)
 pa integapi gmail list
 
@@ -57,6 +64,17 @@ pa integapi gmail read <messageId>
 # List all labels
 pa integapi gmail labels
 ```
+
+The `gmail unreads` command categorizes unread INBOX emails by priority:
+1. **action_required** — real person, user in TO, contains question or request
+2. **invoices** — invoices, receipts (by sender and subject patterns, Czech+English)
+3. **fyi** — user in CC, or internal mail without direct question
+4. **newsletters** — newsletter@, digest@, Substack, etc. (count only)
+5. **automated** — GitHub, Google Calendar, CI/CD, system notifications (count only)
+
+Multiple Gmail accounts are supported — configure `userEmails` in `settings.json` under
+`integApi.services.gmail.userEmails` to list all your email addresses for accurate TO/CC detection.
+Messages are never marked as read.
 
 ### Slack
 
@@ -110,8 +128,8 @@ PY
 
 - **Heartbeat checks:** Use `pa integapi calendar today` to see upcoming events.
 - **User asks about schedule:** Use calendar commands to answer.
-- **User asks about email:** Use gmail commands to check inbox.
+- **User asks about email:** Use `gmail unreads` for a prioritized overview, then `gmail read <id>` for detail.
 - **User asks about Slack messages:** Use `slack unreads` for overview, then `slack messages <id>` for details.
-- **Proactive awareness:** During heartbeat, check calendar and Slack unreads for context.
-- **Pending messages feed:** Use `slack unreads` to provide an aggregated overview of pending
-  Slack activity across workspaces, highlighting what needs attention (DMs, mentions).
+- **Proactive awareness:** During heartbeat, check calendar, gmail unreads, and Slack unreads for context.
+- **Pending messages feed:** Use `slack unreads` and `gmail unreads` to provide aggregated overviews
+  of pending activity, highlighting what needs attention.

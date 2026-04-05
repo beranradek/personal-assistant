@@ -70,6 +70,7 @@ function makeAuthManager(overrides: Partial<AuthManager> = {}): AuthManager {
   return {
     registerProfile: vi.fn(),
     getAccessToken: vi.fn().mockResolvedValue({ token: "test-token", profileId: "p1" } as TokenResult),
+    getAccessTokenForProfile: vi.fn().mockResolvedValue({ token: "test-token", profileId: "p1" } as TokenResult),
     refreshToken: vi.fn().mockResolvedValue("new-token"),
     markFailed: vi.fn(),
     markSuccess: vi.fn(),
@@ -526,9 +527,9 @@ describe("createGmailModule", () => {
     const mod = createGmailModule(authManager);
     expect(mod.id).toBe("gmail");
     expect(mod.manifest.id).toBe("gmail");
-    expect(mod.manifest.capabilities).toEqual(["list", "read", "search", "labels"]);
+    expect(mod.manifest.capabilities).toEqual(["list", "read", "search", "labels", "unreads"]);
     expect(mod.manifest.rateLimits.requestsPerMinute).toBe(60);
-    expect(mod.manifest.endpoints).toHaveLength(4);
+    expect(mod.manifest.endpoints).toHaveLength(5);
   });
 
   it("healthCheck returns true when auth succeeds", async () => {
@@ -560,7 +561,7 @@ describe("createGmailModule", () => {
     };
 
     mod.routes(router);
-    expect(routeCount).toBe(4); // messages, messages/:id, labels, search
+    expect(routeCount).toBe(5); // messages, messages/:id, labels, search, unreads
     registered = true;
     expect(registered).toBe(true);
   });
