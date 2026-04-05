@@ -5,7 +5,7 @@
  * Implements IntegrationModule for Google Calendar read-only access.
  * Provides today's events, week view, event details, and free/busy queries.
  *
- * Capabilities: today, week, event, free-busy
+ * Capabilities: today, week, range, event, free-busy
  *
  * Google Calendar API v3:
  * https://developers.google.com/calendar/api/v3/reference
@@ -32,7 +32,7 @@ const CALENDAR_MANIFEST: IntegrationManifest = {
   id: "calendar",
   name: "Google Calendar",
   status: "active",
-  capabilities: ["today", "week", "event", "free-busy"],
+  capabilities: ["today", "week", "range", "event", "free-busy"],
   endpoints: [
     {
       method: "GET",
@@ -43,6 +43,11 @@ const CALENDAR_MANIFEST: IntegrationManifest = {
       method: "GET",
       path: "/calendar/week",
       params: [],
+    },
+    {
+      method: "GET",
+      path: "/calendar/range",
+      params: ["timeMin", "timeMax", "maxResults"],
     },
     {
       method: "GET",

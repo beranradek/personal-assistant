@@ -11,6 +11,7 @@
  * Routes:
  *   GET /calendar/today        — today's events (00:00–23:59 local day)
  *   GET /calendar/week         — events from now through next 7 days
+ *   GET /calendar/range        — events in an explicit time range
  *   GET /calendar/event/:id    — full details of a single event
  *   GET /calendar/free-busy    — busy intervals for a time range
  *
@@ -337,6 +338,43 @@ export function registerCalendarRoutes(
       res.json({ timeMin, timeMax, events });
     } catch (err) {
       handleRouteError(err, res, "GET /calendar/week");
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /calendar/range?timeMin=<RFC3339>&timeMax=<RFC3339>&maxResults=<N?>
+  // Returns events within an explicit time range.
+  //
+  // Calendar Events list:
+  // https://developers.google.com/calendar/api/v3/reference/events/list
+  // -------------------------------------------------------------------------
+  router.get("/calendar/range", async (req: ParsedRequest, res: JsonResponse) => {
+    const timeMin = req.query.get("timeMin");
+    const timeMax = req.query.get("timeMax");
+    const maxResultsRaw = req.query.get("maxResults");
+
+    if (!timeMin || !timeMax) {
+      res.error({
+        error: "not_found",
+        message: "Query parameters 'timeMin' and 'timeMax' are required (RFC 3339 format).",
+        service: "calendar",
+      });
+      return;
+    }
+
+    const maxResults = (() => {
+      if (!maxResultsRaw) return 100;
+      const n = Number(maxResultsRaw);
+      if (!Number.isFinite(n)) return 100;
+      return Math.max(1, Math.min(2500, Math.trunc(n)));
+    })();
+
+    try {
+      const { token } = await authMgr.getAccessToken("calendar");
+      const events = await fetchEvents(token, timeMin, timeMax, maxResults);
+      res.json({ timeMin, timeMax, maxResults, events });
+    } catch (err) {
+      handleRouteError(err, res, "GET /calendar/range");
     }
   });
 

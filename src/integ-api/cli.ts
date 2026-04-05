@@ -21,6 +21,13 @@
 
 import type { Config } from "../core/types.js";
 
+// Avoid crashing on broken pipes when users pipe output (e.g. into `head`).
+// Node will raise EPIPE on writes after the reader closes; treat it as a clean exit.
+process.stdout.on("error", (err) => {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EPIPE") process.exit(0);
+});
+
 // ---------------------------------------------------------------------------
 // HTTP helper
 // ---------------------------------------------------------------------------
@@ -160,14 +167,132 @@ async function runGmailLabels(config: Config): Promise<void> {
 // Calendar commands
 // ---------------------------------------------------------------------------
 
-async function runCalendarToday(config: Config): Promise<void> {
-  const data = await integGet(config.integApi.port, "/calendar/today", config.integApi.bind);
-  console.log(JSON.stringify(data, null, 2));
+type CalendarCliFormat = "json" | "compact" | "compact-json";
+
+type CalendarEventLite = {
+  id: string;
+  summary: string;
+  start: { dateTime?: string; date?: string; timeZone?: string };
+  end: { dateTime?: string; date?: string; timeZone?: string };
+  status?: string;
+};
+
+function parseCalendarFormat(args: string[]): CalendarCliFormat {
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--format" || args[i] === "-f") && args[i + 1]) {
+      const v = args[i + 1] as CalendarCliFormat;
+      if (v === "json" || v === "compact" || v === "compact-json") return v;
+    }
+  }
+  return "json";
 }
 
-async function runCalendarWeek(config: Config): Promise<void> {
+function toCompactFields(e: CalendarEventLite): {
+  id: string;
+  summary: string;
+  isAllDay: boolean;
+  start: string;
+  end: string;
+  startLocalDate?: string;
+  startLocalTime?: string;
+  endLocalDate?: string;
+  endLocalTime?: string;
+} {
+  const startRaw = e.start.dateTime ?? e.start.date ?? "";
+  const endRaw = e.end.dateTime ?? e.end.date ?? "";
+  const isAllDay = Boolean(e.start.date && !e.start.dateTime);
+
+  const startLocalDate = e.start.dateTime ? e.start.dateTime.slice(0, 10) : e.start.date;
+  const startLocalTime = e.start.dateTime ? e.start.dateTime.slice(11, 16) : undefined;
+  const endLocalDate = e.end.dateTime ? e.end.dateTime.slice(0, 10) : e.end.date;
+  const endLocalTime = e.end.dateTime ? e.end.dateTime.slice(11, 16) : undefined;
+
+  return {
+    id: e.id,
+    summary: e.summary,
+    isAllDay,
+    start: startRaw,
+    end: endRaw,
+    startLocalDate,
+    startLocalTime,
+    endLocalDate,
+    endLocalTime,
+  };
+}
+
+function printCalendarCompactText(payload: { events: CalendarEventLite[] }): void {
+  for (const e of payload.events ?? []) {
+    const c = toCompactFields(e);
+    if (c.isAllDay) {
+      console.log(`${c.startLocalDate ?? ""} (all-day) ${c.summary}`);
+      continue;
+    }
+    const date = c.startLocalDate ?? "";
+    const start = c.startLocalTime ?? "";
+    const end = c.endLocalTime ?? "";
+    console.log(`${date} ${start}–${end} ${c.summary}`);
+  }
+}
+
+function printCalendarOutput(
+  data: unknown,
+  format: CalendarCliFormat,
+): void {
+  if (format === "json") {
+    console.log(JSON.stringify(data, null, 2));
+    return;
+  }
+
+  const payload = data as { timeMin?: string; timeMax?: string; events: CalendarEventLite[] };
+
+  if (format === "compact") {
+    printCalendarCompactText(payload);
+    return;
+  }
+
+  // compact-json
+  const compact = {
+    timeMin: payload.timeMin,
+    timeMax: payload.timeMax,
+    events: (payload.events ?? []).map(toCompactFields),
+  };
+  console.log(JSON.stringify(compact, null, 2));
+}
+
+async function runCalendarToday(config: Config, args: string[]): Promise<void> {
+  const format = parseCalendarFormat(args);
+  const data = await integGet(config.integApi.port, "/calendar/today", config.integApi.bind);
+  printCalendarOutput(data, format);
+}
+
+async function runCalendarWeek(config: Config, args: string[]): Promise<void> {
+  const format = parseCalendarFormat(args);
   const data = await integGet(config.integApi.port, "/calendar/week", config.integApi.bind);
-  console.log(JSON.stringify(data, null, 2));
+  printCalendarOutput(data, format);
+}
+
+async function runCalendarRange(config: Config, args: string[]): Promise<void> {
+  const params = new URLSearchParams();
+  const format = parseCalendarFormat(args);
+
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--timeMin" && args[i + 1]) {
+      params.set("timeMin", args[++i]!);
+    } else if (args[i] === "--timeMax" && args[i + 1]) {
+      params.set("timeMax", args[++i]!);
+    } else if ((args[i] === "--max" || args[i] === "--maxResults") && args[i + 1]) {
+      params.set("maxResults", args[++i]!);
+    }
+  }
+
+  if (!params.get("timeMin") || !params.get("timeMax")) {
+    console.error("calendar range requires --timeMin and --timeMax (RFC 3339).");
+    process.exit(1);
+  }
+
+  const path = `/calendar/range?${params.toString()}`;
+  const data = await integGet(config.integApi.port, path, config.integApi.bind);
+  printCalendarOutput(data, format);
 }
 
 async function runCalendarEvent(config: Config, eventId: string): Promise<void> {
@@ -283,13 +408,15 @@ export async function runIntegApiCli(config: Config, args: string[]): Promise<vo
     case "calendar": {
       const calCmd = args[1];
       if (calCmd === "today") {
-        await runCalendarToday(config);
+        await runCalendarToday(config, args.slice(2));
       } else if (calCmd === "week") {
-        await runCalendarWeek(config);
+        await runCalendarWeek(config, args.slice(2));
+      } else if (calCmd === "range") {
+        await runCalendarRange(config, args.slice(2));
       } else if (calCmd === "event" && args[2]) {
         await runCalendarEvent(config, args[2]);
       } else {
-        console.error(`Unknown calendar command: ${calCmd}. Try: today, week, event <id>`);
+        console.error(`Unknown calendar command: ${calCmd}. Try: today, week, range, event <id>`);
         process.exit(1);
       }
       break;
@@ -313,7 +440,9 @@ Commands:
   gmail list [--query Q] [--max N]  List Gmail messages
   gmail read <id>               Read a Gmail message
   gmail labels                  List Gmail labels
-  calendar today                Today's calendar events
-  calendar week                 This week's events
+  calendar today [--format F]   Today's calendar events (F: json|compact|compact-json)
+  calendar week [--format F]    Events from now through next 7 days (F: json|compact|compact-json)
+  calendar range --timeMin A --timeMax B [--max N] [--format F]
+                               Events in explicit RFC3339 time range (F: json|compact|compact-json)
   calendar event <id>           Event details`);
 }
