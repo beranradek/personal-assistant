@@ -29,6 +29,17 @@ async function withLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
+function redactSessionMessage(
+  message: SessionMessage,
+  redact: (text: string) => string,
+): SessionMessage {
+  return {
+    ...message,
+    content: redact(message.content),
+    ...(message.error ? { error: redact(message.error) } : {}),
+  };
+}
+
 /**
  * Append a single message to a session JSONL file.
  * Creates parent directories and the file if they don't exist.
@@ -36,10 +47,12 @@ async function withLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
 export async function appendMessage(
   sessionPath: string,
   message: SessionMessage,
+  redact?: (text: string) => string,
 ): Promise<void> {
   return withLock(sessionPath, async () => {
+    const safe = redact ? redactSessionMessage(message, redact) : message;
     await fs.mkdir(path.dirname(sessionPath), { recursive: true, mode: 0o700 });
-    await fs.appendFile(sessionPath, JSON.stringify(message) + "\n", {
+    await fs.appendFile(sessionPath, JSON.stringify(safe) + "\n", {
       encoding: "utf-8",
       mode: 0o600,
     });
@@ -79,11 +92,15 @@ export async function loadMessages(sessionPath: string): Promise<SessionMessage[
 export async function appendMessages(
   sessionPath: string,
   messages: SessionMessage[],
+  redact?: (text: string) => string,
 ): Promise<void> {
   if (messages.length === 0) return;
   return withLock(sessionPath, async () => {
+    const safe = redact
+      ? messages.map((m) => redactSessionMessage(m, redact))
+      : messages;
     await fs.mkdir(path.dirname(sessionPath), { recursive: true, mode: 0o700 });
-    const data = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+    const data = safe.map((m) => JSON.stringify(m)).join("\n") + "\n";
     await fs.appendFile(sessionPath, data, { encoding: "utf-8", mode: 0o600 });
   });
 }
