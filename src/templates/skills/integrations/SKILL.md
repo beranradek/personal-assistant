@@ -1,3 +1,8 @@
+---
+name: "integrations"
+description: "Data integrations for your lookups and summarization. Use whenever user wants info about his Google Calendar events (schedule) or GMail emails."
+---
+
 # Integrations (integ-api)
 
 Access Google Workspace services (Calendar, Gmail) via the `pa integapi` CLI.
@@ -77,3 +82,4 @@ pa integapi calendar today | jq '.[0].summary'
 - **User asks about schedule:** Use calendar commands to answer.
 - **User asks about email:** Use gmail commands to check inbox.
 - **Proactive awareness:** During heartbeat, check calendar for context.
+
