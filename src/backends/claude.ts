@@ -19,16 +19,17 @@ import {
 export function createClaudeBackend(
   agentOptions: AgentOptions,
   config: Config,
+  redact?: (text: string) => string,
 ): AgentBackend {
   return {
     name: "claude",
 
     async *runTurn(message: string, sessionKey: string): AsyncGenerator<StreamEvent> {
-      yield* streamAgentTurn(message, sessionKey, agentOptions, config);
+      yield* streamAgentTurn(message, sessionKey, agentOptions, config, redact);
     },
 
     async runTurnSync(message: string, sessionKey: string): Promise<AgentTurnResult> {
-      return runAgentTurn(message, sessionKey, agentOptions, config);
+      return runAgentTurn(message, sessionKey, agentOptions, config, redact);
     },
 
     clearSession(sessionKey: string): void {

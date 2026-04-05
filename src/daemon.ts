@@ -51,6 +51,7 @@ import { getSession, listSessions } from "./exec/process-registry.js";
 import cron from "node-cron";
 import { runDailyReflection } from "./memory/daily-reflection.js";
 import { createLogger } from "./core/logger.js";
+import { createRedactor, CONSERVATIVE_PATTERNS } from "./security/content-redaction.js";
 import type { Adapter, AdapterMessage } from "./core/types.js";
 
 const log = createLogger("daemon");
@@ -237,7 +238,8 @@ export async function startDaemon(configDir: string): Promise<void> {
   );
 
   // 6. Create backend + gateway queue & router
-  const backend = await createBackend(config, agentOptions, { configDir });
+  const redact = createRedactor(CONSERVATIVE_PATTERNS);
+  const backend = await createBackend(config, agentOptions, { configDir, redact });
   log.info({ backend: backend.name }, "Agent backend initialized");
 
   if (config.agent.backend === "codex") {
@@ -248,7 +250,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     );
   }
 
-  const queue = createMessageQueue(config);
+  const queue = createMessageQueue(config, redact);
   const router = createRouter();
 
   // 7. Start adapters (only if enabled)

@@ -434,7 +434,7 @@ export async function runAgentTurn(
   });
 
   // 5. Save to session transcript (audit trail)
-  await saveInteraction(sessionKey, turnMessages, config);
+  await saveInteraction(sessionKey, turnMessages, config, redact);
 
   // 6. Increment turn counter (used to trigger compaction on the next turn)
   sessionTurnCounts.set(sessionKey, (sessionTurnCounts.get(sessionKey) ?? 0) + 1);
@@ -446,8 +446,8 @@ export async function runAgentTurn(
     sessionKey,
     type: "interaction",
     userMessage: message,
-    assistantResponse: redact ? redact(responseText) : responseText,
-  });
+    assistantResponse: responseText,
+  }, redact);
 
   return { response: responseText, messages: turnMessages, partial };
 }
@@ -654,7 +654,7 @@ export async function* streamAgentTurn(
   });
 
   // Save to session transcript (audit trail)
-  await saveInteraction(sessionKey, turnMessages, config);
+  await saveInteraction(sessionKey, turnMessages, config, redact);
 
   // Increment turn counter (used to trigger compaction on the next turn)
   sessionTurnCounts.set(sessionKey, (sessionTurnCounts.get(sessionKey) ?? 0) + 1);
@@ -666,8 +666,8 @@ export async function* streamAgentTurn(
     sessionKey,
     type: "interaction",
     userMessage: message,
-    assistantResponse: redact ? redact(responseText) : responseText,
-  });
+    assistantResponse: responseText,
+  }, redact);
 
   // Yield final result event
   yield { type: "result", response: responseText, messages: turnMessages, partial };

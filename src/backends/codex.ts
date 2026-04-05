@@ -232,6 +232,8 @@ function startProgressTimer(
 export interface CodexBackendOptions {
   /** Config directory path for passing --config to the MCP server subprocess. */
   configDir?: string;
+  /** Optional content redactor applied to persisted sessions and audit logs. */
+  redact?: (text: string) => string;
 }
 
 /**
@@ -243,6 +245,7 @@ export async function createCodexBackend(
   config: Config,
   options?: CodexBackendOptions,
 ): Promise<AgentBackend> {
+  const redact = options?.redact;
   // Build Codex config with MCP server injection
   const codexConfig: Record<string, unknown> = {
     ...(config.codex.configOverrides ?? {}),
@@ -512,7 +515,7 @@ export async function createCodexBackend(
         timestamp: new Date().toISOString(),
       });
 
-      await saveInteraction(sessionKey, turnMessages, config);
+      await saveInteraction(sessionKey, turnMessages, config, redact);
       turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
       await appendAuditEntry(config.security.workspace, {
         timestamp: new Date().toISOString(),
@@ -521,7 +524,7 @@ export async function createCodexBackend(
         type: "interaction",
         userMessage: message,
         assistantResponse: responseText,
-      });
+      }, redact);
 
       yield {
         type: "result",
@@ -580,7 +583,7 @@ export async function createCodexBackend(
           timestamp: new Date().toISOString(),
         });
 
-        await saveInteraction(sessionKey, turnMessages, config);
+        await saveInteraction(sessionKey, turnMessages, config, redact);
         turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
         await appendAuditEntry(config.security.workspace, {
           timestamp: new Date().toISOString(),
@@ -589,7 +592,7 @@ export async function createCodexBackend(
           type: "interaction",
           userMessage: message,
           assistantResponse: responseText,
-        });
+        }, redact);
 
         return { response: responseText, messages: turnMessages, partial: false };
       } catch (err) {

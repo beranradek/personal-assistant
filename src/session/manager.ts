@@ -30,7 +30,8 @@ export async function saveInteraction(
   sessionKey: string,
   messages: SessionMessage[],
   config: Config,
+  redact?: (text: string) => string,
 ): Promise<void> {
   const sessionPath = sessionKeyToPath(config.security.dataDir, sessionKey);
-  await appendMessages(sessionPath, messages);
+  await appendMessages(sessionPath, messages, redact);
 }

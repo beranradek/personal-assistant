@@ -17,6 +17,8 @@ const log = createLogger("backend-factory");
 export interface CreateBackendOptions {
   /** Config directory path, forwarded to the Codex backend for MCP server --config. */
   configDir?: string;
+  /** Optional content redactor applied to persisted sessions and audit logs. */
+  redact?: (text: string) => string;
 }
 
 export async function createBackend(
@@ -32,9 +34,9 @@ export async function createBackend(
       if (!agentOptions) {
         throw new Error("AgentOptions required for Claude backend");
       }
-      return createClaudeBackend(agentOptions, config);
+      return createClaudeBackend(agentOptions, config, options?.redact);
     case "codex":
-      return createCodexBackend(config, { configDir: options?.configDir });
+      return createCodexBackend(config, { configDir: options?.configDir, redact: options?.redact });
     default:
       throw new Error(`Unknown agent backend: ${backendType}`);
   }

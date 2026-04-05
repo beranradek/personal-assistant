@@ -16,6 +16,7 @@ import { handleExec } from "../exec/tool.js";
 import { getSession, listSessions } from "../exec/process-registry.js";
 import { buildAgentOptions } from "../core/agent-runner.js";
 import { createBackend } from "../backends/factory.js";
+import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
 import type { AgentBackend } from "../backends/interface.js";
 import type { Config } from "../core/types.js";
 
@@ -125,7 +126,8 @@ export async function createTerminalSession(
     mcpServers,
   );
 
-  const backend = await createBackend(config, agentOptions, { configDir });
+  const redact = createRedactor(CONSERVATIVE_PATTERNS);
+  const backend = await createBackend(config, agentOptions, { configDir, redact });
 
   return {
     config,

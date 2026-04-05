@@ -52,7 +52,7 @@ export interface MessageQueue {
 /**
  * Create a new message queue with the max size from config.
  */
-export function createMessageQueue(config: Config): MessageQueue {
+export function createMessageQueue(config: Config, redact?: (text: string) => string): MessageQueue {
   const maxSize = config.gateway.maxQueueSize;
   const messages: AdapterMessage[] = [];
   let running = false;
@@ -194,6 +194,7 @@ export function createMessageQueue(config: Config): MessageQueue {
             routeTarget.sourceId,
             message.metadata,
             config.gateway.processingUpdateIntervalMs,
+            redact,
           );
           accumulator.start();
 

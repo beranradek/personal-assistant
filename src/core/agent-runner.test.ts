@@ -510,6 +510,7 @@ describe("agent-runner", () => {
           }),
         ]),
         config,
+        undefined,
       );
     });
 
@@ -630,6 +631,7 @@ describe("agent-runner", () => {
           userMessage: "Audit this",
           assistantResponse: "Audited",
         }),
+        undefined,
       );
     });
 
@@ -1083,6 +1085,7 @@ describe("agent-runner", () => {
           userMessage: "Audit this",
           assistantResponse: "Audited stream",
         }),
+        undefined,
       );
     });
 

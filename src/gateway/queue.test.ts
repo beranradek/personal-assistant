@@ -901,6 +901,7 @@ describe("MessageQueue", () => {
         "123456",
         undefined,
         3000,
+        undefined,
       );
     });
   });

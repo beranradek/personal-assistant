@@ -412,14 +412,14 @@ describe("daemon", () => {
 
     expect(loadConfig).toHaveBeenCalledWith("/app");
     expect(ensureWorkspace).toHaveBeenCalledWith(config);
-    expect(createMessageQueue).toHaveBeenCalledWith(config);
+    expect(createMessageQueue).toHaveBeenCalledWith(config, expect.any(Function));
     expect(createRouter).toHaveBeenCalled();
     expect(createEmbeddingProvider).toHaveBeenCalled();
     expect(createVectorStore).toHaveBeenCalled();
     expect(createIndexer).toHaveBeenCalled();
     expect(readMemoryFiles).toHaveBeenCalled();
     expect(buildAgentOptions).toHaveBeenCalled();
-    expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object), expect.objectContaining({ configDir: expect.any(String) }));
+    expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object), expect.objectContaining({ configDir: expect.any(String), redact: expect.any(Function) }));
     expect(createMemoryServer).toHaveBeenCalled();
     expect(createAssistantServer).toHaveBeenCalled();
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
