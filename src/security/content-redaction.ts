@@ -11,7 +11,7 @@
  * All matches are replaced with `[REDACTED]`.
  */
 
-const REDACTED = "[REDACTED]";
+export const REDACTED = "[REDACTED]";
 
 // ---------------------------------------------------------------------------
 // Pattern sources — Array<[pattern, flags]>, compiled once into RegExp[]
@@ -30,7 +30,7 @@ const CONSERVATIVE_SOURCES: Array<[string, string]> = [
   // Google access tokens
   [`ya29\\.[0-9A-Za-z_.-]+`, "g"],
   // Google refresh tokens
-  [`1//[0-9A-Za-z_-]+`, "g"],
+  [`1//[0-9A-Za-z_-]{20,}`, "g"],
   // JWT tokens
   [`eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_.-]+`, "g"],
   // Password/secret in key=value or key: value
@@ -97,13 +97,16 @@ function compileSources(sources: Array<[string, string]>): RegExp[] {
   return sources.map(([pattern, flags]) => new RegExp(pattern, flags));
 }
 
-export const CONSERVATIVE_PATTERNS: RegExp[] =
-  compileSources(CONSERVATIVE_SOURCES);
+// NOTE: These arrays are frozen to prevent accidental mutation of shared RegExp
+// state (lastIndex). Do NOT use pattern.exec() or pattern.test() directly on
+// these patterns — always use redactString() which resets lastIndex before use.
+export const CONSERVATIVE_PATTERNS: readonly RegExp[] = Object.freeze(
+  compileSources(CONSERVATIVE_SOURCES),
+);
 
-export const AGGRESSIVE_PATTERNS: RegExp[] = compileSources([
-  ...CONSERVATIVE_SOURCES,
-  ...AGGRESSIVE_ONLY_SOURCES,
-]);
+export const AGGRESSIVE_PATTERNS: readonly RegExp[] = Object.freeze(
+  compileSources([...CONSERVATIVE_SOURCES, ...AGGRESSIVE_ONLY_SOURCES]),
+);
 
 // ---------------------------------------------------------------------------
 // Redaction functions
@@ -112,7 +115,7 @@ export const AGGRESSIVE_PATTERNS: RegExp[] = compileSources([
 /**
  * Apply patterns to a single string. All matches are replaced with [REDACTED].
  */
-export function redactString(text: string, patterns: RegExp[]): string {
+export function redactString(text: string, patterns: readonly RegExp[]): string {
   let result = text;
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
@@ -126,7 +129,7 @@ export function redactString(text: string, patterns: RegExp[]): string {
  * With empty patterns returns an identity function.
  */
 export function createRedactor(
-  patterns: RegExp[],
+  patterns: readonly RegExp[],
 ): (text: string) => string {
   if (patterns.length === 0) {
     return (text: string) => text;
@@ -138,7 +141,7 @@ export function createRedactor(
  * Recursively walk JSON values, redacting all strings.
  * Passes through null, boolean, and number unchanged.
  */
-export function redactDeep(value: unknown, patterns: RegExp[]): unknown {
+export function redactDeep(value: unknown, patterns: readonly RegExp[]): unknown {
   if (value === null || value === undefined) {
     return value;
   }
@@ -154,6 +157,7 @@ export function redactDeep(value: unknown, patterns: RegExp[]): unknown {
   if (typeof value === "object") {
     const result: Record<string, unknown> = {};
     for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "__proto__") continue;
       result[key] = redactDeep(val, patterns);
     }
     return result;

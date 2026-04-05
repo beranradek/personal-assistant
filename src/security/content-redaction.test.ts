@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   CONSERVATIVE_PATTERNS,
   AGGRESSIVE_PATTERNS,
+  REDACTED,
   redactString,
   createRedactor,
   redactDeep,
@@ -83,10 +84,14 @@ describe("content-redaction", () => {
     });
 
     describe("Google refresh tokens", () => {
-      it("redacts 1// tokens", () => {
-        expect(redact("refresh: 1//0dx-example_token")).toBe(
+      it("redacts 1// tokens with sufficient length", () => {
+        expect(redact("refresh: 1//0dx-example_token_abcde")).toBe(
           `refresh: ${R}`,
         );
+      });
+
+      it("does not redact short 1// strings (under 20 chars after 1//)", () => {
+        expect(redact("refresh: 1//0dx-short")).toBe("refresh: 1//0dx-short");
       });
 
       it("does not redact 1/ (single slash)", () => {
@@ -462,6 +467,16 @@ MIIBIjANBgkqhki
 
     it("handles top-level string", () => {
       expect(redactDeep("password=abc", CONSERVATIVE_PATTERNS)).toBe(R);
+    });
+
+    it("passes through undefined", () => {
+      expect(redactDeep(undefined, CONSERVATIVE_PATTERNS)).toBeUndefined();
+    });
+  });
+
+  describe("REDACTED constant", () => {
+    it("is exported and equals [REDACTED]", () => {
+      expect(REDACTED).toBe("[REDACTED]");
     });
   });
 });
