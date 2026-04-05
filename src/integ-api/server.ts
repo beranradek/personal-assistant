@@ -26,8 +26,8 @@ import { createInboundRateLimiter } from "./middleware/inbound-rate-limiter.js";
 import {
   createContentFilter,
   createContentFilterMiddleware,
-  DEFAULT_REDACT_PATTERNS,
 } from "./middleware/content-filter.js";
+import { AGGRESSIVE_PATTERNS } from "../security/content-redaction.js";
 
 const log = createLogger("integ-api:server");
 
@@ -288,11 +288,11 @@ export function createIntegApiServer(
 
   // Wire content filter (if config provides filter settings)
   if (config.contentFilter != null) {
+    const extraRegexps = config.contentFilter.redactPatterns.map(
+      (p: string) => new RegExp(p, "g"),
+    );
     const filter = createContentFilter({
-      redactPatterns: [
-        ...DEFAULT_REDACT_PATTERNS,
-        ...config.contentFilter.redactPatterns,
-      ],
+      redactPatterns: [...AGGRESSIVE_PATTERNS, ...extraRegexps],
       maxBodyLength: config.contentFilter.maxBodyLength,
     });
     router.use(createContentFilterMiddleware(filter));

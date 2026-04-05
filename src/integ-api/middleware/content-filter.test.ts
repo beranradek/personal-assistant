@@ -18,8 +18,8 @@ import { createIntegApiServer } from "../server.js";
 import {
   createContentFilter,
   createContentFilterMiddleware,
-  DEFAULT_REDACT_PATTERNS,
 } from "./content-filter.js";
+import { AGGRESSIVE_PATTERNS } from "../../security/content-redaction.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,16 +61,16 @@ describe("createContentFilter – unit", () => {
   });
 
   it("GWT 3: default patterns redact API key style strings", () => {
-    const filter = createContentFilter({ redactPatterns: DEFAULT_REDACT_PATTERNS, maxBodyLength: 100_000 });
-    const data = { key: "sk-abc123def456", name: "test" };
+    const filter = createContentFilter({ redactPatterns: AGGRESSIVE_PATTERNS, maxBodyLength: 100_000 });
+    const data = { key: "sk-abc123def456abcdef7890", name: "test" };
     const result = filter.filter(data) as Record<string, unknown>;
     expect(result.key).toBe("[REDACTED]");
     expect(result.name).toBe("test");
   });
 
   it("GWT 3: default patterns redact long alphanumeric tokens", () => {
-    const filter = createContentFilter({ redactPatterns: DEFAULT_REDACT_PATTERNS, maxBodyLength: 100_000 });
-    const token = "a".repeat(32); // exactly 32 chars — should be redacted
+    const filter = createContentFilter({ redactPatterns: AGGRESSIVE_PATTERNS, maxBodyLength: 100_000 });
+    const token = "a".repeat(40); // 40+ chars — should be redacted by AGGRESSIVE_PATTERNS
     const data = { token };
     const result = filter.filter(data) as Record<string, unknown>;
     expect(result.token).toBe("[REDACTED]");
@@ -78,7 +78,7 @@ describe("createContentFilter – unit", () => {
 
   it("GWT 5: redacts strings in deeply nested objects", () => {
     const filter = createContentFilter({
-      redactPatterns: ["secret"],
+      redactPatterns: [/secret/g],
       maxBodyLength: 100_000,
     });
     const data = {
@@ -98,7 +98,7 @@ describe("createContentFilter – unit", () => {
   });
 
   it("GWT 5: redacts all matching strings at any depth in arrays", () => {
-    const filter = createContentFilter({ redactPatterns: ["sk-[a-zA-Z0-9]{6,}"], maxBodyLength: 100_000 });
+    const filter = createContentFilter({ redactPatterns: [/sk-[a-zA-Z0-9]{6,}/g], maxBodyLength: 100_000 });
     const data = [
       { key: "sk-abc1234567" },
       { nested: [{ deeper: "sk-xyz9876543" }] },
@@ -110,18 +110,18 @@ describe("createContentFilter – unit", () => {
   });
 
   it("handles null values without error", () => {
-    const filter = createContentFilter({ redactPatterns: ["secret"], maxBodyLength: 100_000 });
+    const filter = createContentFilter({ redactPatterns: [/secret/g], maxBodyLength: 100_000 });
     expect(filter.filter(null)).toBeNull();
   });
 
   it("handles boolean and number values without change", () => {
-    const filter = createContentFilter({ redactPatterns: ["secret"], maxBodyLength: 100_000 });
+    const filter = createContentFilter({ redactPatterns: [/secret/g], maxBodyLength: 100_000 });
     expect(filter.filter(true)).toBe(true);
     expect(filter.filter(42)).toBe(42);
   });
 
   it("handles plain string values", () => {
-    const filter = createContentFilter({ redactPatterns: ["secret"], maxBodyLength: 100_000 });
+    const filter = createContentFilter({ redactPatterns: [/secret/g], maxBodyLength: 100_000 });
     expect(filter.filter("no match")).toBe("no match");
     expect(filter.filter("contains secret value")).toBe("contains [REDACTED] value");
   });
@@ -164,7 +164,7 @@ describe("createContentFilter – unit", () => {
     // Pattern that expands matches would still be caught by truncation
     // More importantly: redaction happens first, truncation of redacted result
     const filter = createContentFilter({
-      redactPatterns: ["secret"],
+      redactPatterns: [/secret/g],
       maxBodyLength: 50,
     });
     const data = { msg: "short secret text" };
@@ -172,6 +172,44 @@ describe("createContentFilter – unit", () => {
     // "short [REDACTED] text" serialized as JSON is short enough to NOT trigger truncation
     expect(result.msg).toBe("short [REDACTED] text");
     expect(result.truncated).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createContentFilter – aggressive patterns
+// ---------------------------------------------------------------------------
+
+describe("createContentFilter – aggressive patterns", () => {
+  it("redacts JWT tokens in email body", () => {
+    const filter = createContentFilter({ redactPatterns: AGGRESSIVE_PATTERNS, maxBodyLength: 100_000 });
+    const data = {
+      body: "Your token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    };
+    const result = filter.filter(data) as Record<string, unknown>;
+    expect((result.body as string)).not.toContain("eyJ");
+  });
+
+  it("redacts Czech password disclosure in email body", () => {
+    const filter = createContentFilter({ redactPatterns: AGGRESSIVE_PATTERNS, maxBodyLength: 100_000 });
+    const data = { body: "Vaše dočasné heslo: TempPass456" };
+    const result = filter.filter(data) as Record<string, unknown>;
+    expect((result.body as string)).toContain("[REDACTED]");
+    expect((result.body as string)).not.toContain("TempPass456");
+  });
+
+  it("redacts connection strings in calendar event description", () => {
+    const filter = createContentFilter({ redactPatterns: AGGRESSIVE_PATTERNS, maxBodyLength: 100_000 });
+    const data = { description: "DB: postgres://admin:s3cret@host:5432/db" };
+    const result = filter.filter(data) as Record<string, unknown>;
+    expect((result.description as string)).toContain("[REDACTED]");
+    expect((result.description as string)).not.toContain("s3cret");
+  });
+
+  it("redacts IBAN in email body", () => {
+    const filter = createContentFilter({ redactPatterns: AGGRESSIVE_PATTERNS, maxBodyLength: 100_000 });
+    const data = { body: "IBAN: CZ65 0800 0000 1920 0014 5399" };
+    const result = filter.filter(data) as Record<string, unknown>;
+    expect((result.body as string)).toContain("[REDACTED]");
   });
 });
 
@@ -184,12 +222,12 @@ describe("createContentFilterMiddleware – integration", () => {
     const port = nextPort();
     const srv = createIntegApiServer({ bind: "127.0.0.1", port });
     const filter = createContentFilter({
-      redactPatterns: DEFAULT_REDACT_PATTERNS,
+      redactPatterns: AGGRESSIVE_PATTERNS,
       maxBodyLength: 100_000,
     });
     srv.router.use(createContentFilterMiddleware(filter));
     srv.router.get("/secret", async (_req, res) => {
-      res.json({ apiKey: "sk-abc123def456", name: "my-service" });
+      res.json({ apiKey: "sk-abc123def456_extra_chars_to_reach_20", name: "my-service" });
     });
 
     await srv.start();
