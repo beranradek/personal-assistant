@@ -26,6 +26,8 @@ export interface CredentialStore {
   saveCredentials(profileId: string, credentials: object): Promise<void>;
   loadCredentials(profileId: string): Promise<object | null>;
   deleteCredentials(profileId: string): Promise<void>;
+  /** List all stored profile IDs (derived from filenames in the credentials directory). */
+  listProfiles(): string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +93,14 @@ export function createCredentialStore(dataDir: string): CredentialStore {
         fs.unlinkSync(filePath);
         log.debug({ profileId }, "Credentials deleted");
       }
+    },
+
+    listProfiles(): string[] {
+      if (!fs.existsSync(credDir)) return [];
+      return fs
+        .readdirSync(credDir)
+        .filter((f) => f.endsWith(".json") && !f.endsWith(".tmp"))
+        .map((f) => f.replace(/\.json$/, ""));
     },
   };
 }

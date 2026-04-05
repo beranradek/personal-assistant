@@ -59,9 +59,18 @@ async function runServe(config: Config): Promise<void> {
   const { createGmailModule } = await import("./integrations/gmail/index.js");
   const { createCalendarModule } = await import("./integrations/calendar/index.js");
 
+  const { loadStoredProfiles } = await import("./auth/loader.js");
+
   const server = createIntegApiServer(config.integApi);
   const credStore = createCredentialStore(config.security.dataDir);
   const authMgr = createAuthManager(credStore);
+
+  // Load persisted OAuth2 credentials into the auth manager
+  const enabledServices: string[] = [];
+  if (config.integApi.services.gmail.enabled) enabledServices.push("gmail");
+  if (config.integApi.services.calendar.enabled) enabledServices.push("calendar");
+  await loadStoredProfiles(credStore, authMgr, enabledServices);
+
   const registry = createRegistry(server.router);
 
   if (config.integApi.services.gmail.enabled) {

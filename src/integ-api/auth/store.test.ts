@@ -114,6 +114,28 @@ describe("CredentialStore", () => {
     await expect(store.loadCredentials("../../etc/passwd")).rejects.toThrow("Invalid profileId");
   });
 
+  it("lists stored profile IDs", async () => {
+    const store = createCredentialStore(tmpDir);
+    expect(store.listProfiles()).toEqual([]);
+
+    await store.saveCredentials("alpha", { token: "a" });
+    await store.saveCredentials("beta", { token: "b" });
+
+    const profiles = store.listProfiles().sort();
+    expect(profiles).toEqual(["alpha", "beta"]);
+  });
+
+  it("listProfiles ignores .tmp files", async () => {
+    const store = createCredentialStore(tmpDir);
+    await store.saveCredentials("real", { token: "x" });
+
+    // Manually create a .tmp file
+    const credDir = path.join(tmpDir, "integ-api", "credentials");
+    fs.writeFileSync(path.join(credDir, "leftover.json.tmp"), "{}");
+
+    expect(store.listProfiles()).toEqual(["real"]);
+  });
+
   it("overwrites existing credentials on second save", async () => {
     const store = createCredentialStore(tmpDir);
     await store.saveCredentials("p1", { token: "old" });
