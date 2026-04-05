@@ -86,7 +86,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     const spawnIntegApi = () => {
       lastStartedAt = Date.now();
       const child = fork(cliEntry, ["--config", configDir, "integapi", "serve"], {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
         env: { ...process.env },
       });
       child.stdout?.on("data", (data: Buffer) => {

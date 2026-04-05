@@ -39,14 +39,14 @@ Optional: override scopes per service:
 
 ## 2. Create OAuth2 credentials in Google Cloud Console
 
-1. Create / select a Google Cloud project
+1. Create / select a Google Cloud project, fill in Google OAuth consent screen details, and publish it.
 2. Enable APIs:
    - Gmail API
    - Google Calendar API
 3. Configure OAuth consent screen
    - If the app is in “Testing”, add your Google account as a test user
 4. Create an OAuth client:
-   - Type: **Web application**
+   - Type: Desktop application or Web application
    - Authorized redirect URI: `http://localhost:19101/oauth/callback`
 5. Copy the **Client ID** and **Client secret**
 
@@ -72,15 +72,30 @@ chmod 600 ~/.personal-assistant/.env
 
 ## 4. Run the OAuth setup flow
 
+First, if you are running headless server (VPS like Hetzner) with no local browser UI, 
+log in to server including set up of SSH tunnel from your laptop:
+
+```bash
+ssh -i ~/.ssh/<your-private-ssh-key> -L 19101:localhost:19101 <user>@<server>
+```
+
+This way the final redirect to `http://localhost:19101/oauth/callback` will be forwarded to the 
+server’s local callback listener and OAuth flow can be completed on the server 
+fully even without a browser there.
+
 Run:
 
 ```bash
+export GOOGLE_CLIENT_ID=...
+export GOOGLE_CLIENT_SECRET=...
 pa integapi auth google
 ```
 
 Follow the printed URL, grant access, and complete the redirect. Credentials are stored under:
 
 `~/.personal-assistant/data/integ-api/credentials/google-personal.json`
+
+Restart pa daemon.
 
 ## 5. Verify
 
