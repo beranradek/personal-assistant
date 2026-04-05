@@ -6,24 +6,17 @@ description: "Data integrations for your lookups and summarization. Use whenever
 # Integrations (integ-api)
 
 Access Google Workspace services (Calendar, Gmail) via the `pa integapi` CLI.
-The integ-api HTTP server runs as a child process of the daemon — do **not**
-start or stop it yourself.
-
-## Prerequisites
-
-- `integApi.enabled` must be `true` in settings.json
-- Google OAuth credentials must be configured (`pa integapi auth google`)
-- The daemon must be running (`pa daemon`)
+Do not start integ-api HTTP server or configure it yourself — it's managed by the daemon/user.
 
 ## Commands
 
 ### Discovery & Health
 
 ```bash
-# List available integrations and their status
+# List available integrations and their status (only if required)
 pa integapi list
 
-# Check server health / uptime
+# Check integ-api server health / uptime (only in case of issues)
 pa integapi health
 ```
 
@@ -33,7 +26,9 @@ pa integapi health
 # Today's events (all calendars)
 pa integapi calendar today
 
-# Events for the next 7 days
+# Events for the next 7 days - hardcoded 7-day window starting from today, 
+# but use it directly as is if user asks just events for next week 
+# without specific date range. Do not bother about precise timezone - use it as it is.
 pa integapi calendar week
 
 # Full details of a single event
@@ -69,12 +64,7 @@ pa integapi calendar today | jq '.[0].summary'
 - If the server is not running, commands will fail with a connection error.
   The daemon auto-restarts the server on crash — wait a few seconds and retry.
 - Authentication errors (expired tokens) are handled automatically via token
-  refresh. If refresh fails, re-run `pa integapi auth google`.
-
-## Commands You Should NOT Run
-
-- `pa integapi serve` — managed by the daemon automatically. Never start it yourself.
-- `pa integapi auth google` — interactive OAuth flow that requires a browser. Tell the user to run it themselves if authentication is needed.
+  refresh. If refresh fails, tell the user authentication is needed (do not attempt authenticate yourself)
 
 ## When to Use
 
