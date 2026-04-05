@@ -20,6 +20,20 @@ function dateFromTimestamp(timestamp: string | undefined): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function redactAuditEntry(
+  entry: AuditEntry,
+  redact: (text: string) => string,
+): AuditEntry {
+  return {
+    ...entry,
+    ...(entry.errorMessage ? { errorMessage: redact(entry.errorMessage) } : {}),
+    ...(entry.assistantResponse ? { assistantResponse: redact(entry.assistantResponse) } : {}),
+    ...(entry.toolResult && typeof entry.toolResult === "string"
+      ? { toolResult: redact(entry.toolResult) }
+      : {}),
+  };
+}
+
 /**
  * Append a single audit entry to the daily JSONL log file.
  *
@@ -30,14 +44,16 @@ function dateFromTimestamp(timestamp: string | undefined): string {
 export async function appendAuditEntry(
   workspaceDir: string,
   entry: AuditEntry,
+  redact?: (text: string) => string,
 ): Promise<void> {
-  const date = dateFromTimestamp(entry.timestamp);
+  const safe = redact ? redactAuditEntry(entry, redact) : entry;
+  const date = dateFromTimestamp(safe.timestamp);
   const dailyDir = path.join(workspaceDir, "daily");
 
   await fs.mkdir(dailyDir, { recursive: true, mode: 0o700 });
 
   const filePath = path.join(dailyDir, `${date}.jsonl`);
-  await fs.appendFile(filePath, JSON.stringify(entry) + "\n", {
+  await fs.appendFile(filePath, JSON.stringify(safe) + "\n", {
     encoding: "utf-8",
     mode: 0o600,
   });
