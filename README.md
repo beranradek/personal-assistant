@@ -91,6 +91,13 @@ Headless mode with adapters and heartbeats (periodic checking of reminders, proc
 
 Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it to customize your setup. The file is loaded at startup and not hot-reloaded. Override the location with `--config <path>` or the `PA_CONFIG` env var.
 
+### Setup guides
+
+- Google integrations (Gmail + Calendar): `docs/settings/google_integrations.md`
+- Telegram adapter: `docs/settings/telegram_configuration.md`
+- Slack adapter: `docs/settings/slack_configuration.md`
+- GitHub Webhook adapter: `docs/settings/github_webhook_configuration.md`
+
 ### Key Sections
 
 **security** - Command allowlist, workspace path, allowed directories:
