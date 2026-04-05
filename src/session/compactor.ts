@@ -20,8 +20,11 @@
 import type { SessionMessage } from "../core/types.js";
 import { loadMessages } from "./store.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
+import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+
+const redactError = createRedactor(CONSERVATIVE_PATTERNS);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -107,7 +110,7 @@ async function callAnthropicWithPrompt(
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Anthropic API error (${response.status}): ${body}`);
+    throw new Error(`Anthropic API error (${response.status}): ${redactError(body)}`);
   }
   const data = (await response.json()) as {
     content: Array<{ type: string; text?: string }>;
@@ -156,7 +159,7 @@ async function summarizeWithOpenAI(
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${body}`);
+    throw new Error(`OpenAI API error (${response.status}): ${redactError(body)}`);
   }
   const data = (await response.json()) as {
     choices: Array<{ message: { content: string } }>;
