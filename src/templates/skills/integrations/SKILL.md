@@ -1,6 +1,7 @@
 ---
 name: "integrations"
 description: "Data integrations for your lookups and summarization. Use whenever user wants info about his Google Calendar events (schedule) or GMail emails."
+version: "2026-04-05"
 ---
 
 # Integrations (integ-api)
@@ -26,10 +27,16 @@ pa integapi health
 # Today's events (all calendars)
 pa integapi calendar today
 
-# Events for the next 7 days - hardcoded 7-day window starting from today, 
-# but use it directly as is if user asks just events for next week 
-# without specific date range. Do not bother about precise timezone - use it as it is.
+# Events for the next 7 days - hardcoded 7-day window starting from now.
 pa integapi calendar week
+
+# Events for an explicit time range (RFC3339).
+# Prefer this when the user asks for "next week" (Mon–Sun) or any specific dates.
+pa integapi calendar range --timeMin "2026-04-06T00:00:00+02:00" --timeMax "2026-04-13T00:00:00+02:00"
+
+# Machine-friendly compact outputs (recommended for the assistant)
+pa integapi calendar week --format compact-json
+pa integapi calendar range --timeMin "..." --timeMax "..." --format compact-json
 
 # Full details of a single event
 pa integapi calendar event <eventId>
@@ -53,11 +60,24 @@ pa integapi gmail labels
 
 ## Output
 
-All commands return JSON to stdout. Parse with `jq` if needed:
+All commands return JSON to stdout. Prefer `--format compact-json` for easy parsing.
+If you need ad-hoc parsing and `jq` is not available, use Python:
 
 ```bash
-pa integapi calendar today | jq '.[0].summary'
+pa integapi calendar week > /tmp/cal.json
+python3 - <<'PY'
+import json
+data=json.load(open("/tmp/cal.json","r",encoding="utf-8"))
+for e in data.get("events",[]):
+    print(e.get("summary"))
+PY
 ```
+
+## Default Assistant Style (Calendar)
+
+- Default to a concise “agenda” view: **time + title + location/meet link**.
+- Omit **attendees** and long **description** fields unless the user explicitly asks.
+- Fetch full details only on demand via `pa integapi calendar event <eventId>`.
 
 ## Error Handling
 
@@ -72,4 +92,3 @@ pa integapi calendar today | jq '.[0].summary'
 - **User asks about schedule:** Use calendar commands to answer.
 - **User asks about email:** Use gmail commands to check inbox.
 - **Proactive awareness:** During heartbeat, check calendar for context.
-
