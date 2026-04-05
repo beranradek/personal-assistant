@@ -321,6 +321,7 @@ export async function runAgentTurn(
   sessionKey: string,
   agentOptions: AgentOptions,
   config: Config,
+  redact?: (text: string) => string,
 ): Promise<AgentTurnResult> {
   // 1. Build the user message
   const userMsg: SessionMessage = {
@@ -406,7 +407,8 @@ export async function runAgentTurn(
               ? "This usually means an authentication error or a crash in the Claude Code subprocess. " +
                 "Check that your ANTHROPIC_API_KEY is set and valid, or run `claude` directly to diagnose."
               : `Exit code ${code} from the Claude Code subprocess. Run \`claude\` directly to diagnose.`;
-          throw new Error(`${err.message}\n${hint}`);
+          const enhanced = `${err.message}\n${hint}`;
+          throw new Error(redact ? redact(enhanced) : enhanced);
         }
       }
       throw err;
@@ -444,7 +446,7 @@ export async function runAgentTurn(
     sessionKey,
     type: "interaction",
     userMessage: message,
-    assistantResponse: responseText,
+    assistantResponse: redact ? redact(responseText) : responseText,
   });
 
   return { response: responseText, messages: turnMessages, partial };
@@ -468,6 +470,7 @@ export async function* streamAgentTurn(
   sessionKey: string,
   agentOptions: AgentOptions,
   config: Config,
+  redact?: (text: string) => string,
 ): AsyncGenerator<StreamEvent> {
   // 1. Build the user message
   const userMsg: SessionMessage = {
@@ -628,7 +631,7 @@ export async function* streamAgentTurn(
             errorMessage = `${err.message}\n${hint}`;
           }
         }
-        yield { type: "error", error: errorMessage };
+        yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
         return;
       }
     }
@@ -663,7 +666,7 @@ export async function* streamAgentTurn(
     sessionKey,
     type: "interaction",
     userMessage: message,
-    assistantResponse: responseText,
+    assistantResponse: redact ? redact(responseText) : responseText,
   });
 
   // Yield final result event
