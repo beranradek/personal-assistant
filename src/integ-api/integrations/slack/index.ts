@@ -36,7 +36,7 @@ const SLACK_MANIFEST: IntegrationManifest = {
   id: "slack",
   name: "Slack",
   status: "active",
-  capabilities: ["unreads", "messages"],
+  capabilities: ["unreads", "messages", "channels"],
   endpoints: [
     {
       method: "GET",
@@ -47,6 +47,11 @@ const SLACK_MANIFEST: IntegrationManifest = {
       method: "GET",
       path: "/slack/messages/:channelId",
       params: ["channelId", "workspace", "limit"],
+    },
+    {
+      method: "GET",
+      path: "/slack/channels",
+      params: ["workspace"],
     },
   ],
   rateLimits: SLACK_RATE_LIMITS,

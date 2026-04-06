@@ -430,13 +430,28 @@ async function getChannelUnreadInfo(
   token: string,
   userId: string,
 ): Promise<ChannelUnreadInfo | null> {
-  const res = await slackGet<SlackConversationInfoResponse>(
-    "conversations.info",
-    token,
-    { channel: channelId },
-  );
+  let res: SlackConversationInfoResponse;
+  try {
+    res = await slackGet<SlackConversationInfoResponse>(
+      "conversations.info",
+      token,
+      { channel: channelId },
+    );
+  } catch (err) {
+    log.warn(
+      { err, channelId, channelName: channel.name, channelType: channel.type },
+      "conversations.info threw — channel skipped",
+    );
+    return null;
+  }
 
-  if (!res.ok || !res.channel) return null;
+  if (!res.ok || !res.channel) {
+    log.warn(
+      { channelId, channelName: channel.name, channelType: channel.type, error: res.error },
+      "conversations.info failed — channel skipped",
+    );
+    return null;
+  }
 
   // Use unread_count (all messages) rather than unread_count_display (filtered).
   // unread_count_display can be 0 for muted channels or channels with
@@ -541,6 +556,19 @@ export async function getWorkspaceUnreads(
     channel: classifyChannel(conv),
   }));
 
+  // Log conversation breakdown by type for diagnostics
+  const typeCounts = classified.reduce(
+    (acc, { channel }) => {
+      acc[channel.type] = (acc[channel.type] ?? 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+  log.info(
+    { workspace: workspace.id, total: classified.length, ...typeCounts },
+    "Listed user conversations",
+  );
+
   // Fetch unread info with concurrency limit
   const unreadResults = await withConcurrency(
     classified.map(({ conv, channel }) => async () => {
@@ -576,6 +604,107 @@ export async function getWorkspaceUnreads(
     channels,
     totalUnread,
     totalMentions,
+  };
+}
+
+/** Diagnostic info for a single channel. */
+export interface ChannelDiagnostic {
+  id: string;
+  name: string;
+  type: SlackChannel["type"];
+  isPrivate: boolean;
+  unreadCount: number;
+  unreadCountDisplay: number;
+  infoOk: boolean;
+  infoError?: string;
+}
+
+/** Result of listing all channels in a workspace (diagnostic). */
+export interface WorkspaceChannelsDiagnostic {
+  workspaceId: string;
+  workspaceName: string;
+  channels: ChannelDiagnostic[];
+  totalChannels: number;
+}
+
+/**
+ * List ALL channels the user is a member of with their unread state.
+ * Diagnostic tool — shows every channel regardless of unread count.
+ */
+export async function listWorkspaceChannels(
+  workspace: SlackWorkspace,
+): Promise<WorkspaceChannelsDiagnostic> {
+  const conversations = await listUserConversations(workspace.token);
+
+  const classified = conversations.map((conv) => ({
+    conv,
+    channel: classifyChannel(conv),
+  }));
+
+  const channelDiags = await withConcurrency(
+    classified.map(({ conv, channel }) => async () => {
+      await enrichImName(channel, conv, workspace.token);
+
+      let res: SlackConversationInfoResponse;
+      try {
+        res = await slackGet<SlackConversationInfoResponse>(
+          "conversations.info",
+          workspace.token,
+          { channel: channel.id },
+        );
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        return {
+          id: channel.id,
+          name: channel.name,
+          type: channel.type,
+          isPrivate: channel.isPrivate,
+          unreadCount: -1,
+          unreadCountDisplay: -1,
+          infoOk: false,
+          infoError: errMsg,
+        } satisfies ChannelDiagnostic;
+      }
+
+      if (!res.ok || !res.channel) {
+        return {
+          id: channel.id,
+          name: channel.name,
+          type: channel.type,
+          isPrivate: channel.isPrivate,
+          unreadCount: -1,
+          unreadCountDisplay: -1,
+          infoOk: false,
+          infoError: res.error ?? "no channel data",
+        } satisfies ChannelDiagnostic;
+      }
+
+      return {
+        id: channel.id,
+        name: channel.name,
+        type: channel.type,
+        isPrivate: channel.isPrivate,
+        unreadCount: res.channel.unread_count ?? -1,
+        unreadCountDisplay: res.channel.unread_count_display ?? -1,
+        infoOk: true,
+      } satisfies ChannelDiagnostic;
+    }),
+    MAX_CONCURRENCY,
+  );
+
+  // Sort: channels with unreads first, then by name
+  channelDiags.sort((a, b) => {
+    const aUnread = Math.max(a.unreadCount, 0);
+    const bUnread = Math.max(b.unreadCount, 0);
+    if (aUnread !== bUnread) return bUnread - aUnread;
+    return a.name.localeCompare(b.name);
+  });
+
+  return {
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    channels: channelDiags,
+    totalChannels: channelDiags.length,
   };
 }
 

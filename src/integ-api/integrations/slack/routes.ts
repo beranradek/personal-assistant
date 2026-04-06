@@ -18,8 +18,8 @@
 import { createLogger } from "../../../core/logger.js";
 import type { SimpleRouter } from "../../server.js";
 import type { ParsedRequest, JsonResponse, IntegApiError } from "../../types.js";
-import type { SlackWorkspace, WorkspaceUnreads } from "./client.js";
-import { getWorkspaceUnreads, getChannelMessages } from "./client.js";
+import type { SlackWorkspace, WorkspaceUnreads, WorkspaceChannelsDiagnostic } from "./client.js";
+import { getWorkspaceUnreads, getChannelMessages, listWorkspaceChannels } from "./client.js";
 
 const log = createLogger("integ-api:slack:routes");
 
@@ -263,4 +263,67 @@ export function registerSlackRoutes(
       }
     },
   );
+
+  // -------------------------------------------------------------------------
+  // GET /slack/channels
+  //
+  // Diagnostic endpoint: lists ALL channels the user is a member of with
+  // their raw unread counts (unread_count and unread_count_display).
+  // Useful for debugging why certain channels don't appear in /slack/unreads.
+  //
+  // Query params:
+  //   workspace (optional) — filter to a single workspace by ID
+  // -------------------------------------------------------------------------
+  router.get("/slack/channels", async (req: ParsedRequest, res: JsonResponse) => {
+    try {
+      if (workspaces.length === 0) {
+        res.error({
+          error: "auth_failed",
+          message: "No Slack workspaces configured. Run 'pa integapi auth slack' to add one.",
+          service: "slack",
+        });
+        return;
+      }
+
+      const filterWorkspace = req.query.get("workspace");
+      const targets = filterWorkspace
+        ? workspaces.filter((w) => w.id === filterWorkspace)
+        : workspaces;
+
+      if (targets.length === 0) {
+        res.error({
+          error: "not_found",
+          message: `Workspace "${filterWorkspace}" not found. Available: ${workspaces.map((w) => w.id).join(", ")}`,
+          service: "slack",
+        });
+        return;
+      }
+
+      const results = await Promise.allSettled(
+        targets.map((ws) => listWorkspaceChannels(ws)),
+      );
+
+      const workspaceResults: WorkspaceChannelsDiagnostic[] = [];
+      const errors: string[] = [];
+
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i]!;
+        if (result.status === "fulfilled") {
+          workspaceResults.push(result.value);
+        } else {
+          const wsId = targets[i]?.id ?? "unknown";
+          const errMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          errors.push(`${wsId}: ${errMsg}`);
+        }
+      }
+
+      res.json({
+        workspaces: workspaceResults,
+        ...(errors.length > 0 ? { errors } : {}),
+      });
+    } catch (err) {
+      log.error({ err }, "Slack channels diagnostic error");
+      res.error(toIntegError(err));
+    }
+  });
 }

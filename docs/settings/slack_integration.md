@@ -169,6 +169,6 @@ pa integapi slack messages <channelId> --workspace mycompany --limit 30
 ## Troubleshooting
 
 - **auth_failed errors**: Re-run `pa integapi auth slack` to update the token
-- **Missing channels**: Ensure the Slack app has all required scopes and is installed to the workspace
-- **No unreads showing**: The integration uses `unread_count_display` which respects your Slack notification preferences
-- **Rate limits**: Slack allows ~50 requests/minute per workspace. Large workspaces with many channels may take a few seconds
+- **Missing channels**: Ensure the Slack app has all required scopes and is installed to the workspace. Run `pa integapi slack channels` to see all channels the token can access with raw unread counts
+- **No unreads showing**: The integration uses `unread_count` from the Slack API. Run `pa integapi slack channels` to inspect raw values
+- **Rate limits**: Slack allows ~50 requests/minute per workspace. Large workspaces with many channels may take a few seconds. HTTP 429 responses are retried automatically (up to 3 times)

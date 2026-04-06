@@ -347,6 +347,20 @@ async function runSlackUnreads(config: Config, args: string[]): Promise<void> {
   console.log(JSON.stringify(data, null, 2));
 }
 
+async function runSlackChannels(config: Config, args: string[]): Promise<void> {
+  const params = new URLSearchParams();
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--workspace" || args[i] === "-w") && args[i + 1]) {
+      params.set("workspace", args[++i]!);
+    }
+  }
+
+  const qs = params.toString();
+  const path = `/slack/channels${qs ? `?${qs}` : ""}`;
+  const data = await integGet(config.integApi.port, path, config.integApi.bind);
+  console.log(JSON.stringify(data, null, 2));
+}
+
 async function runSlackMessages(config: Config, channelId: string, args: string[]): Promise<void> {
   const params = new URLSearchParams();
   for (let i = 0; i < args.length; i++) {
@@ -556,8 +570,10 @@ export async function runIntegApiCli(config: Config, args: string[]): Promise<vo
         await runSlackUnreads(config, args.slice(2));
       } else if (slackCmd === "messages" && args[2]) {
         await runSlackMessages(config, args[2], args.slice(3));
+      } else if (slackCmd === "channels") {
+        await runSlackChannels(config, args.slice(2));
       } else {
-        console.error(`Unknown slack command: ${slackCmd}. Try: unreads, messages <channelId>`);
+        console.error(`Unknown slack command: ${slackCmd}. Try: unreads, messages <channelId>, channels`);
         process.exit(1);
       }
       break;
@@ -590,5 +606,7 @@ Commands:
   calendar event <id>           Event details
   slack unreads [--workspace W] Unread messages summary across Slack workspaces
   slack messages <channelId> [--workspace W] [--limit N]
-                               Read unread messages in a channel (text only)`);
+                               Read unread messages in a channel (text only)
+  slack channels [--workspace W]
+                               Diagnostic: list ALL channels with raw unread counts`);
 }
