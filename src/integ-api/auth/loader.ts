@@ -29,7 +29,13 @@ export async function loadStoredProfiles(
   authMgr: AuthManager,
   services: string[],
 ): Promise<void> {
-  const profileIds = store.listProfiles();
+  const allProfileIds = store.listProfiles();
+  // Filter out composite IDs (e.g. "google-personal--calendar") that were
+  // created by registerProfile on a previous run — only load base profiles.
+  const serviceSuffixes = services.map((s) => `--${s}`);
+  const profileIds = allProfileIds.filter(
+    (id) => !serviceSuffixes.some((suffix) => id.endsWith(suffix)),
+  );
   if (profileIds.length === 0) {
     log.info("No stored credential profiles found");
     return;
