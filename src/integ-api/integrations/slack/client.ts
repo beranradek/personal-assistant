@@ -456,10 +456,48 @@ async function getChannelUnreadInfo(
   // Use unread_count (all messages) rather than unread_count_display (filtered).
   // unread_count_display can be 0 for muted channels or channels with
   // notification preference set to "Mentions only", hiding real unreads.
-  const unreadCount = res.channel.unread_count ?? res.channel.unread_count_display ?? 0;
+  let unreadCount = res.channel.unread_count ?? res.channel.unread_count_display ?? -1;
+  const lastRead = res.channel.last_read ?? "0";
+  const isDirect = channel.type === "im" || channel.type === "mpim";
+
+  // When unread_count is known and zero, skip early (no history fetch needed)
   if (unreadCount === 0) return null;
 
-  const isDirect = channel.type === "im" || channel.type === "mpim";
+  // Fetch message history since last_read when needed:
+  //  (a) unread_count missing (-1) — common with private channels / groups
+  //  (b) non-DM channel has unreads — scan for @mentions
+  const needHistory = lastRead !== "0" && (unreadCount < 0 || (!isDirect && unreadCount > 0));
+  let unreadMessages: SlackRawMessage[] | undefined;
+
+  if (needHistory) {
+    try {
+      const histRes = await slackGet<SlackHistoryResponse>(
+        "conversations.history",
+        token,
+        {
+          channel: channelId,
+          oldest: lastRead,
+          limit: String(MAX_UNREAD_SCAN),
+        },
+      );
+      if (histRes.ok && histRes.messages) {
+        unreadMessages = histRes.messages;
+      }
+    } catch (err) {
+      log.debug({ err, channelId }, "Failed to fetch channel history");
+    }
+  }
+
+  // If conversations.info didn't provide unread_count, count from history
+  if (unreadCount < 0 && unreadMessages) {
+    unreadCount = unreadMessages.length;
+    log.debug(
+      { channelId, channelName: channel.name, unreadCount },
+      "Counted unreads via history fallback",
+    );
+  }
+
+  if (unreadCount <= 0) return null;
 
   // For IMs/MPIMs, every message is inherently directed at the user
   if (isDirect) {
@@ -473,30 +511,14 @@ async function getChannelUnreadInfo(
   }
 
   // For channels/groups: scan unread messages for @mentions
-  const lastRead = res.channel.last_read ?? "0";
   let mentionCount = 0;
-
-  try {
-    const histRes = await slackGet<SlackHistoryResponse>(
-      "conversations.history",
-      token,
-      {
-        channel: channelId,
-        oldest: lastRead,
-        limit: String(MAX_UNREAD_SCAN),
-      },
-    );
-
-    if (histRes.ok && histRes.messages) {
-      const mentionPattern = `<@${userId}>`;
-      for (const msg of histRes.messages) {
-        if (msg.text?.includes(mentionPattern)) {
-          mentionCount++;
-        }
+  if (unreadMessages) {
+    const mentionPattern = `<@${userId}>`;
+    for (const msg of unreadMessages) {
+      if (msg.text?.includes(mentionPattern)) {
+        mentionCount++;
       }
     }
-  } catch (err) {
-    log.debug({ err, channelId }, "Failed to scan channel for mentions");
   }
 
   return {
@@ -615,6 +637,7 @@ export interface ChannelDiagnostic {
   isPrivate: boolean;
   unreadCount: number;
   unreadCountDisplay: number;
+  lastRead: string;
   infoOk: boolean;
   infoError?: string;
 }
@@ -661,6 +684,7 @@ export async function listWorkspaceChannels(
           isPrivate: channel.isPrivate,
           unreadCount: -1,
           unreadCountDisplay: -1,
+          lastRead: "",
           infoOk: false,
           infoError: errMsg,
         } satisfies ChannelDiagnostic;
@@ -674,6 +698,7 @@ export async function listWorkspaceChannels(
           isPrivate: channel.isPrivate,
           unreadCount: -1,
           unreadCountDisplay: -1,
+          lastRead: "",
           infoOk: false,
           infoError: res.error ?? "no channel data",
         } satisfies ChannelDiagnostic;
@@ -686,6 +711,7 @@ export async function listWorkspaceChannels(
         isPrivate: channel.isPrivate,
         unreadCount: res.channel.unread_count ?? -1,
         unreadCountDisplay: res.channel.unread_count_display ?? -1,
+        lastRead: res.channel.last_read ?? "",
         infoOk: true,
       } satisfies ChannelDiagnostic;
     }),
