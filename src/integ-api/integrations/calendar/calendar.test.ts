@@ -257,12 +257,24 @@ describe("GET /calendar/today", () => {
     }
   });
 
-  it("returns 200 with event details including location and attendees", async () => {
+  it("listing endpoints omit heavy fields (attendees, description, conferenceData)", async () => {
     const port = nextPort();
     const srv = createIntegApiServer({ bind: "127.0.0.1", port });
-    srv.router.get("/calendar/today", async (_req, res) => {
-      res.json({ date: "2026-04-03", events: [MOCK_EVENT_2] });
+    const authMgr = makeAuthManager({ token: "test-token" });
+    createCalendarModule(authMgr).routes(srv.router);
+
+    // Mock the upstream Google Calendar API call
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (urlStr.includes("googleapis.com/calendar/v3")) {
+        return new Response(JSON.stringify({
+          items: [MOCK_EVENT_2],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return originalFetch(url, init);
     });
+
     await srv.start();
 
     try {
@@ -271,12 +283,20 @@ describe("GET /calendar/today", () => {
       const resp = body as {
         events: Array<{
           location?: string;
-          attendees?: Array<{ email: string }>;
+          summary?: string;
+          attendees?: unknown;
+          description?: unknown;
+          conferenceData?: unknown;
         }>;
       };
+      expect(resp.events[0]?.summary).toBe("Lunch with Alice");
       expect(resp.events[0]?.location).toBe("Café Central");
-      expect(resp.events[0]?.attendees?.[0]?.email).toBe("alice@example.com");
+      // Heavy fields must be omitted in listing endpoints
+      expect(resp.events[0]?.attendees).toBeUndefined();
+      expect(resp.events[0]?.description).toBeUndefined();
+      expect(resp.events[0]?.conferenceData).toBeUndefined();
     } finally {
+      vi.stubGlobal("fetch", originalFetch);
       await srv.stop();
     }
   });

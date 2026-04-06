@@ -139,6 +139,24 @@ function mapEvent(raw: GoogleEvent): CalendarEvent {
   };
 }
 
+/**
+ * Map a raw Google event to a lightweight shape for listing endpoints.
+ * Strips heavy fields (attendees, description, conferenceData) that are
+ * only useful when viewing a single event's detail.
+ */
+function mapEventLite(raw: GoogleEvent): CalendarEvent {
+  return {
+    id: raw.id,
+    summary: raw.summary ?? "(no title)",
+    location: raw.location,
+    start: raw.start,
+    end: raw.end,
+    status: raw.status ?? "confirmed",
+    htmlLink: raw.htmlLink,
+    organizer: raw.organizer,
+  };
+}
+
 /** Sort events by start time (dateTime takes priority over date). */
 function sortEventsByStart(events: CalendarEvent[]): CalendarEvent[] {
   return [...events].sort((a, b) => {
@@ -233,6 +251,7 @@ async function fetchEvents(
   timeMin: string,
   timeMax: string,
   maxResults = 50,
+  mapper: (raw: GoogleEvent) => CalendarEvent = mapEventLite,
 ): Promise<CalendarEvent[]> {
   const params = new URLSearchParams({
     timeMin,
@@ -244,7 +263,7 @@ async function fetchEvents(
 
   const url = `${CALENDAR_API_BASE}/calendars/primary/events?${params.toString()}`;
   const data = await calendarGet<GoogleEventsListResponse>(url, token);
-  return sortEventsByStart((data.items ?? []).map(mapEvent));
+  return sortEventsByStart((data.items ?? []).map(mapper));
 }
 
 // ---------------------------------------------------------------------------

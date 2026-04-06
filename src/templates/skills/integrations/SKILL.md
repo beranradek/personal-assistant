@@ -96,6 +96,10 @@ pa integapi slack messages <channelId> --workspace mycompany --limit 30
 Multiple Slack workspaces can be configured (company, client, personal). The unreads
 command aggregates across all of them. Messages are never marked as read.
 
+**Performance note:** `slack unreads` checks each channel individually via the Slack API.
+For workspaces with many channels (50+), this can take 10–30 seconds. Use a generous
+timeout (e.g. 60s) or the `--workspace` filter to limit scope.
+
 ## Output
 
 All commands return JSON to stdout. Prefer `--format compact-json` for easy parsing.

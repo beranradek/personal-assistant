@@ -19,8 +19,11 @@ const log = createLogger("integ-api:slack:client");
 /** Slack Web API base URL. */
 const SLACK_API_BASE = "https://slack.com/api";
 
-/** Maximum concurrent API calls per workspace. */
-const MAX_CONCURRENCY = 8;
+/** Maximum concurrent API calls per workspace (info-only pass). */
+const MAX_CONCURRENCY_INFO = 15;
+
+/** Maximum concurrent API calls for the enrichment pass (history + name). */
+const MAX_CONCURRENCY_ENRICH = 8;
 
 /** Maximum unread messages to fetch per channel for mention scanning. */
 const MAX_UNREAD_SCAN = 100;
@@ -418,28 +421,33 @@ function classifyChannel(conv: SlackConversation): SlackChannel {
   };
 }
 
+/** Result from the fast info-only pass (conversations.info). */
+interface ChannelInfoResult {
+  channel: SlackChannel;
+  conv: SlackConversation;
+  unreadCount: number;
+  lastRead: string;
+  isDirect: boolean;
+}
+
 /**
- * Get unread info for a single channel.
- *
- * Slack conversations.info docs:
- *   https://api.slack.com/methods/conversations.info
+ * Pass 1 — fast: call conversations.info to get unread count.
+ * Returns null for channels with zero unreads or on error.
  */
-async function getChannelUnreadInfo(
-  channelId: string,
+async function getChannelInfoFast(
   channel: SlackChannel,
   token: string,
-  userId: string,
-): Promise<ChannelUnreadInfo | null> {
+): Promise<Omit<ChannelInfoResult, "channel" | "conv"> | null> {
   let res: SlackConversationInfoResponse;
   try {
     res = await slackGet<SlackConversationInfoResponse>(
       "conversations.info",
       token,
-      { channel: channelId },
+      { channel: channel.id },
     );
   } catch (err) {
     log.warn(
-      { err, channelId, channelName: channel.name, channelType: channel.type },
+      { err, channelId: channel.id, channelName: channel.name, channelType: channel.type },
       "conversations.info threw — channel skipped",
     );
     return null;
@@ -447,21 +455,32 @@ async function getChannelUnreadInfo(
 
   if (!res.ok || !res.channel) {
     log.warn(
-      { channelId, channelName: channel.name, channelType: channel.type, error: res.error },
+      { channelId: channel.id, channelName: channel.name, channelType: channel.type, error: res.error },
       "conversations.info failed — channel skipped",
     );
     return null;
   }
 
-  // Use unread_count (all messages) rather than unread_count_display (filtered).
-  // unread_count_display can be 0 for muted channels or channels with
-  // notification preference set to "Mentions only", hiding real unreads.
-  let unreadCount = res.channel.unread_count ?? res.channel.unread_count_display ?? -1;
+  const unreadCount = res.channel.unread_count ?? res.channel.unread_count_display ?? -1;
   const lastRead = res.channel.last_read ?? "0";
   const isDirect = channel.type === "im" || channel.type === "mpim";
 
-  // When unread_count is known and zero, skip early (no history fetch needed)
   if (unreadCount === 0) return null;
+
+  return { unreadCount, lastRead, isDirect };
+}
+
+/**
+ * Pass 2 — enrich: fetch history for mention scanning and resolve IM names.
+ * Only called for channels that passed the fast info check.
+ */
+async function enrichChannelUnreads(
+  info: ChannelInfoResult,
+  token: string,
+  userId: string,
+): Promise<ChannelUnreadInfo | null> {
+  let { unreadCount } = info;
+  const { channel, conv, lastRead, isDirect } = info;
 
   // Fetch message history since last_read when needed:
   //  (a) unread_count missing (-1) — common with private channels / groups
@@ -475,7 +494,7 @@ async function getChannelUnreadInfo(
         "conversations.history",
         token,
         {
-          channel: channelId,
+          channel: channel.id,
           oldest: lastRead,
           limit: String(MAX_UNREAD_SCAN),
         },
@@ -484,7 +503,7 @@ async function getChannelUnreadInfo(
         unreadMessages = histRes.messages;
       }
     } catch (err) {
-      log.debug({ err, channelId }, "Failed to fetch channel history");
+      log.debug({ err, channelId: channel.id }, "Failed to fetch channel history");
     }
   }
 
@@ -492,12 +511,15 @@ async function getChannelUnreadInfo(
   if (unreadCount < 0 && unreadMessages) {
     unreadCount = unreadMessages.length;
     log.debug(
-      { channelId, channelName: channel.name, unreadCount },
+      { channelId: channel.id, channelName: channel.name, unreadCount },
       "Counted unreads via history fallback",
     );
   }
 
   if (unreadCount <= 0) return null;
+
+  // Resolve IM partner name for channels with unreads
+  await enrichImName(channel, conv, token);
 
   // For IMs/MPIMs, every message is inherently directed at the user
   if (isDirect) {
@@ -591,25 +613,33 @@ export async function getWorkspaceUnreads(
     "Listed user conversations",
   );
 
-  // Fetch unread info with concurrency limit
-  const unreadResults = await withConcurrency(
+  // Pass 1 — fast: get unread counts for all channels (high concurrency).
+  // Only calls conversations.info per channel; no history or name resolution.
+  const infoResults = await withConcurrency(
     classified.map(({ conv, channel }) => async () => {
-      const result = await getChannelUnreadInfo(
-        channel.id,
-        channel,
-        workspace.token,
-        workspace.userId,
-      );
-      // Only resolve IM partner names for channels that actually have unreads
-      if (result) {
-        await enrichImName(channel, conv, workspace.token);
-      }
-      return result;
+      const info = await getChannelInfoFast(channel, workspace.token);
+      if (!info) return null;
+      return { channel, conv, ...info } as ChannelInfoResult;
     }),
-    MAX_CONCURRENCY,
+    MAX_CONCURRENCY_INFO,
   );
 
-  const channels = unreadResults.filter(
+  const withUnreads = infoResults.filter((r): r is ChannelInfoResult => r != null);
+
+  log.info(
+    { workspace: workspace.id, total: classified.length, withUnreads: withUnreads.length },
+    "Pass 1 done — channels with unreads",
+  );
+
+  // Pass 2 — enrich: fetch history + IM names only for channels with unreads.
+  const enriched = await withConcurrency(
+    withUnreads.map((info) => async () =>
+      enrichChannelUnreads(info, workspace.token, workspace.userId),
+    ),
+    MAX_CONCURRENCY_ENRICH,
+  );
+
+  const channels = enriched.filter(
     (r): r is ChannelUnreadInfo => r != null,
   );
 
@@ -718,7 +748,7 @@ export async function listWorkspaceChannels(
         infoOk: true,
       } satisfies ChannelDiagnostic;
     }),
-    MAX_CONCURRENCY,
+    MAX_CONCURRENCY_INFO,
   );
 
   // Sort: channels with unreads first, then by name
