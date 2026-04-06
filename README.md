@@ -1,12 +1,26 @@
 # Personal Assistant
 
-A secured, sandboxed personal assistant powered by the Claude Agent SDK for TypeScript. 
+A secured, sandboxed personal assistant with pluggable agent backends:
+
+- **Claude** via the Claude Agent SDK (commonly paired with Claude Code CLI)
+- **OpenAI Codex** via `@openai/codex-sdk` (alternative to Claude Code)
+
 Runs as a standalone terminal or as a headless daemon with Telegram and Slack adapters.
 
 ## Prerequisites
 
 - **Node.js 22+**
-- **Claude Code CLI** authenticated via `claude login` or with an API key configured
+- Choose an agent backend:
+  - **Claude backend:** Claude Code CLI authenticated via `claude login` or an Anthropic API key
+  - **Codex backend:** OpenAI API key + Codex CLI (see `docs/settings/openai_codex_agent.md`)
+
+### Anthropic usage note (third-party harnesses)
+
+Anthropic does not support using monthly Claude subscription limits for third-party harnesses that heavily and regularly use their servers (this project falls into that category when used as an always-on assistant). Use an **Anthropic API key** or enable **token extra usage** for your account.
+
+Anthropic's official statement:
+
+> You’ll no longer be able to use your Claude subscription limits for third-party harnesses including OpenClaw. Instead, using these harnesses will require extra usage. Your subscription usage still covers all Claude products, including Claude Code and Claude Cowork (their usage is preferred). To keep using third-party harnesses with your Claude login, an admin/you will need to enable extra usage for your account.
 
 ## Installation
 
@@ -93,6 +107,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 
 ### Setup guides
 
+- OpenAI Codex agent backend (alternative to Claude Code): `docs/settings/openai_codex_agent.md`
 - Google integrations (Gmail + Calendar): `docs/settings/google_integrations.md`
   - Gmail unreads: categorized unread email overview with multi-account support
 - Slack integration (unread messages feed): `docs/settings/slack_integration.md`
