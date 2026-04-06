@@ -159,10 +159,17 @@ interface SlackAuthTestResponse extends SlackApiResponse {
 // API helpers
 // ---------------------------------------------------------------------------
 
+/** Maximum number of retries for rate-limited (429) responses. */
+const MAX_RETRIES = 3;
+
+/** Default retry delay in ms when Retry-After header is missing. */
+const DEFAULT_RETRY_DELAY_MS = 2_000;
+
 /**
  * Call a Slack Web API method with GET parameters.
  * Returns the parsed JSON response.
  * Throws on network errors; API-level errors are returned in the response.
+ * Automatically retries on 429 (rate limit) with exponential backoff.
  */
 async function slackGet<T extends SlackApiResponse>(
   method: string,
@@ -172,18 +179,37 @@ async function slackGet<T extends SlackApiResponse>(
   const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
   const url = `${SLACK_API_BASE}/${method}${qs}`;
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    },
-  });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+    });
 
-  if (!response.ok) {
-    throw new Error(`Slack API HTTP error: ${response.status} ${response.statusText}`);
+    if (response.status === 429) {
+      if (attempt >= MAX_RETRIES) {
+        throw new Error(`Slack API rate limited after ${MAX_RETRIES + 1} attempts (${method})`);
+      }
+      const retryAfter = response.headers.get("Retry-After");
+      const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+      const delayMs = Number.isFinite(parsed) && parsed > 0
+        ? parsed * 1000
+        : DEFAULT_RETRY_DELAY_MS * (attempt + 1);
+      log.warn({ method, attempt, delayMs }, "Slack API rate limited, retrying");
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Slack API HTTP error: ${response.status} ${response.statusText}`);
+    }
+
+    return (await response.json()) as T;
   }
 
-  return (await response.json()) as T;
+  // Unreachable, but TypeScript needs it
+  throw new Error(`Slack API request failed (${method})`);
 }
 
 /**
@@ -412,7 +438,10 @@ async function getChannelUnreadInfo(
 
   if (!res.ok || !res.channel) return null;
 
-  const unreadCount = res.channel.unread_count_display ?? res.channel.unread_count ?? 0;
+  // Use unread_count (all messages) rather than unread_count_display (filtered).
+  // unread_count_display can be 0 for muted channels or channels with
+  // notification preference set to "Mentions only", hiding real unreads.
+  const unreadCount = res.channel.unread_count ?? res.channel.unread_count_display ?? 0;
   if (unreadCount === 0) return null;
 
   const isDirect = channel.type === "im" || channel.type === "mpim";
@@ -586,7 +615,7 @@ export async function getChannelMessages(
   const channelData = infoRes.channel;
   const lastRead = channelData.last_read ?? "0";
   const unreadCount =
-    channelData.unread_count_display ?? channelData.unread_count ?? 0;
+    channelData.unread_count ?? channelData.unread_count_display ?? 0;
 
   const channel: SlackChannel = {
     id: channelId,
