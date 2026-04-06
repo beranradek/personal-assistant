@@ -24,6 +24,8 @@ vi.mock("../security/allowed-commands.js", () => ({
   extractCommands: vi.fn(),
   validateCommand: vi.fn(),
   extractFilePathsFromCommand: vi.fn(),
+  validateRmCommand: vi.fn(),
+  validateKillCommand: vi.fn(),
 }));
 
 vi.mock("../security/path-validator.js", () => ({
@@ -40,6 +42,8 @@ import {
   extractCommands,
   validateCommand,
   extractFilePathsFromCommand,
+  validateRmCommand,
+  validateKillCommand,
 } from "../security/allowed-commands.js";
 import { validatePath } from "../security/path-validator.js";
 
@@ -133,6 +137,8 @@ function passAllSecurity() {
   (extractCommands as Mock).mockReturnValue(["ls"]);
   (validateCommand as Mock).mockReturnValue({ allowed: true });
   (extractFilePathsFromCommand as Mock).mockReturnValue([]);
+  (validateRmCommand as Mock).mockReturnValue({ allowed: true });
+  (validateKillCommand as Mock).mockReturnValue({ allowed: true });
   (validatePath as Mock).mockReturnValue({ valid: true, resolvedPath: "/home/test/workspace/file" });
 }
 

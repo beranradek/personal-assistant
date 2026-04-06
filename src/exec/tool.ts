@@ -4,6 +4,8 @@ import {
   extractCommands,
   validateCommand,
   extractFilePathsFromCommand,
+  validateRmCommand,
+  validateKillCommand,
 } from "../security/allowed-commands.js";
 import { validatePath } from "../security/path-validator.js";
 import { enqueueSystemEvent } from "../heartbeat/system-events.js";
@@ -13,6 +15,155 @@ import type { Config } from "../core/types.js";
 import type { ExecOptions, ExecResult } from "./types.js";
 
 const log = createLogger("exec");
+
+// ---------------------------------------------------------------------------
+// Helpers (mirrors src/security/bash-hook.ts logic)
+// ---------------------------------------------------------------------------
+
+function extractSegments(commandString: string): string[] {
+  const segments: string[] = [];
+
+  // Split on ;, &&, ||
+  const chainedParts = commandString.split(/\s*(?:&&|\|\|)\s*/);
+  for (const part of chainedParts) {
+    const semiParts = part.split(/\s*;\s*/);
+    for (const semi of semiParts) {
+      // Split on | for pipes
+      const pipeParts = semi.split(/\s*\|\s*/);
+      for (const pipe of pipeParts) {
+        const trimmed = pipe.trim();
+        if (trimmed) {
+          segments.push(trimmed);
+        }
+      }
+    }
+  }
+
+  return segments;
+}
+
+function getBaseCommand(segment: string): string | null {
+  const tokens = segment.split(/\s+/);
+  for (const token of tokens) {
+    // Skip variable assignments (VAR=value)
+    if (token.includes("=") && !token.startsWith("=")) {
+      const eqIndex = token.indexOf("=");
+      const beforeEq = token.slice(0, eqIndex);
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(beforeEq)) {
+        continue;
+      }
+    }
+    // Skip shell keywords
+    if (
+      token === "if" ||
+      token === "then" ||
+      token === "else" ||
+      token === "elif" ||
+      token === "fi" ||
+      token === "for" ||
+      token === "select" ||
+      token === "do" ||
+      token === "done" ||
+      token === "while" ||
+      token === "until" ||
+      token === "case" ||
+      token === "esac" ||
+      token === "in" ||
+      token === "function" ||
+      token === "!" ||
+      token === "{" ||
+      token === "}"
+    ) {
+      continue;
+    }
+    // Skip flags
+    if (token.startsWith("-")) {
+      continue;
+    }
+    // Return the basename (strip directory)
+    const parts = token.split("/");
+    return parts[parts.length - 1];
+  }
+  return null;
+}
+
+const READ_COMMANDS = new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "sort",
+  "uniq",
+  "wc",
+  "diff",
+  "file",
+  "stat",
+  "grep",
+  "awk",
+  "sed",
+]);
+
+function extractPathArguments(segment: string): string[] {
+  const tokens = segment.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return [];
+
+  const baseCmd = getBaseCommand(segment);
+  if (!baseCmd) return [];
+
+  const paths: string[] = [];
+
+  if (READ_COMMANDS.has(baseCmd)) {
+    let foundCmd = false;
+    for (const token of tokens) {
+      if (!foundCmd) {
+        if (token.includes("=") && !token.startsWith("=")) {
+          continue;
+        }
+        if (token.startsWith("-")) continue;
+        foundCmd = true;
+        continue;
+      }
+
+      if (token.startsWith("-")) continue;
+      if (token === ">" || token === ">>" || token === "2>" || token === "&>") {
+        continue;
+      }
+
+      if (token.startsWith("/") || token.startsWith("~")) {
+        paths.push(token);
+      }
+    }
+  } else {
+    let foundCmd = false;
+    for (const token of tokens) {
+      if (!foundCmd) {
+        if (token.includes("=") && !token.startsWith("=")) continue;
+        if (token.startsWith("-")) continue;
+        foundCmd = true;
+        continue;
+      }
+      if (token.startsWith("-")) continue;
+      if (token === ">" || token === ">>" || token === "2>" || token === "&>") {
+        continue;
+      }
+
+      if (token.startsWith("/") || token.startsWith("~")) {
+        paths.push(token);
+      }
+    }
+  }
+
+  return paths;
+}
+
+const EXTRA_VALIDATORS: Record<
+  string,
+  (segment: string) => { allowed: boolean; reason?: string }
+> = {
+  rm: validateRmCommand,
+  kill: validateKillCommand,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,6 +209,7 @@ export async function handleExec(
   // ---- Step 2: Extract and validate commands against allowlist ----
 
   const allowlist = new Set(config.security.allowedCommands);
+  const extraValidationSet = new Set(config.security.commandsNeedingExtraValidation);
   const commands = extractCommands(command);
 
   for (const cmd of commands) {
@@ -73,21 +225,49 @@ export async function handleExec(
     }
   }
 
-  // ---- Step 3: Extract and validate file paths ----
+  // ---- Step 3: Extra validation for risky commands (rm, kill, ...) ----
 
-  const filePaths = extractFilePathsFromCommand(command);
-  for (const filePath of filePaths) {
-    const pathResult = validatePath(filePath, {
-      workspaceDir: config.security.workspace,
-      additionalReadDirs: config.security.additionalReadDirs,
-      additionalWriteDirs: config.security.additionalWriteDirs,
-      operation: "write",
-    });
-    if (!pathResult.valid) {
-      return {
-        success: false,
-        message: pathResult.reason ?? `Path '${filePath}' is outside allowed directories`,
-      };
+  const segments = extractSegments(command);
+  for (const segment of segments) {
+    const baseCmd = getBaseCommand(segment);
+    if (baseCmd && extraValidationSet.has(baseCmd)) {
+      const validator = EXTRA_VALIDATORS[baseCmd];
+      if (validator) {
+        const extraResult = validator(segment);
+        if (!extraResult.allowed) {
+          return {
+            success: false,
+            message:
+              extraResult.reason ??
+              `Command '${baseCmd}' failed extra validation`,
+          };
+        }
+      }
+    }
+  }
+
+  // ---- Step 4: Extract and validate file paths ----
+
+  for (const segment of segments) {
+    const fileOpPaths = extractFilePathsFromCommand(segment);
+    const generalPaths = extractPathArguments(segment);
+    const allPaths = [...new Set([...fileOpPaths, ...generalPaths])];
+
+    for (const filePath of allPaths) {
+      const pathResult = validatePath(filePath, {
+        workspaceDir: config.security.workspace,
+        additionalReadDirs: config.security.additionalReadDirs,
+        additionalWriteDirs: config.security.additionalWriteDirs,
+        operation: "write", // conservative
+      });
+      if (!pathResult.valid) {
+        return {
+          success: false,
+          message:
+            pathResult.reason ??
+            `Path '${filePath}' is outside allowed directories`,
+        };
+      }
     }
   }
 
