@@ -594,14 +594,17 @@ export async function getWorkspaceUnreads(
   // Fetch unread info with concurrency limit
   const unreadResults = await withConcurrency(
     classified.map(({ conv, channel }) => async () => {
-      // Enrich IM names in parallel with unread check
-      await enrichImName(channel, conv, workspace.token);
-      return getChannelUnreadInfo(
+      const result = await getChannelUnreadInfo(
         channel.id,
         channel,
         workspace.token,
         workspace.userId,
       );
+      // Only resolve IM partner names for channels that actually have unreads
+      if (result) {
+        await enrichImName(channel, conv, workspace.token);
+      }
+      return result;
     }),
     MAX_CONCURRENCY,
   );
@@ -769,8 +772,10 @@ export async function getChannelMessages(
 
   const channelData = infoRes.channel;
   const lastRead = channelData.last_read ?? "0";
-  const unreadCount =
-    channelData.unread_count ?? channelData.unread_count_display ?? 0;
+  // May be -1 when conversations.info omits unread_count (private channels);
+  // resolved after history fetch below.
+  let unreadCount =
+    channelData.unread_count ?? channelData.unread_count_display ?? -1;
 
   const channel: SlackChannel = {
     id: channelId,
@@ -812,6 +817,11 @@ export async function getChannelMessages(
 
   // Resolve user names and map messages (text-only, no attachments)
   const rawMessages = histRes.messages ?? [];
+
+  // Fallback: use message count when conversations.info omits unread_count
+  if (unreadCount < 0) {
+    unreadCount = rawMessages.length;
+  }
   const messages: SlackMessage[] = await Promise.all(
     rawMessages.map(async (msg) => {
       const msgUserId = msg.user ?? msg.bot_id ?? "";
