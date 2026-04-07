@@ -28,6 +28,26 @@ describe("createBackend", () => {
     expect(backend.name).toBe("claude");
   });
 
+  it("creates routed backend when routing is enabled", async () => {
+    const config: Config = {
+      ...DEFAULTS,
+      routing: {
+        enabled: true,
+        routerProfile: "router",
+        defaultProfile: "research",
+        maxRouterMs: 1500,
+        bindings: [],
+      },
+      profiles: {
+        router: { backend: "local_llama", model: { type: "gguf", path: "/tmp/router.gguf" }, tools: { allow: [], deny: [] } },
+        research: { backend: "claude", model: "anthropic/claude-haiku", tools: { allow: [], deny: [] } },
+      },
+    };
+
+    const backend = await createBackend(config, mockAgentOptions);
+    expect(backend.name).toBe("routed");
+  });
+
   it("creates codex backend when config.agent.backend is 'codex'", async () => {
     const backend = await createBackend(makeConfig("codex"));
     expect(backend.name).toBe("codex");
