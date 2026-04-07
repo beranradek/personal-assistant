@@ -129,6 +129,27 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 }
 ```
 
+**profiles + routing** - Optional profile-based routing (disabled by default). Supports deterministic bindings (e.g. `/code`) and an opt-in heuristic fallback when no bindings match:
+```json
+{
+  "routing": {
+    "enabled": true,
+    "routerProfile": "router",
+    "defaultProfile": "research",
+    "useRouter": true,
+    "candidateProfiles": ["research", "coding_strong"],
+    "bindings": [
+      { "when": { "source": "telegram", "prefix": "/code" }, "profile": "coding_strong" }
+    ]
+  },
+  "profiles": {
+    "router": { "backend": "local_llama", "model": { "type": "gguf", "path": "/path/to/router.gguf" } },
+    "research": { "backend": "claude", "model": "anthropic/claude-haiku" },
+    "coding_strong": { "backend": "codex", "model": "openai/gpt-5" }
+  }
+}
+```
+
 **adapters.telegram** - Telegram bot configuration:
 ```json
 {
