@@ -249,6 +249,8 @@ export const RoutingConfigSchema = z.object({
   routerProfile: z.string().default("router"),
   defaultProfile: z.string().default("research"),
   maxRouterMs: z.number().int().positive().default(1500),
+  useRouter: z.boolean().default(false),
+  candidateProfiles: z.array(z.string()).default([]),
   bindings: z.array(RoutingBindingSchema).default([]),
 });
 

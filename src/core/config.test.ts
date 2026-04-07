@@ -173,6 +173,8 @@ describe("config", () => {
       expect(config.routing.routerProfile).toBe("router");
       expect(config.routing.defaultProfile).toBe("research");
       expect(config.routing.maxRouterMs).toBe(1500);
+      expect(config.routing.useRouter).toBe(false);
+      expect(config.routing.candidateProfiles).toEqual([]);
       expect(config.routing.bindings).toEqual([]);
     });
   });

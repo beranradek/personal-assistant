@@ -13,6 +13,8 @@ function makeConfig(): Config {
       routerProfile: "router",
       defaultProfile: "research",
       maxRouterMs: 1500,
+      useRouter: false,
+      candidateProfiles: [],
       bindings: [
         { when: { source: "telegram", prefix: "/code" }, profile: "coding_strong" },
       ],
@@ -67,5 +69,22 @@ describe("createRoutedBackend", () => {
 
     const res = await backend.runTurnSync("hello", "telegram--123");
     expect(res.response).toBe("claude:hello");
+  });
+
+  it("can route without bindings using heuristic router when enabled", async () => {
+    const config = makeConfig();
+    config.routing.bindings = [];
+    config.routing.useRouter = true;
+    config.routing.candidateProfiles = ["research", "coding_strong"];
+
+    const backend = await createRoutedBackend(
+      config,
+      baseAgentOptions,
+      undefined,
+      async (cfg) => makeBackend(cfg.agent.backend),
+    );
+
+    const res = await backend.runTurnSync("```ts\nconsole.log(1)\n```", "telegram--123");
+    expect(res.response).toBe("codex:```ts\nconsole.log(1)\n```");
   });
 });

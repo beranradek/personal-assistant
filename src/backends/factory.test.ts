@@ -36,6 +36,8 @@ describe("createBackend", () => {
         routerProfile: "router",
         defaultProfile: "research",
         maxRouterMs: 1500,
+        useRouter: false,
+        candidateProfiles: [],
         bindings: [],
       },
       profiles: {

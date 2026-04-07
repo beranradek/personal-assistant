@@ -79,6 +79,8 @@ export const DEFAULTS: Config = {
     routerProfile: "router",
     defaultProfile: "research",
     maxRouterMs: 1500,
+    useRouter: false,
+    candidateProfiles: [],
     bindings: [],
   },
   session: {

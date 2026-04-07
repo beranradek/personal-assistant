@@ -18,6 +18,39 @@ function stripPrefix(text: string, prefix: string): string {
   return text.slice(prefix.length).trimStart();
 }
 
+function looksLikeCodingRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  if (t.includes("```")) return true;
+  if (t.includes("stack trace") || t.includes("exception") || t.includes("traceback")) return true;
+  if (t.includes("typescript") || t.includes("javascript") || t.includes("node.js")) return true;
+  if (t.includes("npm ") || t.includes("pnpm ") || t.includes("yarn ")) return true;
+  if (t.includes("vitest") || t.includes("jest") || t.includes("pytest")) return true;
+  if (t.includes("compile error") || t.includes("type error") || t.includes("fails")) return true;
+  if (/\b(src|lib|dist)\/[^\s]+/i.test(text)) return true;
+  return false;
+}
+
+function selectFallbackProfile(config: Config, message: string): string {
+  if (!config.routing.useRouter) return config.routing.defaultProfile;
+
+  const candidates =
+    config.routing.candidateProfiles.length > 0
+      ? config.routing.candidateProfiles
+      : Object.keys(config.profiles).filter((p) => p !== config.routing.routerProfile);
+
+  if (candidates.length === 0) return config.routing.defaultProfile;
+
+  if (looksLikeCodingRequest(message) && candidates.includes("coding_strong")) {
+    return "coding_strong";
+  }
+
+  if (candidates.includes(config.routing.defaultProfile)) {
+    return config.routing.defaultProfile;
+  }
+
+  return candidates[0]!;
+}
+
 function selectProfileName(
   config: Config,
   message: string,
@@ -37,7 +70,7 @@ function selectProfileName(
     return { profile: binding.profile, message };
   }
 
-  return { profile: config.routing.defaultProfile, message };
+  return { profile: selectFallbackProfile(config, message), message };
 }
 
 export async function createRoutedBackend(
