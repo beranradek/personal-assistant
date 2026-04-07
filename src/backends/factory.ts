@@ -11,6 +11,7 @@ import type { Config } from "../core/types.js";
 import { createClaudeBackend } from "./claude.js";
 import { createCodexBackend } from "./codex.js";
 import { createLogger } from "../core/logger.js";
+import { createRoutedBackend } from "./routed.js";
 
 const log = createLogger("backend-factory");
 
@@ -21,7 +22,7 @@ export interface CreateBackendOptions {
   redact?: (text: string) => string;
 }
 
-export async function createBackend(
+async function createConcreteBackend(
   config: Config,
   agentOptions?: AgentOptions,
   options?: CreateBackendOptions,
@@ -40,4 +41,19 @@ export async function createBackend(
     default:
       throw new Error(`Unknown agent backend: ${backendType}`);
   }
+}
+
+export async function createBackend(
+  config: Config,
+  agentOptions?: AgentOptions,
+  options?: CreateBackendOptions,
+): Promise<AgentBackend> {
+  if (config.routing.enabled) {
+    if (!agentOptions) {
+      throw new Error("AgentOptions required for routed backend");
+    }
+    return createRoutedBackend(config, agentOptions, options, createConcreteBackend);
+  }
+
+  return createConcreteBackend(config, agentOptions, options);
 }
