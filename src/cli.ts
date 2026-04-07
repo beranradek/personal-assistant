@@ -10,6 +10,7 @@
  *   pa terminal              Interactive REPL
  *   pa daemon                Headless service
  *   pa init                  Create default settings.json
+ *   pa profiles              Print routing + profile configuration
  *   pa --config <path> ...   Override settings.json location
  */
 
@@ -24,7 +25,7 @@ import { createLogger } from "./core/logger.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "profiles", "mcp-server", "integapi"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -52,6 +53,7 @@ Commands:
   terminal              Start interactive terminal mode
   daemon                Start headless daemon mode
   init                  Create default settings.json in config directory
+  profiles              Print routing + profile configuration (no secrets)
   mcp-server            Start stdio MCP server (for Codex backend integration)
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
 
@@ -170,6 +172,18 @@ async function runTerminal(configDir: string): Promise<void> {
   runTerminalRepl(session);
 }
 
+async function runProfiles(configDir: string): Promise<void> {
+  const config = loadConfig(configDir);
+  const profiles = Object.fromEntries(
+    Object.entries(config.profiles).map(([name, p]) => [
+      name,
+      { backend: p.backend, model: p.model, tools: p.tools },
+    ]),
+  );
+
+  console.log(JSON.stringify({ routing: config.routing, profiles }, null, 2));
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
@@ -195,6 +209,9 @@ async function main(): Promise<void> {
       break;
     case "daemon":
       await startDaemon(configDir);
+      break;
+    case "profiles":
+      await runProfiles(configDir);
       break;
     case "mcp-server":
       await startMcpServer(configDir);

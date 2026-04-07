@@ -18,6 +18,11 @@ describe("cli", () => {
       expect(result).toBe("init");
     });
 
+    it('parses "profiles" subcommand', () => {
+      const result = parseCommand(["node", "cli.js", "profiles"]);
+      expect(result).toBe("profiles");
+    });
+
     it("returns null for unknown subcommand", () => {
       const result = parseCommand(["node", "cli.js", "unknown"]);
       expect(result).toBeNull();
