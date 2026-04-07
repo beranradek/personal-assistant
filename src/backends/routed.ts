@@ -24,13 +24,14 @@ function selectProfileName(
   sessionKey: string,
 ): { profile: string; message: string } {
   const source = sourceFromSessionKey(sessionKey);
+  const trimmed = message.trimStart();
 
   for (const binding of config.routing.bindings) {
     if (binding.when.source && binding.when.source !== source) continue;
 
     if (binding.when.prefix) {
-      if (!message.startsWith(binding.when.prefix)) continue;
-      return { profile: binding.profile, message: stripPrefix(message, binding.when.prefix) };
+      if (!trimmed.startsWith(binding.when.prefix)) continue;
+      return { profile: binding.profile, message: stripPrefix(trimmed, binding.when.prefix) };
     }
 
     return { profile: binding.profile, message };

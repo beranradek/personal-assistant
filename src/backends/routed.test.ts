@@ -51,7 +51,7 @@ describe("createRoutedBackend", () => {
       async (cfg) => makeBackend(cfg.agent.backend),
     );
 
-    const res = await backend.runTurnSync("/code do the thing", "telegram--123");
+    const res = await backend.runTurnSync("   /code do the thing", "telegram--123");
     expect(res.response).toBe("codex:do the thing");
   });
 
