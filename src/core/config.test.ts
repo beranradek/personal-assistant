@@ -92,6 +92,20 @@ describe("config", () => {
       expect(() => loadConfig(tmpDir)).toThrow();
     });
 
+    it("requires referenced profiles when routing is enabled", () => {
+      const invalid = {
+        routing: {
+          enabled: true,
+          routerProfile: "router",
+          defaultProfile: "research",
+        },
+        profiles: {},
+      };
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(invalid));
+
+      expect(() => loadConfig(tmpDir)).toThrow(/Missing profile 'router'|Missing profile 'research'/);
+    });
+
     it("resolves ~ in workspace and dataDir paths to absolute", () => {
       const partial = {
         security: {
@@ -152,6 +166,14 @@ describe("config", () => {
       expect(config.codex.baseUrl).toBeNull();
       expect(config.codex.reasoningEffort).toBeNull();
       expect(config.codex.configOverrides).toEqual({});
+
+      // Profiles + routing defaults
+      expect(config.profiles).toEqual({});
+      expect(config.routing.enabled).toBe(false);
+      expect(config.routing.routerProfile).toBe("router");
+      expect(config.routing.defaultProfile).toBe("research");
+      expect(config.routing.maxRouterMs).toBe(1500);
+      expect(config.routing.bindings).toEqual([]);
     });
   });
 

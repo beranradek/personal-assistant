@@ -211,21 +211,80 @@ export const DraftsConfigSchema = z.object({
   autoScan: z.boolean().default(false),
 });
 
-export const ConfigSchema = z.object({
-  security: SecurityConfigSchema,
-  adapters: AdaptersConfigSchema,
-  heartbeat: HeartbeatConfigSchema,
-  gateway: GatewayConfigSchema,
-  agent: AgentConfigSchema,
-  session: SessionConfigSchema,
-  memory: MemoryConfigSchema,
-  mcpServers: McpServerConfigSchema,
-  codex: CodexConfigSchema,
-  reflection: ReflectionConfigSchema.default(() => ReflectionConfigSchema.parse({})),
-  integApi: IntegApiConfigSchema.default(() => IntegApiConfigSchema.parse({})),
-  habits: HabitsConfigSchema.default(() => HabitsConfigSchema.parse({})),
-  drafts: DraftsConfigSchema.default(() => DraftsConfigSchema.parse({})),
+export const ToolPolicySchema = z.object({
+  allow: z.array(z.string()).default([]),
+  deny: z.array(z.string()).default([]),
 });
+
+export const ProfileModelSchema = z.union([
+  z.string(),
+  z.object({
+    primary: z.string(),
+    fallbacks: z.array(z.string()).default([]),
+  }),
+  z.object({
+    type: z.literal("gguf"),
+    path: z.string(),
+  }),
+]);
+
+export const ProfileSchema = z.object({
+  backend: z.enum(["claude", "codex", "local_llama"]),
+  model: ProfileModelSchema.nullable().default(null),
+  tools: ToolPolicySchema.default(() => ToolPolicySchema.parse({})),
+});
+
+export const ProfilesConfigSchema = z.record(z.string(), ProfileSchema).default({});
+
+export const RoutingBindingSchema = z.object({
+  when: z.object({
+    source: z.string().optional(),
+    prefix: z.string().optional(),
+  }),
+  profile: z.string(),
+});
+
+export const RoutingConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  routerProfile: z.string().default("router"),
+  defaultProfile: z.string().default("research"),
+  maxRouterMs: z.number().int().positive().default(1500),
+  bindings: z.array(RoutingBindingSchema).default([]),
+});
+
+export const ConfigSchema = z
+  .object({
+    security: SecurityConfigSchema,
+    adapters: AdaptersConfigSchema,
+    heartbeat: HeartbeatConfigSchema,
+    gateway: GatewayConfigSchema,
+    agent: AgentConfigSchema,
+    profiles: ProfilesConfigSchema,
+    routing: RoutingConfigSchema.default(() => RoutingConfigSchema.parse({})),
+    session: SessionConfigSchema,
+    memory: MemoryConfigSchema,
+    mcpServers: McpServerConfigSchema,
+    codex: CodexConfigSchema,
+    reflection: ReflectionConfigSchema.default(() => ReflectionConfigSchema.parse({})),
+    integApi: IntegApiConfigSchema.default(() => IntegApiConfigSchema.parse({})),
+    habits: HabitsConfigSchema.default(() => HabitsConfigSchema.parse({})),
+    drafts: DraftsConfigSchema.default(() => DraftsConfigSchema.parse({})),
+  })
+  .superRefine((config, ctx) => {
+    if (!config.routing.enabled) return;
+
+    const profiles = config.profiles ?? {};
+    const required = [config.routing.routerProfile, config.routing.defaultProfile];
+    for (const name of required) {
+      if (!profiles[name]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", name],
+          message: `Missing profile '${name}' (required when routing.enabled=true).`,
+        });
+      }
+    }
+  });
 
 export type Config = z.infer<typeof ConfigSchema>;
 

@@ -73,6 +73,14 @@ export const DEFAULTS: Config = {
     rateLimiter: { enabled: true, windowMs: 60_000, maxRequests: 20 },
   },
   agent: { backend: "claude" as const, model: null, maxTurns: 200 },
+  profiles: {},
+  routing: {
+    enabled: false,
+    routerProfile: "router",
+    defaultProfile: "research",
+    maxRouterMs: 1500,
+    bindings: [],
+  },
   session: {
     maxHistoryMessages: 20,
     compactionEnabled: true,
