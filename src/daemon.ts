@@ -276,6 +276,7 @@ export async function startDaemon(configDir: string): Promise<void> {
           }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
         }
       },
+      { workspaceDir: config.security.workspace },
     );
     router.register(telegram);
     await telegram.start();

@@ -11,12 +11,15 @@ import { createLogger } from "../core/logger.js";
 import { createAdapterMessage } from "./types.js";
 import type { Adapter, AdapterMessage } from "./types.js";
 import { synthesizeSpeech, transcribeAudio, truncateForTts } from "../openai/audio.js";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 const log = createLogger("telegram-adapter");
 
 /** Telegram Bot API message character limit. */
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 const INPUT_TYPE_METADATA_KEY = "inputType";
+const TELEGRAM_MAX_DOCUMENT_SIZE_MB = 50;
 
 // ---------------------------------------------------------------------------
 // Config type (matches TelegramConfigSchema fields we need)
@@ -40,6 +43,10 @@ export interface TelegramAdapterConfig {
   allowedUserIds: number[];
   mode?: "polling";
   audio?: TelegramAdapterAudioConfig;
+}
+
+export interface TelegramAdapterOptions {
+  workspaceDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +83,7 @@ export function chunkText(text: string, limit: number): string[] {
 export function createTelegramAdapter(
   config: TelegramAdapterConfig,
   onMessage: (message: AdapterMessage) => void,
+  opts: TelegramAdapterOptions = {},
 ): Adapter {
   if (config.allowedUserIds.length === 0) {
     throw new Error(
@@ -96,6 +104,11 @@ export function createTelegramAdapter(
     openaiBaseUrl: null,
     timeoutMs: 30_000,
   };
+
+  const telegramInboxDir =
+    opts.workspaceDir != null && opts.workspaceDir.trim()
+      ? path.join(opts.workspaceDir, "documents", "telegram-inbox")
+      : null;
 
   // Register message handler
   bot.on("message:text", async (ctx) => {
@@ -157,6 +170,47 @@ export function createTelegramAdapter(
       throw new Error(`Telegram file download failed (${res.status}): ${body}`);
     }
     return { buffer: await res.arrayBuffer(), filePath };
+  }
+
+  function sanitizeFilename(name: string): string {
+    const normalized = name.replaceAll("\u0000", "").trim();
+    const noSeparators = normalized.replace(/[\\/]/g, "_");
+    const safe = noSeparators.replace(/[^\p{L}\p{N}._ -]+/gu, "_").trim();
+    return safe.length > 200 ? safe.slice(0, 200) : safe;
+  }
+
+  async function writeUniqueFile(params: {
+    dir: string;
+    baseName: string;
+    bytes: Uint8Array;
+  }): Promise<{ fileName: string; fullPath: string }> {
+    const safeBase = sanitizeFilename(params.baseName) || "telegram-document";
+    const ext = path.extname(safeBase);
+    const stem = ext ? safeBase.slice(0, -ext.length) : safeBase;
+
+    await fs.mkdir(params.dir, { recursive: true });
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+      const fileName = `${stem}${suffix}${ext || ""}`;
+      const fullPath = path.join(params.dir, fileName);
+      try {
+        await fs.writeFile(fullPath, params.bytes, { flag: "wx" });
+        return { fileName, fullPath };
+      } catch (err: any) {
+        if (err && typeof err === "object" && (err as { code?: string }).code === "EEXIST") {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    // Fallback with timestamp if we somehow hit too many collisions.
+    const ts = Date.now();
+    const fileName = `${stem}-${ts}${ext || ""}`;
+    const fullPath = path.join(params.dir, fileName);
+    await fs.writeFile(fullPath, params.bytes);
+    return { fileName, fullPath };
   }
 
   async function transcribeWithFallback(params: {
@@ -275,8 +329,90 @@ export function createTelegramAdapter(
     }
   }
 
+  async function handleInboundDocument(ctx: { message?: any }): Promise<void> {
+    const msg = ctx.message;
+    if (!msg) return;
+
+    const userId = msg.from?.id;
+    const chatId = msg.chat?.id;
+    if (typeof chatId !== "number") return;
+
+    if (!config.allowedUserIds.includes(userId)) {
+      log.warn({ userId }, "unauthorized user, ignoring document message");
+      return;
+    }
+
+    if (!telegramInboxDir) {
+      log.warn("workspaceDir not provided — skipping Telegram document saving");
+      return;
+    }
+
+    const doc = msg.document;
+    const fileId: string | undefined = doc?.file_id;
+    if (!fileId) return;
+
+    const fileSize: number | undefined = doc?.file_size;
+    if (fileSize != null) {
+      const maxBytes = TELEGRAM_MAX_DOCUMENT_SIZE_MB * 1024 * 1024;
+      if (fileSize > maxBytes) {
+        await safeSendText(chatId, `Document is too large (max ${TELEGRAM_MAX_DOCUMENT_SIZE_MB} MB).`);
+        return;
+      }
+    }
+
+    try {
+      const { buffer, filePath } = await downloadTelegramFile(fileId);
+      const originalName: string =
+        (doc?.file_name as string | undefined) ??
+        (typeof filePath === "string" ? path.basename(filePath) : "") ??
+        `telegram-document-${msg.message_id ?? Date.now()}`;
+
+      const safeName = sanitizeFilename(originalName) || `telegram-document-${msg.message_id ?? Date.now()}`;
+      const bytes = new Uint8Array(buffer);
+      const saved = await writeUniqueFile({
+        dir: telegramInboxDir,
+        baseName: `${msg.message_id ?? Date.now()}-${safeName}`,
+        bytes,
+      });
+
+      const relPath = path.posix.join("documents", "telegram-inbox", saved.fileName);
+      await safeSendText(chatId, `Saved: ${relPath}`);
+
+      const adapterMessage = createAdapterMessage(
+        "telegram",
+        String(chatId),
+        `Received document and saved it to ${relPath}`,
+        {
+          userName: msg.from?.username,
+          userId,
+          chatId,
+          firstName: msg.from?.first_name,
+          [INPUT_TYPE_METADATA_KEY]: "document",
+          telegram: {
+            messageId: msg.message_id,
+            fileId,
+            fileName: originalName,
+            savedPath: relPath,
+            mime: doc?.mime_type,
+            size: doc?.file_size,
+          },
+        },
+      );
+
+      try {
+        onMessage(adapterMessage);
+      } catch (err) {
+        log.error({ err }, "onMessage callback failed");
+      }
+    } catch (err) {
+      log.error({ err, userId }, "failed to process inbound document");
+      await safeSendText(chatId, "Sorry, I couldn't save that document. Please try again.");
+    }
+  }
+
   bot.on("message:voice", (ctx) => handleInboundAudio(ctx).catch((err) => log.error({ err }, "voice handler failed")));
   bot.on("message:audio", (ctx) => handleInboundAudio(ctx).catch((err) => log.error({ err }, "audio handler failed")));
+  bot.on("message:document", (ctx) => handleInboundDocument(ctx).catch((err) => log.error({ err }, "document handler failed")));
 
   // -------------------------------------------------------------------------
   // Adapter interface

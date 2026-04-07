@@ -5,6 +5,11 @@ import type { AdapterMessage } from "../core/types.js";
 // Mocks
 // ---------------------------------------------------------------------------
 
+const fsMocks = vi.hoisted(() => ({
+  mkdir: vi.fn().mockResolvedValue(undefined),
+  writeFile: vi.fn().mockResolvedValue(undefined),
+}));
+
 const mockLog = vi.hoisted(() => ({
   info: vi.fn(),
   debug: vi.fn(),
@@ -49,6 +54,8 @@ const mocks = vi.hoisted(() => {
 vi.mock("../core/logger.js", () => ({
   createLogger: () => mockLog,
 }));
+
+vi.mock("node:fs/promises", () => fsMocks);
 
 vi.mock("grammy", () => ({
   Bot: mocks.BotCtor,
@@ -118,6 +125,53 @@ function makeMockContext(overrides: {
   };
 }
 
+function makeMockDocumentContext(overrides: {
+  userId?: number;
+  chatId?: number;
+  firstName?: string;
+  username?: string;
+  messageId?: number;
+  fileId?: string;
+  fileName?: string;
+  mimeType?: string;
+  fileSize?: number;
+} = {}) {
+  const {
+    userId = 111,
+    chatId = 999,
+    firstName = "Test",
+    username = "testuser",
+    messageId = 777,
+    fileId = "FILE_1",
+    fileName = "contract.pdf",
+    mimeType = "application/pdf",
+    fileSize = 1234,
+  } = overrides;
+
+  return {
+    message: {
+      message_id: messageId,
+      from: { id: userId, first_name: firstName, username },
+      chat: { id: chatId },
+      document: {
+        file_id: fileId,
+        file_name: fileName,
+        mime_type: mimeType,
+        file_size: fileSize,
+      },
+    },
+    reply: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function getHandler(eventName: string): (ctx: any) => Promise<void> {
+  const call = mocks.botOn.mock.calls.find((c) => c[0] === eventName);
+  if (!call) {
+    throw new Error(`handler not registered for event: ${eventName}`);
+  }
+  return call[1] as unknown as (ctx: any) => Promise<void>;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -170,8 +224,7 @@ describe("Telegram Adapter", () => {
       const onMessage = vi.fn();
       createTelegramAdapter(makeConfig(), onMessage);
 
-      // Get the handler that was registered
-      const handler = mocks.botOn.mock.calls[0][1];
+      const handler = getHandler("message:text");
       const ctx = makeMockContext({ userId: 111, text: "Hello" });
 
       await handler(ctx);
@@ -183,7 +236,7 @@ describe("Telegram Adapter", () => {
       const onMessage = vi.fn();
       createTelegramAdapter(makeConfig(), onMessage);
 
-      const handler = mocks.botOn.mock.calls[0][1];
+      const handler = getHandler("message:text");
       const ctx = makeMockContext({ userId: 999, text: "Hello" });
 
       await handler(ctx);
@@ -213,7 +266,7 @@ describe("Telegram Adapter", () => {
       const onMessage = vi.fn();
       createTelegramAdapter(makeConfig(), onMessage);
 
-      const handler = mocks.botOn.mock.calls[0][1];
+      const handler = getHandler("message:text");
       const ctx = makeMockContext({
         userId: 111,
         text: "Hello bot",
@@ -240,7 +293,7 @@ describe("Telegram Adapter", () => {
       const onMessage = vi.fn();
       createTelegramAdapter(makeConfig(), onMessage);
 
-      const handler = mocks.botOn.mock.calls[0][1];
+      const handler = getHandler("message:text");
       const ctx = makeMockContext({ chatId: 42 });
 
       await handler(ctx);
@@ -253,12 +306,78 @@ describe("Telegram Adapter", () => {
       const onMessage = vi.fn();
       createTelegramAdapter(makeConfig(), onMessage);
 
-      const handler = mocks.botOn.mock.calls[0][1];
+      const handler = getHandler("message:text");
       const ctx = makeMockContext();
       ctx.message.text = undefined as unknown as string;
 
       await handler(ctx);
 
+      expect(onMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Document uploads
+  // -------------------------------------------------------------------------
+  describe("document uploads", () => {
+    it("saves inbound Telegram documents to documents/telegram-inbox", async () => {
+      const prevFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => {
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes.buffer,
+          text: async () => "",
+        } as unknown as Response;
+      }) as unknown as typeof fetch;
+
+      try {
+        const onMessage = vi.fn();
+        createTelegramAdapter(makeConfig(), onMessage, { workspaceDir: "/tmp/ws" });
+
+        mocks.botApiGetFile.mockResolvedValueOnce({ file_path: "docs/contract.pdf" });
+        const handler = getHandler("message:document");
+        const ctx = makeMockDocumentContext({ messageId: 777, fileName: "contract.pdf" });
+
+        await handler(ctx);
+
+        expect(fsMocks.mkdir).toHaveBeenCalledWith(
+          "/tmp/ws/documents/telegram-inbox",
+          { recursive: true },
+        );
+        expect(fsMocks.writeFile).toHaveBeenCalledWith(
+          "/tmp/ws/documents/telegram-inbox/777-contract.pdf",
+          expect.any(Uint8Array),
+          expect.objectContaining({ flag: "wx" }),
+        );
+        expect(mocks.botApiSendMessage).toHaveBeenCalledWith(
+          999,
+          expect.stringContaining("documents/telegram-inbox/777-contract.pdf"),
+        );
+        expect(onMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            source: "telegram",
+            sourceId: "999",
+            text: expect.stringContaining("documents/telegram-inbox/777-contract.pdf"),
+            metadata: expect.any(Object),
+          }),
+        );
+      } finally {
+        globalThis.fetch = prevFetch;
+      }
+    });
+
+    it("ignores documents from unauthorized users", async () => {
+      const onMessage = vi.fn();
+      createTelegramAdapter(makeConfig(), onMessage, { workspaceDir: "/tmp/ws" });
+
+      const handler = getHandler("message:document");
+      const ctx = makeMockDocumentContext({ userId: 999 });
+
+      await handler(ctx);
+
+      expect(fsMocks.writeFile).not.toHaveBeenCalled();
       expect(onMessage).not.toHaveBeenCalled();
     });
   });
