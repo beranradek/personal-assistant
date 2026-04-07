@@ -87,4 +87,33 @@ describe("createRoutedBackend", () => {
     const res = await backend.runTurnSync("```ts\nconsole.log(1)\n```", "telegram--123");
     expect(res.response).toBe("codex:```ts\nconsole.log(1)\n```");
   });
+
+  it("applies profile tool policy by filtering MCP server patterns", async () => {
+    const config = makeConfig();
+    config.routing.bindings = [];
+    config.routing.useRouter = false;
+    config.profiles.research.tools = { allow: [], deny: ["exec"] };
+
+    const agentOptions = {
+      maxTurns: 10,
+      allowedTools: ["Read", "mcp__memory__*", "mcp__assistant__*"],
+    } as AgentOptions;
+
+    let seenAllowedTools: string[] | null = null;
+
+    const backend = await createRoutedBackend(
+      config,
+      agentOptions,
+      undefined,
+      async (cfg, opts) => {
+        seenAllowedTools = (opts as AgentOptions | undefined)?.allowedTools ?? null;
+        return makeBackend(cfg.agent.backend);
+      },
+    );
+
+    await backend.runTurnSync("hello", "telegram--123");
+
+    expect(seenAllowedTools).toContain("mcp__memory__*");
+    expect(seenAllowedTools).not.toContain("mcp__assistant__*");
+  });
 });

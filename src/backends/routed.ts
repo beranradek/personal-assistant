@@ -10,6 +10,64 @@ type ConcreteBackendFactory = (
   options?: CreateBackendOptions,
 ) => Promise<AgentBackend>;
 
+function mcpServerForToolName(toolName: string): string | null {
+  switch (toolName) {
+    case "memory_search":
+      return "memory";
+    case "cron":
+    case "exec":
+    case "process":
+    case "habits":
+    case "drafts":
+      return "assistant";
+    default:
+      return null;
+  }
+}
+
+function applyToolPolicyToAgentOptions(
+  base: AgentOptions,
+  tools: Config["profiles"][string]["tools"],
+): AgentOptions {
+  if (!base.allowedTools) return base;
+
+  const mcpPatternRe = /^mcp__([a-z0-9_-]+)__\*$/i;
+  const mcpPatterns: string[] = [];
+  const nonMcpTools: string[] = [];
+  for (const t of base.allowedTools) {
+    if (mcpPatternRe.test(t)) mcpPatterns.push(t);
+    else nonMcpTools.push(t);
+  }
+
+  const allServers = new Set(
+    mcpPatterns
+      .map((p) => p.match(mcpPatternRe)?.[1])
+      .filter((x): x is string => Boolean(x)),
+  );
+
+  let servers = new Set(allServers);
+
+  if (tools.allow.length > 0) {
+    servers = new Set(
+      tools.allow
+        .map((name) => mcpServerForToolName(name))
+        .filter((x): x is string => Boolean(x)),
+    );
+  }
+
+  for (const deny of tools.deny) {
+    const server = mcpServerForToolName(deny);
+    if (server) servers.delete(server);
+  }
+
+  const allowedMcpPatterns = Array.from(servers).map((s) => `mcp__${s}__*`);
+
+  return {
+    ...base,
+    allowedTools: [...nonMcpTools, ...allowedMcpPatterns],
+  };
+}
+
 function sourceFromSessionKey(sessionKey: string): string {
   return sessionKey.split("--")[0] ?? "";
 }
@@ -91,10 +149,14 @@ export async function createRoutedBackend(
     }
 
     const primaryModel = resolvePrimaryModelRef(resolved.model) ?? config.agent.model ?? undefined;
-    const agentOptionsForProfile: AgentOptions = {
+    const agentOptionsForProfileBase: AgentOptions = {
       ...baseAgentOptions,
       model: primaryModel ?? undefined,
     };
+    const agentOptionsForProfile = applyToolPolicyToAgentOptions(
+      agentOptionsForProfileBase,
+      resolved.tools,
+    );
 
     const configForProfile: Config = {
       ...config,
