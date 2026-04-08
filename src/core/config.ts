@@ -88,6 +88,8 @@ export const DEFAULTS: Config = {
       maxResults: 6,
       chunkTokens: 400,
       chunkOverlap: 80,
+      recencyBoost: 0.1,
+      recencyHalfLifeDays: 7,
     },
     extraPaths: [],
     indexDailyLogs: true,
@@ -97,6 +99,9 @@ export const DEFAULTS: Config = {
     enabled: true,
     schedule: "0 7 * * *",
     maxDailyLogEntries: 500,
+    weeklyEnabled: true,
+    weeklySchedule: "5 7 * * 1",
+    dailyRetentionDays: 21,
   },
   integApi: {
     enabled: false,

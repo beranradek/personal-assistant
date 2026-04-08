@@ -470,4 +470,28 @@ describe("runDailyReflection", () => {
     expect(promptContent).toContain("Facts");
     expect(promptContent).toContain("Project Updates");
   });
+
+  it("uses targetDate parameter when provided instead of yesterday", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+      userMessage: "Specific day question",
+      assistantResponse: "Specific day answer",
+    });
+    await appendAuditEntry(tmpDir, entry);
+
+    mockFetchWithResponse("## Facts\n- Tested targetDate parameter");
+
+    const config = makeConfig();
+    await runDailyReflection(config, tmpDir, specificDate);
+
+    const reflectionPath = path.join(tmpDir, "memory", `reflection-${specificDate}.md`);
+    const content = await fs.readFile(reflectionPath, "utf-8");
+    expect(content).toContain(`date: ${specificDate}`);
+    expect(content).toContain("targetDate parameter");
+
+    // Yesterday's reflection file should NOT exist
+    const yesterdayPath = path.join(tmpDir, "memory", `reflection-${yesterday()}.md`);
+    await expect(fs.access(yesterdayPath)).rejects.toThrow();
+  });
 });
