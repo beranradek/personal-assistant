@@ -134,9 +134,9 @@ export async function callAnthropicForReflection(
 // ---------------------------------------------------------------------------
 
 /**
- * Run the daily reflection pipeline for yesterday's date.
+ * Run the daily reflection pipeline for a given date (defaults to yesterday).
  *
- * Reads yesterday's JSONL audit log, extracts interaction entries,
+ * Reads the specified date's JSONL audit log, extracts interaction entries,
  * calls the Anthropic API with a curation prompt, and writes
  * {workspaceDir}/memory/reflection-{date}.md.
  *
@@ -144,17 +144,22 @@ export async function callAnthropicForReflection(
  * Non-fatal — errors are logged but never thrown to avoid blocking the daemon.
  *
  * The memory watcher will automatically pick up the new file for indexing.
+ *
+ * @param config       - App config
+ * @param workspaceDir - Workspace directory
+ * @param targetDate   - Optional date string (YYYY-MM-DD). Defaults to yesterday.
  */
 export async function runDailyReflection(
   config: Config,
   workspaceDir: string,
+  targetDate?: string,
 ): Promise<void> {
   if (!config.reflection.enabled) {
     log.debug("Daily reflection disabled — skipping");
     return;
   }
 
-  const date = getYesterdayDate();
+  const date = targetDate ?? getYesterdayDate();
   const outputPath = path.join(workspaceDir, "memory", `reflection-${date}.md`);
 
   // Idempotency check — skip if already processed today

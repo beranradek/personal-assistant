@@ -70,6 +70,8 @@ export async function createTerminalSession(
       keywordWeight: config.memory.search.hybridWeights.keyword,
       minScore: config.memory.search.minScore,
       maxResults: config.memory.search.maxResults,
+      recencyBoost: config.memory.search.recencyBoost,
+      recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
     },
   });
 

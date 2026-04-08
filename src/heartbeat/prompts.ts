@@ -185,6 +185,42 @@ export async function appendMorningEveningContent(
 }
 
 /**
+ * If the current heartbeat is a morning heartbeat, load yesterday's reflection
+ * file ({workspace}/memory/reflection-YYYY-MM-DD.md) and append its contents
+ * to the prompt under a "## Yesterday's Reflection" header.
+ *
+ * Returns `basePrompt` unchanged when:
+ *  - It is not a morning heartbeat
+ *  - The reflection file does not exist (daemon was off, or first run)
+ */
+export async function appendYesterdayReflection(
+  basePrompt: string,
+  config: Config,
+  workspace: string,
+  now?: Date,
+): Promise<string> {
+  if (!isMorningHeartbeat(config, now)) return basePrompt;
+
+  const yesterday = new Date(now ?? new Date());
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dateStr = yesterday.toISOString().slice(0, 10);
+  const reflectionPath = path.join(workspace, "memory", `reflection-${dateStr}.md`);
+
+  let content: string;
+  try {
+    content = await fs.readFile(reflectionPath, "utf-8");
+  } catch {
+    return basePrompt; // File missing — gracefully skip
+  }
+
+  // Strip YAML frontmatter (--- ... ---) before injecting
+  const stripped = content.replace(/^---[\s\S]*?---\n/, "").trim();
+  if (!stripped) return basePrompt;
+
+  return `${basePrompt}\n\n## Yesterday's Reflection (${dateStr})\n\n${stripped}`;
+}
+
+/**
  * If habits tracking is enabled, append the current habit status to the prompt.
  *
  * - Morning heartbeat: call resetDaily() to archive yesterday and reset today's

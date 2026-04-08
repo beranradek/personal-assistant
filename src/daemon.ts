@@ -42,7 +42,7 @@ import { createSlackAdapter } from "./adapters/slack.js";
 import { createGithubWebhookAdapter } from "./adapters/github-webhook.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
-import { resolveHeartbeatPrompt, appendMorningEveningContent, buildDiffAwarePrompt, appendHabitContent } from "./heartbeat/prompts.js";
+import { resolveHeartbeatPrompt, appendMorningEveningContent, appendYesterdayReflection, buildDiffAwarePrompt, appendHabitContent } from "./heartbeat/prompts.js";
 import { loadHabits, markHabit } from "./heartbeat/habits.js";
 import { pullWorkspace, pushWorkspace } from "./heartbeat/git-sync.js";
 import { createCronToolManager } from "./cron/tool.js";
@@ -50,6 +50,7 @@ import { handleExec } from "./exec/tool.js";
 import { getSession, listSessions } from "./exec/process-registry.js";
 import cron from "node-cron";
 import { runDailyReflection } from "./memory/daily-reflection.js";
+import { runWeeklyReflection } from "./memory/weekly-reflection.js";
 import { createLogger } from "./core/logger.js";
 import { createRedactor, CONSERVATIVE_PATTERNS } from "./security/content-redaction.js";
 import type { Adapter, AdapterMessage } from "./core/types.js";
@@ -182,6 +183,8 @@ export async function startDaemon(configDir: string): Promise<void> {
       keywordWeight: config.memory.search.hybridWeights.keyword,
       minScore: config.memory.search.minScore,
       maxResults: config.memory.search.maxResults,
+      recencyBoost: config.memory.search.recencyBoost,
+      recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
     },
   });
 
@@ -351,8 +354,13 @@ export async function startDaemon(configDir: string): Promise<void> {
       config,
       config.security.workspace,
     );
-    const prompt = await appendHabitContent(
+    const reflectionPrompt = await appendYesterdayReflection(
       morningEveningPrompt,
+      config,
+      config.security.workspace,
+    );
+    const prompt = await appendHabitContent(
+      reflectionPrompt,
       config,
       config.security.workspace,
     );
@@ -379,6 +387,7 @@ export async function startDaemon(configDir: string): Promise<void> {
 
   // 9. Schedule daily reflection (before morning heartbeat by default: "0 7 * * *")
   let reflectionTask: { stop(): void } | null = null;
+  let weeklyReflectionTask: { stop(): void } | null = null;
   if (config.reflection.enabled) {
     reflectionTask = cron.schedule(config.reflection.schedule, () => {
       log.info("Daily reflection firing");
@@ -387,6 +396,16 @@ export async function startDaemon(configDir: string): Promise<void> {
       });
     });
     log.info({ schedule: config.reflection.schedule }, "Daily reflection scheduled");
+
+    if (config.reflection.weeklyEnabled) {
+      weeklyReflectionTask = cron.schedule(config.reflection.weeklySchedule, () => {
+        log.info("Weekly reflection firing");
+        Promise.resolve(runWeeklyReflection(config, config.security.workspace)).catch((err) => {
+          log.error({ err }, "Weekly reflection failed");
+        });
+      });
+      log.info({ schedule: config.reflection.weeklySchedule }, "Weekly reflection scheduled");
+    }
   }
 
   // 10. Load cron jobs and arm timer
@@ -430,8 +449,9 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Stop heartbeat scheduler
     heartbeat.stop();
 
-    // Stop daily reflection cron
+    // Stop daily and weekly reflection crons
     if (reflectionTask) reflectionTask.stop();
+    if (weeklyReflectionTask) weeklyReflectionTask.stop();
 
     // Stop cron timer
     cronManager.stop();

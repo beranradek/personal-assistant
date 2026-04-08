@@ -10,6 +10,7 @@ import {
   isMorningHeartbeat,
   isEveningHeartbeat,
   appendMorningEveningContent,
+  appendYesterdayReflection,
   buildDiffAwarePrompt,
   EXEC_EVENT_PROMPT,
   CRON_EVENT_PROMPT,
@@ -361,5 +362,80 @@ describe("buildDiffAwarePrompt", () => {
     const result = await buildDiffAwarePrompt("base", tmpDir, ["item A", "item B"], true);
     // Should reference when last heartbeat ran (ISO timestamp)
     expect(result).toMatch(/Changes since last heartbeat at \d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// appendYesterdayReflection
+// ---------------------------------------------------------------------------
+
+describe("appendYesterdayReflection", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "prompts-reflection-test-"));
+    await fs.mkdir(path.join(tmpDir, "memory"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Build a config whose morning hour == the given hour */
+  function makeReflectionConfig(morningHour: number): Config {
+    return {
+      ...DEFAULTS,
+      heartbeat: { ...DEFAULTS.heartbeat, morningHour, activeHours: "6-22" },
+    };
+  }
+
+  it("returns basePrompt unchanged when not a morning heartbeat", async () => {
+    const config = makeReflectionConfig(8);
+    // Pass 14:00 — not the morning hour
+    const now = new Date("2026-04-08T14:00:00");
+    const result = await appendYesterdayReflection("base prompt", config, tmpDir, now);
+    expect(result).toBe("base prompt");
+  });
+
+  it("returns basePrompt unchanged when reflection file does not exist", async () => {
+    const config = makeReflectionConfig(8);
+    // Morning hour exactly
+    const now = new Date("2026-04-08T08:00:00");
+    const result = await appendYesterdayReflection("base prompt", config, tmpDir, now);
+    expect(result).toBe("base prompt");
+  });
+
+  it("appends yesterday's reflection on morning heartbeat when file exists", async () => {
+    const config = makeReflectionConfig(8);
+    const now = new Date("2026-04-08T08:00:00");
+
+    // Write yesterday's reflection file
+    const content = "---\ndate: 2026-04-07\n---\n\n## Decisions\n\n- Chose PostgreSQL\n";
+    await fs.writeFile(
+      path.join(tmpDir, "memory", "reflection-2026-04-07.md"),
+      content,
+    );
+
+    const result = await appendYesterdayReflection("base prompt", config, tmpDir, now);
+
+    expect(result).toContain("base prompt");
+    expect(result).toContain("Yesterday's Reflection (2026-04-07)");
+    expect(result).toContain("Chose PostgreSQL");
+  });
+
+  it("strips YAML frontmatter before injecting", async () => {
+    const config = makeReflectionConfig(8);
+    const now = new Date("2026-04-08T08:00:00");
+
+    await fs.writeFile(
+      path.join(tmpDir, "memory", "reflection-2026-04-07.md"),
+      "---\ndate: 2026-04-07\nentry_count: 5\ncategories:\n  - decision\n---\n\n## Decisions\n\n- Done\n",
+    );
+
+    const result = await appendYesterdayReflection("base prompt", config, tmpDir, now);
+
+    expect(result).not.toContain("entry_count");
+    expect(result).not.toContain("categories:");
+    expect(result).toContain("## Decisions");
   });
 });
