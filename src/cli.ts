@@ -21,10 +21,11 @@ import { ensureWorkspace } from "./core/workspace.js";
 import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
 import { createLogger } from "./core/logger.js";
+import { runDailyReflection } from "./memory/daily-reflection.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -54,6 +55,7 @@ Commands:
   init                  Create default settings.json in config directory
   mcp-server            Start stdio MCP server (for Codex backend integration)
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
+  reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -134,6 +136,8 @@ async function startMcpServer(configDir: string): Promise<void> {
       keywordWeight: config.memory.search.hybridWeights.keyword,
       minScore: config.memory.search.minScore,
       maxResults: config.memory.search.maxResults,
+      recencyBoost: config.memory.search.recencyBoost,
+      recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
     },
   });
 
@@ -170,6 +174,34 @@ async function runTerminal(configDir: string): Promise<void> {
   runTerminalRepl(session);
 }
 
+/**
+ * Parse --date YYYY-MM-DD from argv args that come after the "reflect" subcommand.
+ * Returns the date string or undefined.
+ */
+export function parseReflectDate(argv: string[]): string | undefined {
+  const args = argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--date" && i + 1 < args.length) {
+      const val = args[i + 1]!;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
+      console.error(`Invalid date format: "${val}". Expected YYYY-MM-DD.`);
+      process.exit(1);
+    }
+  }
+  return undefined;
+}
+
+async function runReflect(configDir: string, targetDate?: string): Promise<void> {
+  const config = loadConfig(configDir);
+  await ensureWorkspace(config);
+
+  const dateLabel = targetDate ?? "yesterday";
+  console.log(`Running daily reflection for ${dateLabel}...`);
+
+  await runDailyReflection(config, config.security.workspace, targetDate);
+  console.log("Done.");
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
@@ -199,6 +231,11 @@ async function main(): Promise<void> {
     case "mcp-server":
       await startMcpServer(configDir);
       break;
+    case "reflect": {
+      const targetDate = parseReflectDate(process.argv);
+      await runReflect(configDir, targetDate);
+      break;
+    }
     case "integapi": {
       const { runIntegApiCli } = await import("./integ-api/cli.js");
       const config = loadConfig(configDir);

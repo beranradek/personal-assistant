@@ -23,6 +23,17 @@ export interface HybridSearchConfig {
   minScore: number;
   /** Maximum number of results to return. Default: 6 */
   maxResults: number;
+  /**
+   * Maximum additive score boost for content from recent files.
+   * Applied via exponential decay: boost = recencyBoost * 0.5^(daysAgo/halfLifeDays).
+   * Set to 0 to disable. Default: 0.1
+   */
+  recencyBoost?: number;
+  /**
+   * Days for the recency boost to halve (exponential decay half-life).
+   * Default: 7 (week-old content receives half the maximum boost).
+   */
+  recencyHalfLifeDays?: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -65,6 +76,57 @@ function normaliseBm25Ranks(
     scores.set(r.id, Math.abs(r.rank) / maxAbsRank);
   }
   return scores;
+}
+
+// ─── Recency boost ───────────────────────────────────────────────────
+
+/**
+ * Extract a YYYY-MM-DD date string from a file path, if present.
+ * Matches patterns like:
+ *   - memory/reflection-2026-04-07.md
+ *   - daily/2026-04-07.jsonl
+ * Returns null if no date pattern is found.
+ */
+export function extractDateFromPath(filePath: string): string | null {
+  const m = filePath.match(/(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Compute the recency boost for a file path.
+ *
+ * Uses exponential decay: boost = maxBoost * 0.5^(daysAgo / halfLifeDays)
+ * Files without a recognisable date in their path receive no boost (0).
+ *
+ * @param filePath      - Path of the source file
+ * @param maxBoost      - Maximum boost value (for today's files)
+ * @param halfLifeDays  - Days for the boost to halve
+ * @param now           - Reference date for computing age (defaults to current date)
+ */
+export function computeRecencyBoost(
+  filePath: string,
+  maxBoost: number,
+  halfLifeDays: number,
+  now?: Date,
+): number {
+  if (maxBoost <= 0) return 0;
+
+  const dateStr = extractDateFromPath(filePath);
+  if (!dateStr) return 0;
+
+  const fileDate = new Date(dateStr + "T00:00:00.000Z");
+  if (isNaN(fileDate.getTime())) return 0;
+
+  const today = now ?? new Date();
+  const todayUtc = new Date(
+    Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()),
+  );
+  const daysAgo = Math.max(
+    0,
+    (todayUtc.getTime() - fileDate.getTime()) / 86_400_000,
+  );
+
+  return maxBoost * Math.pow(0.5, daysAgo / halfLifeDays);
 }
 
 // ─── Core function ───────────────────────────────────────────────────
@@ -156,13 +218,17 @@ export async function hybridSearch(
   const allIds = new Set([...vectorScores.keys(), ...keywordScores.keys()]);
   const merged: Array<SearchResult & { _id: string }> = [];
 
+  const maxBoost = config.recencyBoost ?? 0.1;
+  const halfLife = config.recencyHalfLifeDays ?? 7;
+
   for (const id of allIds) {
     const vScore = vectorScores.get(id) ?? 0;
     const kScore = keywordScores.get(id) ?? 0;
-    const finalScore =
-      config.vectorWeight * vScore + config.keywordWeight * kScore;
-
     const meta = chunkMap.get(id)!;
+    const recency = computeRecencyBoost(meta.path, maxBoost, halfLife);
+    const finalScore =
+      config.vectorWeight * vScore + config.keywordWeight * kScore + recency;
+
     merged.push({
       _id: id,
       path: meta.path,

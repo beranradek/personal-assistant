@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { hybridSearch, type HybridSearchConfig } from "./hybrid-search.js";
+import { hybridSearch, extractDateFromPath, computeRecencyBoost, type HybridSearchConfig } from "./hybrid-search.js";
 import {
   createVectorStore,
   type VectorStore,
@@ -478,5 +478,85 @@ describe("hybridSearch", () => {
         expect(results[i - 1].score).toBeGreaterThanOrEqual(results[i].score);
       }
     });
+  });
+});
+
+// ─── Recency boost helpers ────────────────────────────────────────────
+
+describe("extractDateFromPath", () => {
+  it("extracts date from daily reflection path", () => {
+    expect(extractDateFromPath("/workspace/memory/reflection-2026-04-07.md")).toBe("2026-04-07");
+  });
+
+  it("extracts date from daily JSONL log path", () => {
+    expect(extractDateFromPath("/workspace/daily/2026-04-07.jsonl")).toBe("2026-04-07");
+  });
+
+  it("extracts date from weekly file", () => {
+    // Weekly files have 'W' notation — the regex won't match but let's verify no false positive
+    const result = extractDateFromPath("/workspace/memory/weekly-2026-W14.md");
+    expect(result).toBeNull();
+  });
+
+  it("returns null for MEMORY.md (no date in path)", () => {
+    expect(extractDateFromPath("/workspace/MEMORY.md")).toBeNull();
+  });
+
+  it("returns null for AGENTS.md", () => {
+    expect(extractDateFromPath("/workspace/AGENTS.md")).toBeNull();
+  });
+});
+
+describe("computeRecencyBoost", () => {
+  it("returns maxBoost for a file dated today", () => {
+    const today = new Date("2026-04-08");
+    const boost = computeRecencyBoost(
+      "/workspace/memory/reflection-2026-04-08.md",
+      0.1,
+      7,
+      today,
+    );
+    expect(boost).toBeCloseTo(0.1, 5);
+  });
+
+  it("returns half maxBoost after halfLifeDays", () => {
+    const today = new Date("2026-04-08");
+    const boost = computeRecencyBoost(
+      "/workspace/memory/reflection-2026-04-01.md", // 7 days ago
+      0.1,
+      7,
+      today,
+    );
+    expect(boost).toBeCloseTo(0.05, 5); // 0.1 * 0.5^1
+  });
+
+  it("returns 0 for files without a date in path", () => {
+    const boost = computeRecencyBoost("/workspace/MEMORY.md", 0.1, 7);
+    expect(boost).toBe(0);
+  });
+
+  it("returns 0 when maxBoost is 0", () => {
+    const today = new Date("2026-04-08");
+    const boost = computeRecencyBoost(
+      "/workspace/memory/reflection-2026-04-08.md",
+      0,
+      7,
+      today,
+    );
+    expect(boost).toBe(0);
+  });
+
+  it("decays further for older files", () => {
+    const today = new Date("2026-04-08");
+    const recent = computeRecencyBoost("/workspace/memory/reflection-2026-04-06.md", 0.1, 7, today);
+    const older = computeRecencyBoost("/workspace/memory/reflection-2026-03-25.md", 0.1, 7, today);
+    expect(recent).toBeGreaterThan(older);
+  });
+
+  it("never returns a negative value", () => {
+    const today = new Date("2026-04-08");
+    // File 365 days old
+    const boost = computeRecencyBoost("/workspace/daily/2025-04-08.jsonl", 0.1, 7, today);
+    expect(boost).toBeGreaterThanOrEqual(0);
   });
 });

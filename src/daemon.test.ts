@@ -103,6 +103,10 @@ vi.mock("./memory/daily-reflection.js", () => ({
   runDailyReflection: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./memory/weekly-reflection.js", () => ({
+  runWeeklyReflection: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("node-cron", () => ({
   default: {
     schedule: vi.fn().mockReturnValue({ stop: vi.fn() }),

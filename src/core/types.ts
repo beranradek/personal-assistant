@@ -142,6 +142,10 @@ export const SearchConfigSchema = z.object({
   maxResults: z.number().int().positive(),
   chunkTokens: z.number().int().positive(),
   chunkOverlap: z.number().int().nonnegative(),
+  /** Maximum score boost added to results from recent files. Default: 0.1 */
+  recencyBoost: z.number().min(0).max(1).default(0.1),
+  /** Days for the recency boost to halve (exponential decay). Default: 7 */
+  recencyHalfLifeDays: z.number().int().positive().default(7),
 });
 
 export const MemoryConfigSchema = z.object({
@@ -157,6 +161,15 @@ export const ReflectionConfigSchema = z.object({
   enabled: z.boolean().default(true),
   schedule: z.string().default("0 7 * * *"),
   maxDailyLogEntries: z.number().int().positive().default(500),
+  weeklyEnabled: z.boolean().default(true),
+  /** Cron expression for weekly synthesis. Default: Monday 7:05 AM (after daily reflection). */
+  weeklySchedule: z.string().default("5 7 * * 1"),
+  /**
+   * Days after which daily reflection files are automatically deleted.
+   * Daily files are cleaned up during the weekly synthesis run once they
+   * exceed this age. Set to 0 to disable cleanup. Default: 21 days.
+   */
+  dailyRetentionDays: z.number().int().nonnegative().default(21),
 });
 
 export const IntegApiContentFilterConfigSchema = z.object({
