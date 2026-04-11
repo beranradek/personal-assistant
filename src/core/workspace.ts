@@ -32,6 +32,28 @@ const SKILL_FILES = [
   "integrations/SKILL.md",
 ] as const;
 
+// Codex hooks config to enforce Bash allowlist/path policy via Codex PreToolUse
+const CODEX_HOOKS_JSON = JSON.stringify(
+  {
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Bash",
+          hooks: [
+            {
+              type: "command",
+              command: "pa codex-hook pretool",
+              statusMessage: "PA policy: checking Bash command",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  null,
+  2,
+) + "\n";
+
 // ---------------------------------------------------------------------------
 // writeFileIfMissing – write-exclusive file creation
 // ---------------------------------------------------------------------------
@@ -95,6 +117,7 @@ export async function ensureWorkspace(config: Config): Promise<void> {
     path.join(workspace, "daily"),
     path.join(workspace, "memory"),
     path.join(workspace, ".claude", "skills"),
+    path.join(workspace, ".codex"),
     dataDir,
     path.join(dataDir, "sessions"),
   ];
@@ -121,4 +144,7 @@ export async function ensureWorkspace(config: Config): Promise<void> {
     const content = await fs.readFile(src, "utf-8");
     await writeFileIfMissing(dest, content);
   }
+
+  // 4. Bootstrap Codex hooks config (write-exclusive)
+  await writeFileIfMissing(path.join(workspace, ".codex", "hooks.json"), CODEX_HOOKS_JSON);
 }

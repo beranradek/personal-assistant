@@ -25,7 +25,15 @@ import { createLogger } from "./core/logger.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "profiles", "mcp-server", "integapi"] as const;
+const VALID_COMMANDS = [
+  "terminal",
+  "daemon",
+  "init",
+  "profiles",
+  "mcp-server",
+  "integapi",
+  "codex-hook",
+] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -56,6 +64,7 @@ Commands:
   profiles              Print routing + profile configuration (no secrets)
   mcp-server            Start stdio MCP server (for Codex backend integration)
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
+  codex-hook <sub>      Codex CLI hook handler (internal)
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -184,6 +193,35 @@ async function runProfiles(configDir: string): Promise<void> {
   console.log(JSON.stringify({ routing: config.routing, profiles }, null, 2));
 }
 
+async function runCodexHook(configDir: string): Promise<void> {
+  const config = loadConfig(configDir);
+
+  // Extract args after "codex-hook" (skip --config and its value)
+  const hookArgs: string[] = [];
+  const rawArgs = process.argv.slice(2);
+  let found = false;
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === "--config") {
+      i++;
+      continue;
+    }
+    if (!found && rawArgs[i] === "codex-hook") {
+      found = true;
+      continue;
+    }
+    if (found) hookArgs.push(rawArgs[i]!);
+  }
+
+  const sub = hookArgs[0] ?? "";
+  if (sub !== "pretool") {
+    console.error(`Unknown codex-hook subcommand: ${sub || "(missing)"}`);
+    process.exit(2);
+  }
+
+  const { handleCodexPreToolUseHook } = await import("./codex/hooks.js");
+  await handleCodexPreToolUseHook(config);
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
@@ -215,6 +253,9 @@ async function main(): Promise<void> {
       break;
     case "mcp-server":
       await startMcpServer(configDir);
+      break;
+    case "codex-hook":
+      await runCodexHook(configDir);
       break;
     case "integapi": {
       const { runIntegApiCli } = await import("./integ-api/cli.js");
