@@ -129,7 +129,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 }
 ```
 
-**profiles + routing** - Optional profile-based routing (disabled by default). Supports deterministic bindings (e.g. `/code`) and an opt-in heuristic fallback when no bindings match:
+**profiles + routing** - Optional profile-based routing (disabled by default). Supports deterministic bindings (e.g. `/code`) and an opt-in local GGUF router profile (with heuristic fallback) when no bindings match:
 ```json
 {
   "routing": {

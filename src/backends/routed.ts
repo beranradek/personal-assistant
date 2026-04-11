@@ -3,12 +3,16 @@ import type { AgentOptions } from "../core/agent-runner.js";
 import type { Config } from "../core/types.js";
 import type { CreateBackendOptions } from "./factory.js";
 import { resolveProfile, resolvePrimaryModelRef } from "../core/profiles.js";
+import { createLogger } from "../core/logger.js";
+import { routeWithLocalLlama } from "../routing/local-llama-router.js";
 
 type ConcreteBackendFactory = (
   config: Config,
   agentOptions?: AgentOptions,
   options?: CreateBackendOptions,
 ) => Promise<AgentBackend>;
+
+const log = createLogger("routed-backend");
 
 function mcpServerForToolName(toolName: string): string | null {
   switch (toolName) {
@@ -88,13 +92,19 @@ function looksLikeCodingRequest(text: string): boolean {
   return false;
 }
 
-function selectFallbackProfile(config: Config, message: string): string {
-  if (!config.routing.useRouter) return config.routing.defaultProfile;
-
+function candidateProfilesForRouter(config: Config): string[] {
   const candidates =
     config.routing.candidateProfiles.length > 0
       ? config.routing.candidateProfiles
       : Object.keys(config.profiles).filter((p) => p !== config.routing.routerProfile);
+
+  return candidates.filter((p) => p !== config.routing.routerProfile);
+}
+
+function selectFallbackProfile(config: Config, message: string): string {
+  if (!config.routing.useRouter) return config.routing.defaultProfile;
+
+  const candidates = candidateProfilesForRouter(config);
 
   if (candidates.length === 0) return config.routing.defaultProfile;
 
@@ -109,11 +119,41 @@ function selectFallbackProfile(config: Config, message: string): string {
   return candidates[0]!;
 }
 
-function selectProfileName(
+async function trySelectProfileViaRouterProfile(
+  config: Config,
+  messageForRouter: string,
+): Promise<string | null> {
+  const router = resolveProfile(config, config.routing.routerProfile);
+  if (router.backend !== "local_llama") return null;
+
+  if (router.model === null || typeof router.model !== "object" || !("type" in router.model)) {
+    return null;
+  }
+
+  if (router.model.type !== "gguf") return null;
+
+  const candidates = candidateProfilesForRouter(config);
+  if (candidates.length === 0) return null;
+
+  const decision = await routeWithLocalLlama({
+    modelPath: router.model.path,
+    message: messageForRouter,
+    candidates,
+    defaultProfile: config.routing.defaultProfile,
+    timeoutMs: config.routing.maxRouterMs,
+  });
+
+  if (!decision) return null;
+  if (decision.profile === config.routing.routerProfile) return null;
+  return decision.profile;
+}
+
+async function selectProfileName(
   config: Config,
   message: string,
   sessionKey: string,
-): { profile: string; message: string } {
+  options?: CreateBackendOptions,
+): Promise<{ profile: string; message: string }> {
   const source = sourceFromSessionKey(sessionKey);
   const trimmed = message.trimStart();
 
@@ -128,6 +168,15 @@ function selectProfileName(
     return { profile: binding.profile, message };
   }
 
+  if (!config.routing.useRouter) {
+    return { profile: config.routing.defaultProfile, message };
+  }
+
+  const redacted = options?.redact ? options.redact(message) : message;
+  const selected = await trySelectProfileViaRouterProfile(config, redacted);
+  if (selected) return { profile: selected, message };
+
+  log.debug({ sessionKey }, "Router profile unavailable; using heuristic fallback");
   return { profile: selectFallbackProfile(config, message), message };
 }
 
@@ -172,12 +221,12 @@ export async function createRoutedBackend(
   const routed: AgentBackend = {
     name: "routed",
     async *runTurn(message: string, sessionKey: string) {
-      const selection = selectProfileName(config, message, sessionKey);
+      const selection = await selectProfileName(config, message, sessionKey, options);
       const backend = await getOrCreateBackend(selection.profile);
       yield* backend.runTurn(selection.message, sessionKey);
     },
     async runTurnSync(message: string, sessionKey: string) {
-      const selection = selectProfileName(config, message, sessionKey);
+      const selection = await selectProfileName(config, message, sessionKey, options);
       const backend = await getOrCreateBackend(selection.profile);
       return backend.runTurnSync(selection.message, sessionKey);
     },
