@@ -59,6 +59,12 @@ PA enables Codex Hooks (`features.codex_hooks = true`) and bootstraps a workspac
 
 That hook runs `pa codex-hook pretool` on Codex `PreToolUse` events to validate Bash commands using the same allowlist + path policy used by the Claude backend.
 
+Additionally, when the command executes a script via `bash|sh|zsh|dash <script>` (or uses inline `bash -c "..."`), PA scans the script content for:
+- references to common sensitive files (e.g. `/etc/passwd`, `~/.ssh/id_*`, `~/.aws/credentials`)
+- likely hardcoded secrets / API keys / private keys
+
+If a match is found, the tool call is blocked before execution.
+
 Note: Codex `PreToolUse` is currently a guardrail (Bash-only, interception is incomplete, and models can sometimes work around it by writing scripts), so treat it as defense-in-depth rather than a hard sandbox boundary.
 
 ## Run

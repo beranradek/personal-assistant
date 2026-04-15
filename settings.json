@@ -15,7 +15,14 @@
     "workspace": "~/.personal-assistant/workspace",
     "dataDir": "~/.personal-assistant/data",
     "additionalReadDirs": [],
-    "additionalWriteDirs": []
+    "additionalWriteDirs": [],
+    "scriptContentPolicy": {
+      "enabled": true,
+      "maxBytes": 200000,
+      "denyStdinExecution": true,
+      "denyMissingScriptFile": true,
+      "scanInline": true
+    }
   },
   "adapters": {
     "telegram": {
