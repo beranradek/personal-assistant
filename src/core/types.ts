@@ -12,6 +12,15 @@ export const SecurityConfigSchema = z.object({
   dataDir: z.string(),
   additionalReadDirs: z.array(z.string()),
   additionalWriteDirs: z.array(z.string()),
+  scriptContentPolicy: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxBytes: z.number().int().positive().default(200_000),
+      denyStdinExecution: z.boolean().default(true),
+      denyMissingScriptFile: z.boolean().default(true),
+      scanInline: z.boolean().default(true),
+    })
+    .default(() => ({})),
 });
 
 export const TelegramAudioConfigSchema = z.object({

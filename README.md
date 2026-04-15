@@ -123,6 +123,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 {
   "security": {
     "allowedCommands": ["ls", "cat", "grep", "node", "npm", "git"],
+    "scriptContentPolicy": { "enabled": true },
     "workspace": "~/.personal-assistant/workspace",
     "dataDir": "~/.personal-assistant/data"
   }

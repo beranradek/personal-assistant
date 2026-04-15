@@ -30,6 +30,7 @@ import {
   validateKillCommand,
   extractFilePathsFromCommand,
 } from "./allowed-commands.js";
+import { validateScriptContentFromShellCommand } from "./script-content-scanner.js";
 import { validatePath } from "./path-validator.js";
 import type { Config } from "../core/types.js";
 
@@ -301,6 +302,19 @@ export async function bashSecurityHook(
         reason: validation.reason ?? `Command '${cmd}' is not allowed`,
       };
     }
+  }
+
+  // Step 4b: If the command executes a script via bash/sh/zsh/dash,
+  // scan the script contents (or inline `-c` content) for sensitive-file
+  // access patterns and hardcoded secrets.
+  const scriptScan = await validateScriptContentFromShellCommand(trimmedCommand, {
+    workspaceDir,
+    additionalReadDirs: config.security.additionalReadDirs,
+    additionalWriteDirs: config.security.additionalWriteDirs,
+    security: config.security as unknown as Record<string, unknown>,
+  });
+  if (!scriptScan.allowed) {
+    return { decision: "block", reason: scriptScan.reason };
   }
 
   // Step 5: Run extra validation for commands that need it

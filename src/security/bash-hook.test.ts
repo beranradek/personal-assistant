@@ -783,6 +783,30 @@ describe("bashSecurityHook", () => {
   // Edge case: undefined toolUseId
   // -------------------------------------------------------------------------
 
+  describe("script content scanning", () => {
+    it("blocks bash script execution when the script references sensitive paths", async () => {
+      const scriptPath = path.join(workspaceDir, "evil.sh");
+      fs.writeFileSync(scriptPath, "cat /etc/passwd\n", "utf8");
+
+      const scanningConfig: Config = {
+        ...config,
+        security: {
+          ...config.security,
+          allowedCommands: [...config.security.allowedCommands, "bash"],
+        },
+      };
+
+      const result = await bashSecurityHook(
+        bashInput("bash evil.sh"),
+        "tool-99",
+        { workspaceDir, config: scanningConfig },
+      );
+
+      expect((result as any).decision).toBe("block");
+      expect((result as any).reason).toMatch(/\/etc\/passwd/);
+    });
+  });
+
   describe("edge cases", () => {
     it("handles undefined toolUseId", async () => {
       const result = await bashSecurityHook(

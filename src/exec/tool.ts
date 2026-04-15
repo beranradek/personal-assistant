@@ -8,6 +8,7 @@ import {
   validateKillCommand,
 } from "../security/allowed-commands.js";
 import { validatePath } from "../security/path-validator.js";
+import { validateScriptContentFromShellCommand } from "../security/script-content-scanner.js";
 import { enqueueSystemEvent } from "../heartbeat/system-events.js";
 import { addSession, getSession, markExited } from "./process-registry.js";
 import { createLogger } from "../core/logger.js";
@@ -269,6 +270,18 @@ export async function handleExec(
         };
       }
     }
+  }
+
+  // ---- Step 4b: Script content scanning (bash/sh/zsh/dash) ----
+
+  const scriptScan = await validateScriptContentFromShellCommand(command, {
+    workspaceDir: config.security.workspace,
+    additionalReadDirs: config.security.additionalReadDirs,
+    additionalWriteDirs: config.security.additionalWriteDirs,
+    security: config.security as unknown as Record<string, unknown>,
+  });
+  if (!scriptScan.allowed) {
+    return { success: false, message: scriptScan.reason };
   }
 
   // ---- Step 5: Spawn child process ----

@@ -7,6 +7,11 @@ in settings.json.
 Also, internal filesystem commands including Read, Write, Edit, Bash 
 are controlled for source and target file paths.
 
+As additional defense-in-depth, when a Bash tool command executes a script via `bash|sh|zsh|dash <script>` (or uses inline `bash -c "..."`), the assistant scans the script content and blocks execution if it appears to:
+- reference common sensitive files (e.g. `/etc/shadow`, `~/.ssh/id_*`, `~/.aws/credentials`)
+- contain likely hardcoded secrets (API keys, tokens, private key blocks)
+- execute a shell from stdin (e.g. `curl ... | bash`)
+
 Just a quick demonstration in terminal session:
 
 ```bash

@@ -27,6 +27,13 @@ export const DEFAULTS: Config = {
     dataDir: "~/.personal-assistant/data",
     additionalReadDirs: [],
     additionalWriteDirs: [],
+    scriptContentPolicy: {
+      enabled: true,
+      maxBytes: 200_000,
+      denyStdinExecution: true,
+      denyMissingScriptFile: true,
+      scanInline: true,
+    },
   },
   adapters: {
     telegram: {
