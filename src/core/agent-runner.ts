@@ -26,6 +26,7 @@ import { appendAuditEntry } from "../memory/daily-log.js";
 import { bashSecurityHook } from "../security/bash-hook.js";
 import { fileToolSecurityHook } from "../security/file-tool-hook.js";
 import { sessionKeyToPath } from "../session/types.js";
+import { appendPromptLog } from "./prompt-log.js";
 import {
   loadConversationHistory,
   summarizeConversation,
@@ -341,6 +342,23 @@ export async function runAgentTurn(
   // 4. Inject compaction summary into system prompt (if any)
   const effectiveOptions = buildEffectiveOptions(agentOptions, sessionKey);
 
+  await appendPromptLog(
+    config.security.dataDir,
+    {
+      timestamp: userMsg.timestamp,
+      kind: "turn_start",
+      backend: "claude",
+      sessionKey,
+      systemPrompt: {
+        type: effectiveOptions.systemPrompt.type,
+        preset: effectiveOptions.systemPrompt.preset,
+        append: effectiveOptions.systemPrompt.append,
+      },
+      userMessage: message,
+    },
+    redact,
+  );
+
   // 5. Call SDK query (with resume if we have a previous session)
   const result = query({
     prompt: message,
@@ -489,6 +507,23 @@ export async function* streamAgentTurn(
 
   // 4. Inject compaction summary into system prompt (if any)
   const effectiveOptions = buildEffectiveOptions(agentOptions, sessionKey);
+
+  await appendPromptLog(
+    config.security.dataDir,
+    {
+      timestamp: userMsg.timestamp,
+      kind: "turn_start",
+      backend: "claude",
+      sessionKey,
+      systemPrompt: {
+        type: effectiveOptions.systemPrompt.type,
+        preset: effectiveOptions.systemPrompt.preset,
+        append: effectiveOptions.systemPrompt.append,
+      },
+      userMessage: message,
+    },
+    redact,
+  );
 
   // 5. Call SDK query (with resume if we have a previous session)
   const result = query({

@@ -37,6 +37,7 @@ import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { createLogger } from "../core/logger.js";
+import { appendPromptLog } from "../core/prompt-log.js";
 import { sessionKeyToPath } from "../session/types.js";
 import {
   loadConversationHistory,
@@ -400,6 +401,19 @@ export async function createCodexBackend(
         ? `## Previous Conversation Summary\n\n${summary}\n\n${baseInstructions}`
         : baseInstructions || undefined;
 
+      await appendPromptLog(
+        config.security.dataDir,
+        {
+          timestamp: userMsg.timestamp,
+          kind: "turn_start",
+          backend: "codex",
+          sessionKey,
+          developerInstructions: String(codexConfig.developer_instructions ?? ""),
+          userMessage: message,
+        },
+        redact,
+      );
+
       let responseText = "";
 
       try {
@@ -555,6 +569,19 @@ export async function createCodexBackend(
       codexConfig.developer_instructions = summary
         ? `## Previous Conversation Summary\n\n${summary}\n\n${baseInstructions}`
         : baseInstructions || undefined;
+
+      await appendPromptLog(
+        config.security.dataDir,
+        {
+          timestamp: userMsg.timestamp,
+          kind: "turn_start",
+          backend: "codex",
+          sessionKey,
+          developerInstructions: String(codexConfig.developer_instructions ?? ""),
+          userMessage: message,
+        },
+        redact,
+      );
 
       try {
         const existingThreadId = threadIds.get(sessionKey);
