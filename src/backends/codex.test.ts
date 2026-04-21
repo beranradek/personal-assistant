@@ -87,15 +87,16 @@ import { DEFAULTS } from "../core/config.js";
 import type { Config } from "../core/types.js";
 
 function makeConfig(overrides?: Partial<Config>): Config {
+  const { security: securityOverrides, ...restOverrides } = overrides ?? {};
   return {
     ...DEFAULTS,
     security: {
       ...DEFAULTS.security,
       workspace: "/tmp/workspace",
       dataDir: "/tmp/data",
-      ...(overrides?.security ?? {}),
+      ...(securityOverrides ?? {}),
     },
-    ...(overrides ?? {}),
+    ...restOverrides,
   } as Config;
 }
 

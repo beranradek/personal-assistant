@@ -41,6 +41,14 @@ function triggerFromSessionKey(sessionKey: string): "heartbeat" | "user" {
   return sessionKey.startsWith("heartbeat--") ? "heartbeat" : "user";
 }
 
+function withDerivedTrigger(entry: PromptLogWriteEntry): PromptLogEntry {
+  const trigger = triggerFromSessionKey(entry.sessionKey);
+  if (entry.backend === "claude") {
+    return { ...entry, trigger };
+  }
+  return { ...entry, trigger };
+}
+
 function redactEntry(entry: PromptLogEntry, redact: (text: string) => string): PromptLogEntry {
   if (entry.backend === "claude") {
     return {
@@ -70,12 +78,8 @@ export async function appendPromptLog(
   redact?: (text: string) => string,
 ): Promise<void> {
   const resolvedDataDir = resolveUserPath(dataDir);
-  const safe: PromptLogEntry = redact
-    ? redactEntry(
-        { ...entry, trigger: triggerFromSessionKey(entry.sessionKey) } as PromptLogEntry,
-        redact,
-      )
-    : ({ ...entry, trigger: triggerFromSessionKey(entry.sessionKey) } as PromptLogEntry);
+  const loggedEntry = withDerivedTrigger(entry);
+  const safe = redact ? redactEntry(loggedEntry, redact) : loggedEntry;
 
   const date = dateFromTimestamp(safe.timestamp);
   const dir = path.join(resolvedDataDir, "prompt-log");
