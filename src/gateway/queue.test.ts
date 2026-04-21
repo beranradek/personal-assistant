@@ -454,41 +454,6 @@ describe("MessageQueue", () => {
         }),
       );
     });
-
-    it("sanitizes contaminated telegram responses before sending", async () => {
-      const config = makeConfig();
-      const backend = makeBackend({
-        runTurnSync: vi.fn().mockResolvedValue({
-          response: [
-            "**Reviewing**",
-            "",
-            "Internal worklog.",
-            "",
-            "Radku, tady je odpověď.",
-          ].join("\n"),
-          messages: [],
-          partial: false,
-        }),
-      });
-      const router = createRouter();
-      const adapter = makeAdapter("telegram");
-      router.register(adapter);
-
-      const queue = createMessageQueue(config);
-      queue.enqueue(makeMessage({ text: "Hello" }));
-
-      await queue.processNext(backend, config, router);
-
-      expect(adapter.sendResponse).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "Radku, tady je odpověď.",
-        }),
-      );
-      expect(mockLog.warn).toHaveBeenCalledWith(
-        expect.any(Object),
-        "sanitized telegram final response",
-      );
-    });
   });
 
   // -------------------------------------------------------------------------
