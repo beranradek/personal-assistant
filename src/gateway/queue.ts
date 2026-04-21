@@ -18,6 +18,7 @@ import { createLogger } from "../core/logger.js";
 import { isHeartbeatOk } from "../heartbeat/prompts.js";
 import { createProcessingAccumulator } from "./processing-message.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limiter.js";
+import { sanitizeTelegramFinalResponse } from "./final-response-sanitize.js";
 
 const log = createLogger("gateway-queue");
 
@@ -290,6 +291,17 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
         if (partial) {
           responseText +=
             "\n\n[Note: This response may be incomplete due to an internal interruption.]";
+        }
+
+        if (routeTarget?.source === "telegram") {
+          const sanitized = sanitizeTelegramFinalResponse(responseText);
+          if (sanitized.didSanitize) {
+            log.warn(
+              { sessionKey, originalLen: responseText.length, sanitizedLen: sanitized.text.length },
+              "sanitized telegram final response",
+            );
+            responseText = sanitized.text;
+          }
         }
 
         // Route the response back to the source adapter
