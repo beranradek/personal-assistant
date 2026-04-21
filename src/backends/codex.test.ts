@@ -87,7 +87,16 @@ import { DEFAULTS } from "../core/config.js";
 import type { Config } from "../core/types.js";
 
 function makeConfig(overrides?: Partial<Config>): Config {
-  return { ...DEFAULTS, ...overrides } as Config;
+  return {
+    ...DEFAULTS,
+    security: {
+      ...DEFAULTS.security,
+      workspace: "/tmp/workspace",
+      dataDir: "/tmp/data",
+      ...(overrides?.security ?? {}),
+    },
+    ...(overrides ?? {}),
+  } as Config;
 }
 
 /** Helper to consume all events from a streaming turn. */

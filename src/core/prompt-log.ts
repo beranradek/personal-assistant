@@ -2,29 +2,34 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { resolveUserPath } from "./config.js";
 
-export type PromptLogEntry =
-  | {
-      timestamp: string;
-      kind: "turn_start";
-      backend: "claude";
-      sessionKey: string;
-      trigger: "heartbeat" | "user";
-      systemPrompt: {
-        type: "preset";
-        preset: string;
-        append: string;
-      };
-      userMessage: string;
-    }
-  | {
-      timestamp: string;
-      kind: "turn_start";
-      backend: "codex";
-      sessionKey: string;
-      trigger: "heartbeat" | "user";
-      developerInstructions: string;
-      userMessage: string;
-    };
+export type ClaudePromptLogEntry = {
+  timestamp: string;
+  kind: "turn_start";
+  backend: "claude";
+  sessionKey: string;
+  trigger: "heartbeat" | "user";
+  systemPrompt: {
+    type: "preset";
+    preset: string;
+    append: string;
+  };
+  userMessage: string;
+};
+
+export type CodexPromptLogEntry = {
+  timestamp: string;
+  kind: "turn_start";
+  backend: "codex";
+  sessionKey: string;
+  trigger: "heartbeat" | "user";
+  developerInstructions: string;
+  userMessage: string;
+};
+
+export type PromptLogEntry = ClaudePromptLogEntry | CodexPromptLogEntry;
+export type PromptLogWriteEntry =
+  | Omit<ClaudePromptLogEntry, "trigger">
+  | Omit<CodexPromptLogEntry, "trigger">;
 
 function dateFromTimestamp(timestamp: string): string {
   const match = timestamp.match(/^(\d{4}-\d{2}-\d{2})/);
@@ -61,7 +66,7 @@ function redactEntry(entry: PromptLogEntry, redact: (text: string) => string): P
  */
 export async function appendPromptLog(
   dataDir: string,
-  entry: Omit<PromptLogEntry, "trigger">,
+  entry: PromptLogWriteEntry,
   redact?: (text: string) => string,
 ): Promise<void> {
   const resolvedDataDir = resolveUserPath(dataDir);

@@ -20,7 +20,13 @@ export const SecurityConfigSchema = z.object({
       denyMissingScriptFile: z.boolean().default(true),
       scanInline: z.boolean().default(true),
     })
-    .default(() => ({})),
+    .default(() => ({
+      enabled: true,
+      maxBytes: 200_000,
+      denyStdinExecution: true,
+      denyMissingScriptFile: true,
+      scanInline: true,
+    })),
 });
 
 export const TelegramAudioConfigSchema = z.object({
