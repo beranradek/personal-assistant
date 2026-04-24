@@ -136,3 +136,6 @@ vite.config.ts.timestamp-*
 
 # Git worktrees
 .worktrees/
+
+# IDE
+.autocode/

@@ -408,9 +408,9 @@ export function createGithubWebhookAdapter(
         `- Clone: (cd ~/.personal-assistant/workspace/dev && gh repo clone ${repo})`,
         `- Workdir: cd ${suggestedCheckoutDir}`,
         "",
-        "Please implement the requested change in a feature branch and open a pull request.",
+        "Please implement the requested change in a feature branch, spawn subagent to review the correctness, completeness and security of the code, fix the findings, push the result and open a pull request.",
         "Post a brief status update as new issue comment with a PR link when done, or just post a new issue comment with the response if PR is not needed.",
-        "Respond only with professional status of issue resolution since your response will be posted to public issue comment. Take care no personal data, no salutation, no names, no secrets are part of this response.",
+        "Respond only with professional status of issue resolution since your response will be posted to public issue comment. Take care that no personal data, no salutation, no names, no secrets are part of this response.",
       ].filter(Boolean).join("\n");
 
     deps.onMessage(createAdapterMessage("github", sourceId, jobText, {
