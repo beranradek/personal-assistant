@@ -779,7 +779,7 @@ describe("Integration: System events flow from enqueue -> heartbeat -> prompt re
     const prompt = resolveHeartbeatPrompt(events);
 
     // Standard heartbeat prompt (no exec or cron events)
-    expect(prompt).toContain("HEARTBEAT.md");
+    expect(prompt).toContain("Follow heartbeat instructions strictly");
     expect(prompt).toContain("current time is");
   });
 
@@ -818,7 +818,7 @@ describe("Integration: System events flow from enqueue -> heartbeat -> prompt re
     const prompt = resolveHeartbeatPrompt(events);
 
     // No exec or cron events, so standard heartbeat prompt
-    expect(prompt).toContain("HEARTBEAT.md");
+    expect(prompt).toContain("Follow heartbeat instructions strictly");
     expect(prompt).toContain("HEARTBEAT_OK");
   });
 
@@ -893,7 +893,7 @@ describe("Integration: System events flow from enqueue -> heartbeat -> prompt re
 
     // 5. Empty events -> standard heartbeat
     const standardPrompt = resolveHeartbeatPrompt([]);
-    expect(standardPrompt).toContain("HEARTBEAT.md");
+    expect(standardPrompt).toContain("Follow heartbeat instructions strictly");
   });
 });
 
