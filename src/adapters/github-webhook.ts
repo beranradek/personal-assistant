@@ -409,7 +409,7 @@ export function createGithubWebhookAdapter(
         `- Workdir: cd ${suggestedCheckoutDir}`,
         "",
         "Please implement the requested change in a feature branch and open a pull request.",
-        "Post a brief status update and a PR link back to this issue when done.",
+        "Post a brief status update as new issue comment with a PR link when done, or just post a new issue comment with the response if PR is not needed.",
       ].filter(Boolean).join("\n");
 
     deps.onMessage(createAdapterMessage("github", sourceId, jobText, {
