@@ -410,6 +410,7 @@ export function createGithubWebhookAdapter(
         "",
         "Please implement the requested change in a feature branch and open a pull request.",
         "Post a brief status update as new issue comment with a PR link when done, or just post a new issue comment with the response if PR is not needed.",
+        "Respond only with professional status of issue resolution since your response will be posted to public issue comment. Take care no personal data, no salutation, no names, no secrets are part of this response.",
       ].filter(Boolean).join("\n");
 
     deps.onMessage(createAdapterMessage("github", sourceId, jobText, {
