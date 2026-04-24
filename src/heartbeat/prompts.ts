@@ -16,7 +16,7 @@ import {
  * so the agent always sees the current time.
  */
 export const HEARTBEAT_PROMPT = (): string =>
-  `Read HEARTBEAT.md if it exists. Follow its instructions strictly. Check what needs attention. The current time is ${new Date().toISOString()}. If nothing needs your attention, respond with HEARTBEAT_OK.`;
+  `Follow heartbeat instructions strictly. Check what needs attention. The current time is ${new Date().toISOString()}. If nothing needs your attention, respond with HEARTBEAT_OK.`;
 
 /**
  * Prompt used when a background command has completed.

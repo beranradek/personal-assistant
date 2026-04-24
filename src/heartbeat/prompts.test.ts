@@ -35,7 +35,7 @@ describe("resolveHeartbeatPrompt", () => {
   it("returns standard prompt when no events", () => {
     const prompt = resolveHeartbeatPrompt([]);
     // Cannot use toBe because HEARTBEAT_PROMPT() generates a fresh timestamp each call
-    expect(prompt).toContain("Read HEARTBEAT.md");
+    expect(prompt).toContain("Follow heartbeat instructions strictly");
     expect(prompt).toContain("HEARTBEAT_OK");
     expect(prompt).not.toContain("background command");
     expect(prompt).not.toContain("scheduled reminder");
@@ -66,7 +66,7 @@ describe("resolveHeartbeatPrompt", () => {
   it("falls back to standard prompt when only system events present", () => {
     const event = makeEvent("system", "something happened");
     const prompt = resolveHeartbeatPrompt([event]);
-    expect(prompt).toContain("Read HEARTBEAT.md");
+    expect(prompt).toContain("Follow heartbeat instructions strictly");
     expect(prompt).toContain("HEARTBEAT_OK");
     expect(prompt).not.toContain("background command");
     expect(prompt).not.toContain("scheduled reminder");
@@ -77,9 +77,9 @@ describe("resolveHeartbeatPrompt", () => {
 // HEARTBEAT_PROMPT (standard prompt)
 // ---------------------------------------------------------------------------
 describe("HEARTBEAT_PROMPT", () => {
-  it("includes instruction to read HEARTBEAT.md", () => {
+  it("includes instruction to follow heartbeat instructions", () => {
     const prompt = HEARTBEAT_PROMPT();
-    expect(prompt).toContain("HEARTBEAT.md");
+    expect(prompt).toContain("Follow heartbeat instructions strictly");
   });
 
   it("includes the current time", () => {
@@ -101,8 +101,8 @@ describe("HEARTBEAT_PROMPT", () => {
     // Tiny delay to ensure different timestamps (or at least test the function is called fresh)
     const prompt2 = HEARTBEAT_PROMPT();
     // Both should be valid prompts (they may have the same timestamp if called within same ms)
-    expect(prompt1).toContain("HEARTBEAT.md");
-    expect(prompt2).toContain("HEARTBEAT.md");
+    expect(prompt1).toContain("Follow heartbeat instructions strictly");
+    expect(prompt2).toContain("Follow heartbeat instructions strictly");
     // They are both strings returned from a function call, not a static constant
     expect(typeof prompt1).toBe("string");
     expect(typeof prompt2).toBe("string");
