@@ -93,3 +93,20 @@ Then click “Add webhook” and use “Recent Deliveries” to verify that you 
 
 If a mention has no recognized command (or an unknown one), the webhook still triggers, but no command hint is attached.
 
+## 6. Repository checkout (recommended)
+
+The assistant will typically work inside its workspace (default: `~/.personal-assistant/workspace/`).
+For GitHub issue work, keep your target repositories checked out under:
+
+- `~/.personal-assistant/workspace/dev/<repo-name>/`
+
+If the repository is not present yet, the assistant can clone it (via `gh`):
+
+```bash
+cd ~/.personal-assistant/workspace/dev
+gh repo clone OWNER/REPO
+```
+
+Notes:
+- For **private** repositories, ensure `gh` is authenticated with access (recommended for headless/systemd: set `GH_TOKEN=...`).
+- Make sure the repo’s toolchain is installed (Node/pnpm, Python, etc.) so the assistant can run tests/builds.

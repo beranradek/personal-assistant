@@ -263,6 +263,14 @@ export function createGithubWebhookAdapter(
       return;
     }
 
+    // Ping is a one-time health check when the webhook is created; respond early
+    // before issue-specific field validation.
+    if (event === "ping") {
+      res.writeHead(202, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, ignored: "ping" }));
+      return;
+    }
+
     // Basic validation (keep permissive, GitHub payloads are large)
     const repo = payload?.repository?.full_name;
     const issueNumber = payload?.issue?.number;
@@ -378,14 +386,27 @@ export function createGithubWebhookAdapter(
         ? trigger.command
         : null;
 
+    const issueUrl = `https://github.com/${repo}/issues/${issueNumber}`;
+    const repoName = String(repo).split("/")[1] ?? String(repo).replaceAll("/", "-");
+    const suggestedCheckoutDir = `~/.personal-assistant/workspace/dev/${repoName}`;
+
     const jobText =
       [
         "GitHub webhook task:",
         `- Repo: ${repo}`,
         `- Issue: #${issueNumber}`,
+        `- Issue URL: ${issueUrl}`,
         `- Trigger: ${trigger.type}`,
         cmd ? `- Command: ${cmd}` : null,
         sender ? `- Sender: ${sender}` : null,
+        "",
+        "Workspace convention (recommended):",
+        `- Repo checkout: ${suggestedCheckoutDir}`,
+        "",
+        "Suggested commands (if needed):",
+        `- View issue: gh issue view ${issueNumber} --repo ${repo}`,
+        `- Clone: (cd ~/.personal-assistant/workspace/dev && gh repo clone ${repo})`,
+        `- Workdir: cd ${suggestedCheckoutDir}`,
         "",
         "Please implement the requested change in a feature branch and open a pull request.",
         "Post a brief status update and a PR link back to this issue when done.",

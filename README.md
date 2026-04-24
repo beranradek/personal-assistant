@@ -188,6 +188,7 @@ Set the secret in `~/.personal-assistant/.env`:
 PA_GITHUB_WEBHOOK_SECRET=...
 ```
 See `docs/settings/github_webhook_configuration.md` for full setup (reverse proxy, webhook events, and `gh` authentication).
+Recommended: keep target repos checked out under `~/.personal-assistant/workspace/dev/` so the agent can work on issues quickly.
 
 **heartbeat** - Periodic check schedule:
 ```json
