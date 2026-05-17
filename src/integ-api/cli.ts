@@ -356,12 +356,12 @@ async function runCalendarEvent(config: Config, eventId: string): Promise<void> 
 }
 
 function parseSendUpdates(args: string[]): "none" | "all" | "externalOnly" {
+  if (args.includes("--notify")) return "all";
   for (let i = 0; i < args.length; i++) {
-    if ((args[i] === "--sendUpdates" || args[i] === "--notify") && args[i + 1]) {
+    if (args[i] === "--sendUpdates" && args[i + 1]) {
       const v = args[++i]!;
       if (v === "none" || v === "all" || v === "externalOnly") return v;
     }
-    if (args[i] === "--notify") return "all";
   }
   return "none";
 }
