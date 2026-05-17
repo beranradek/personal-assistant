@@ -388,9 +388,14 @@ describe("POST /calendar/event/:id/rsvp", () => {
 
       if (method === "PATCH" && urlStr.includes("/calendars/primary/events/event-1")) {
         const rawBody = init?.body ? String(init.body) : "";
-        const parsed = rawBody ? (JSON.parse(rawBody) as { attendees?: Array<{ email: string; responseStatus?: string }> }) : {};
-        const me = (parsed.attendees ?? []).find((a) => a.email === "me@example.com");
-        expect(me?.responseStatus).toBe("accepted");
+        const parsed = rawBody
+          ? (JSON.parse(rawBody) as {
+              attendeesOmitted?: boolean;
+              attendees?: Array<{ email: string; responseStatus?: string }>;
+            })
+          : {};
+        expect(parsed.attendeesOmitted).toBe(true);
+        expect(parsed.attendees).toEqual([{ email: "me@example.com", responseStatus: "accepted" }]);
 
         return new Response(JSON.stringify({
           id: "event-1",
@@ -449,7 +454,10 @@ describe("POST /calendar/event/:id/rsvp", () => {
       }
 
       if (method === "PATCH" && urlStr.includes("/calendars/primary/events/event-1")) {
-        return new Response("forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
+        return new Response("Request had insufficient authentication scopes.", {
+          status: 403,
+          headers: { "Content-Type": "text/plain" },
+        });
       }
 
       return new Response("unexpected request", { status: 500 });

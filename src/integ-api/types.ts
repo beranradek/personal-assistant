@@ -16,6 +16,7 @@ export type IntegApiErrorCode =
   | "rate_limited"
   | "auth_failed"
   | "insufficient_scope"
+  | "forbidden"
   | "service_unavailable"
   | "invalid_request"
   | "not_found";

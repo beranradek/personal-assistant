@@ -361,6 +361,8 @@ function parseSendUpdates(args: string[]): "none" | "all" | "externalOnly" {
     if (args[i] === "--sendUpdates" && args[i + 1]) {
       const v = args[++i]!;
       if (v === "none" || v === "all" || v === "externalOnly") return v;
+      console.error(`Invalid --sendUpdates value: ${v}. Expected: none|all|externalOnly`);
+      process.exit(1);
     }
   }
   return "none";

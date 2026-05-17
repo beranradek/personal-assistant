@@ -352,7 +352,6 @@ function parseRsvpBody(body: unknown): { responseStatus: string; sendUpdates: st
 function findSelfEmail(raw: GoogleEvent): string | null {
   const attendeeSelf = raw.attendees?.find((a) => a.self);
   if (attendeeSelf?.email) return attendeeSelf.email;
-  if (raw.organizer?.self && raw.organizer.email) return raw.organizer.email;
   return null;
 }
 
@@ -550,9 +549,9 @@ export function registerCalendarRoutes(
       const selfEmail = findSelfEmail(current);
       if (!selfEmail) {
         res.error({
-          error: "service_unavailable",
+          error: "invalid_request",
           message:
-            "Unable to RSVP: could not determine which attendee belongs to the authenticated user (missing attendee.self).",
+            "Unable to RSVP: could not determine which attendee belongs to the authenticated user (missing attendees[].self).",
           service: "calendar",
         });
         return;
@@ -567,15 +566,13 @@ export function registerCalendarRoutes(
         return;
       }
 
-      const updatedAttendees = current.attendees.map((a) => {
-        if (a.self || a.email === selfEmail) return { ...a, responseStatus: parsed.responseStatus };
-        return a;
-      });
-
       // 2) Patch the event with updated attendees
       const patchParams = new URLSearchParams({ sendUpdates: parsed.sendUpdates });
       const patchUrl = `${CALENDAR_API_BASE}/calendars/primary/events/${encodeURIComponent(eventId)}?${patchParams.toString()}`;
-      const updated = await calendarPatch<GoogleEvent>(patchUrl, token, { attendees: updatedAttendees });
+      const updated = await calendarPatch<GoogleEvent>(patchUrl, token, {
+        attendeesOmitted: true,
+        attendees: [{ email: selfEmail, responseStatus: parsed.responseStatus }],
+      });
 
       res.json({
         ok: true,
@@ -586,6 +583,20 @@ export function registerCalendarRoutes(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "403") {
+        const msg = (err as Error).message ?? "";
+        const looksLikeScope =
+          msg.includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT") ||
+          msg.toLowerCase().includes("insufficient authentication scopes") ||
+          msg.toLowerCase().includes("insufficientpermissions");
+        if (!looksLikeScope) {
+          res.error({
+            error: "forbidden",
+            message:
+              "Google Calendar refused the RSVP update (HTTP 403). This can be caused by missing write scope, calendar ACLs, or event restrictions.",
+            service: "calendar",
+          });
+          return;
+        }
         res.error({
           error: "insufficient_scope",
           message:

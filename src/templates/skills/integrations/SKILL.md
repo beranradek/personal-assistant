@@ -48,6 +48,7 @@ pa integapi calendar event <eventId>
 # Default is sendUpdates=none (no email notifications). Add --notify to email attendees.
 pa integapi calendar accept <eventId>
 pa integapi calendar decline <eventId>
+pa integapi calendar tentative <eventId>
 pa integapi calendar accept <eventId> --notify
 ```
 

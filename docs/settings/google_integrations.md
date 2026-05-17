@@ -125,6 +125,7 @@ Restart pa daemon.
 pa daemon
 pa integapi health
 pa integapi calendar today
+pa integapi calendar accept <eventId>
 pa integapi gmail unreads
 pa integapi gmail list --query "is:unread" --max 5 --labels INBOX
 ```
