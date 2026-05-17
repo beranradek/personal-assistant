@@ -15,7 +15,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 export type IntegApiErrorCode =
   | "rate_limited"
   | "auth_failed"
+  | "insufficient_scope"
   | "service_unavailable"
+  | "invalid_request"
   | "not_found";
 
 /** Structured error response — never raw upstream API errors. */

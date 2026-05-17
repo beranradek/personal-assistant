@@ -45,6 +45,20 @@ Optional: override scopes per service:
 }
 ```
 
+To allow the assistant to RSVP to meeting invitations (accept/decline), use a write scope:
+
+```json
+{
+  "integApi": {
+    "services": {
+      "calendar": { "enabled": true, "scopes": ["https://www.googleapis.com/auth/calendar.events"] }
+    }
+  }
+}
+```
+
+After changing scopes, re-run `pa integapi auth google` to grant the new permissions.
+
 ## 2. Create OAuth2 credentials in Google Cloud Console
 
 1. Create / select a Google Cloud project, fill in Google OAuth consent screen details, and publish it.

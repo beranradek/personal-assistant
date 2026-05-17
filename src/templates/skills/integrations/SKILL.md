@@ -40,6 +40,15 @@ pa integapi calendar range --timeMin "..." --timeMax "..." --format compact-json
 
 # Full details of a single event
 pa integapi calendar event <eventId>
+
+# RSVP (accept/decline) for a single event
+# NOTE: Requires Calendar write scope:
+#   add https://www.googleapis.com/auth/calendar.events to integApi.services.calendar.scopes
+#   then re-run: pa integapi auth google
+# Default is sendUpdates=none (no email notifications). Add --notify to email attendees.
+pa integapi calendar accept <eventId>
+pa integapi calendar decline <eventId>
+pa integapi calendar accept <eventId> --notify
 ```
 
 ### Gmail

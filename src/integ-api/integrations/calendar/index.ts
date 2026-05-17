@@ -11,7 +11,9 @@
  * https://developers.google.com/calendar/api/v3/reference
  *
  * Auth: OAuth2 via AuthManager with service ID "calendar".
- * Required scope: https://www.googleapis.com/auth/calendar.readonly
+ * Required scope:
+ * - Read-only: https://www.googleapis.com/auth/calendar.readonly
+ * - RSVP (accept/decline): https://www.googleapis.com/auth/calendar.events
  */
 
 import type { AuthManager } from "../../auth/manager.js";
@@ -32,7 +34,7 @@ const CALENDAR_MANIFEST: IntegrationManifest = {
   id: "calendar",
   name: "Google Calendar",
   status: "active",
-  capabilities: ["today", "week", "range", "event", "free-busy"],
+  capabilities: ["today", "week", "range", "event", "free-busy", "rsvp"],
   endpoints: [
     {
       method: "GET",
@@ -58,6 +60,11 @@ const CALENDAR_MANIFEST: IntegrationManifest = {
       method: "GET",
       path: "/calendar/free-busy",
       params: ["timeMin", "timeMax"],
+    },
+    {
+      method: "POST",
+      path: "/calendar/event/:id/rsvp",
+      params: ["id", "responseStatus", "sendUpdates"],
     },
   ],
   rateLimits: CALENDAR_RATE_LIMITS,

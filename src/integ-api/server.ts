@@ -138,7 +138,9 @@ function makeJsonResponse(raw: http.ServerResponse): JsonResponse {
       const statusMap: Record<string, number> = {
         rate_limited: 429,
         auth_failed: 401,
+        insufficient_scope: 403,
         service_unavailable: 503,
+        invalid_request: 400,
         not_found: 404,
       };
       const status = statusMap[err.error] ?? 500;

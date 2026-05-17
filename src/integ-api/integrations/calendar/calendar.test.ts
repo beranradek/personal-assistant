@@ -34,6 +34,7 @@ async function request(
   port: number,
   method: string,
   path: string,
+  body?: unknown,
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const options: http.RequestOptions = {
@@ -41,6 +42,7 @@ async function request(
       port,
       path,
       method,
+      headers: body == null ? undefined : { "Content-Type": "application/json" },
     };
     const req = http.request(options, (res) => {
       const chunks: Buffer[] = [];
@@ -57,6 +59,7 @@ async function request(
       });
     });
     req.on("error", reject);
+    if (body != null) req.write(JSON.stringify(body));
     req.end();
   });
 }
@@ -148,7 +151,7 @@ describe("calendar module registration and discovery", () => {
       const cal = resp.integrations.find((i) => i.id === "calendar");
       expect(cal).toBeDefined();
       expect(cal?.capabilities).toEqual(
-        expect.arrayContaining(["today", "week", "event", "free-busy"]),
+        expect.arrayContaining(["today", "week", "event", "free-busy", "rsvp"]),
       );
     } finally {
       await srv.stop();
@@ -177,6 +180,7 @@ describe("calendar module registration and discovery", () => {
       expect(paths).toContain("/calendar/week");
       expect(paths).toContain("/calendar/event/:id");
       expect(paths).toContain("/calendar/free-busy");
+      expect(paths).toContain("/calendar/event/:id/rsvp");
       expect(cal.rateLimits.requestsPerMinute).toBe(60);
     } finally {
       await srv.stop();
@@ -342,6 +346,127 @@ describe("GET /calendar/week", () => {
       const { status } = await request(port, "GET", "/calendar/week");
       expect(status).toBe(401);
     } finally {
+      await srv.stop();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /calendar/event/:id/rsvp route tests
+// ---------------------------------------------------------------------------
+
+describe("POST /calendar/event/:id/rsvp", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("updates self attendee responseStatus via PATCH", async () => {
+    const port = nextPort();
+    const srv = createIntegApiServer({ bind: "127.0.0.1", port });
+    const authMgr = makeAuthManager({ token: "test-token" });
+    createCalendarModule(authMgr).routes(srv.router);
+
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (!urlStr.includes("googleapis.com/calendar/v3")) return originalFetch(url, init);
+
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "GET" && urlStr.includes("/calendars/primary/events/event-1")) {
+        return new Response(JSON.stringify({
+          id: "event-1",
+          summary: "Team Standup",
+          start: { dateTime: "2026-04-03T09:00:00Z" },
+          end: { dateTime: "2026-04-03T09:30:00Z" },
+          status: "confirmed",
+          attendees: [
+            { email: "me@example.com", self: true, responseStatus: "needsAction" },
+            { email: "alice@example.com", responseStatus: "accepted" },
+          ],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      if (method === "PATCH" && urlStr.includes("/calendars/primary/events/event-1")) {
+        const rawBody = init?.body ? String(init.body) : "";
+        const parsed = rawBody ? (JSON.parse(rawBody) as { attendees?: Array<{ email: string; responseStatus?: string }> }) : {};
+        const me = (parsed.attendees ?? []).find((a) => a.email === "me@example.com");
+        expect(me?.responseStatus).toBe("accepted");
+
+        return new Response(JSON.stringify({
+          id: "event-1",
+          summary: "Team Standup",
+          start: { dateTime: "2026-04-03T09:00:00Z" },
+          end: { dateTime: "2026-04-03T09:30:00Z" },
+          status: "confirmed",
+          attendees: [
+            { email: "me@example.com", self: true, responseStatus: "accepted" },
+            { email: "alice@example.com", responseStatus: "accepted" },
+          ],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    await srv.start();
+    try {
+      const { status, body } = await request(port, "POST", "/calendar/event/event-1/rsvp", {
+        responseStatus: "accepted",
+        sendUpdates: "none",
+      });
+      expect(status).toBe(200);
+      const resp = body as { ok: boolean; responseStatus: string; event: { id: string } };
+      expect(resp.ok).toBe(true);
+      expect(resp.responseStatus).toBe("accepted");
+      expect(resp.event.id).toBe("event-1");
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+      await srv.stop();
+    }
+  });
+
+  it("returns insufficient_scope on upstream 403", async () => {
+    const port = nextPort();
+    const srv = createIntegApiServer({ bind: "127.0.0.1", port });
+    const authMgr = makeAuthManager({ token: "test-token" });
+    createCalendarModule(authMgr).routes(srv.router);
+
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (!urlStr.includes("googleapis.com/calendar/v3")) return originalFetch(url, init);
+
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (method === "GET" && urlStr.includes("/calendars/primary/events/event-1")) {
+        return new Response(JSON.stringify({
+          id: "event-1",
+          summary: "Team Standup",
+          start: { dateTime: "2026-04-03T09:00:00Z" },
+          end: { dateTime: "2026-04-03T09:30:00Z" },
+          status: "confirmed",
+          attendees: [{ email: "me@example.com", self: true, responseStatus: "needsAction" }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+
+      if (method === "PATCH" && urlStr.includes("/calendars/primary/events/event-1")) {
+        return new Response("forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
+      }
+
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    await srv.start();
+    try {
+      const { status, body } = await request(port, "POST", "/calendar/event/event-1/rsvp", {
+        responseStatus: "declined",
+        sendUpdates: "none",
+      });
+      expect(status).toBe(403);
+      const err = body as { error: string; service: string };
+      expect(err.error).toBe("insufficient_scope");
+      expect(err.service).toBe("calendar");
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
       await srv.stop();
     }
   });

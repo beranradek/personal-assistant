@@ -17,6 +17,8 @@
  *   pa integapi calendar today        — today's events
  *   pa integapi calendar week         — week's events
  *   pa integapi calendar event <id>   — event details
+ *   pa integapi calendar accept <id>  — RSVP accept for an event
+ *   pa integapi calendar decline <id> — RSVP decline for an event
  *   pa integapi slack unreads         — unread message summary across workspaces
  *   pa integapi slack messages <chId> — read unread messages in a channel
  *   pa integapi auth google           — run OAuth2 setup flow
@@ -48,6 +50,30 @@ async function integGet(
   const url = `http://${bind}:${port}${path}`;
   const response = await fetch(url, {
     headers: { Accept: "application/json" },
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    const err = body as { error?: string; message?: string };
+    throw new Error(err.message ?? `HTTP ${response.status}`);
+  }
+  return body;
+}
+
+/**
+ * Make an HTTP POST request to the integ-api server and return parsed JSON.
+ * Uses Node 22 built-in fetch.
+ */
+async function integPost(
+  port: number,
+  path: string,
+  payload: unknown,
+  bind = "127.0.0.1",
+): Promise<unknown> {
+  const url = `http://${bind}:${port}${path}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
   const body = await response.json();
   if (!response.ok) {
@@ -329,6 +355,33 @@ async function runCalendarEvent(config: Config, eventId: string): Promise<void> 
   console.log(JSON.stringify(data, null, 2));
 }
 
+function parseSendUpdates(args: string[]): "none" | "all" | "externalOnly" {
+  for (let i = 0; i < args.length; i++) {
+    if ((args[i] === "--sendUpdates" || args[i] === "--notify") && args[i + 1]) {
+      const v = args[++i]!;
+      if (v === "none" || v === "all" || v === "externalOnly") return v;
+    }
+    if (args[i] === "--notify") return "all";
+  }
+  return "none";
+}
+
+async function runCalendarRsvp(
+  config: Config,
+  eventId: string,
+  responseStatus: "accepted" | "declined" | "tentative",
+  args: string[],
+): Promise<void> {
+  const sendUpdates = parseSendUpdates(args);
+  const data = await integPost(
+    config.integApi.port,
+    `/calendar/event/${encodeURIComponent(eventId)}/rsvp`,
+    { responseStatus, sendUpdates },
+    config.integApi.bind,
+  );
+  console.log(JSON.stringify(data, null, 2));
+}
+
 // ---------------------------------------------------------------------------
 // Slack commands
 // ---------------------------------------------------------------------------
@@ -557,8 +610,16 @@ export async function runIntegApiCli(config: Config, args: string[]): Promise<vo
         await runCalendarRange(config, args.slice(2));
       } else if (calCmd === "event" && args[2]) {
         await runCalendarEvent(config, args[2]);
+      } else if (calCmd === "accept" && args[2]) {
+        await runCalendarRsvp(config, args[2], "accepted", args.slice(3));
+      } else if (calCmd === "decline" && args[2]) {
+        await runCalendarRsvp(config, args[2], "declined", args.slice(3));
+      } else if (calCmd === "tentative" && args[2]) {
+        await runCalendarRsvp(config, args[2], "tentative", args.slice(3));
       } else {
-        console.error(`Unknown calendar command: ${calCmd}. Try: today, week, range, event <id>`);
+        console.error(
+          `Unknown calendar command: ${calCmd}. Try: today, week, range, event <id>, accept <id>, decline <id>, tentative <id>`,
+        );
         process.exit(1);
       }
       break;
@@ -604,6 +665,10 @@ Commands:
   calendar range --timeMin A --timeMax B [--max N] [--format F]
                                Events in explicit RFC3339 time range (F: json|compact|compact-json)
   calendar event <id>           Event details
+  calendar accept <id> [--notify|--sendUpdates none|all|externalOnly]
+                               RSVP accept for an event (default sendUpdates: none)
+  calendar decline <id> [--notify|--sendUpdates none|all|externalOnly]
+                               RSVP decline for an event (default sendUpdates: none)
   slack unreads [--workspace W] Unread messages summary across Slack workspaces
   slack messages <channelId> [--workspace W] [--limit N]
                                Read unread messages in a channel (text only)

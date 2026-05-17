@@ -79,6 +79,7 @@ interface GoogleAttendee {
   email: string;
   displayName?: string;
   responseStatus?: string;
+  self?: boolean;
 }
 
 interface GoogleConferenceEntryPoint {
@@ -96,7 +97,7 @@ interface GoogleEvent {
   status?: string;
   htmlLink?: string;
   attendees?: GoogleAttendee[];
-  organizer?: { email: string; displayName?: string };
+  organizer?: { email: string; displayName?: string; self?: boolean };
   conferenceData?: { entryPoints?: GoogleConferenceEntryPoint[] };
 }
 
@@ -239,6 +240,31 @@ async function calendarPost<T>(url: string, token: string, body: unknown): Promi
 }
 
 /**
+ * Perform a PATCH request to the Google Calendar API with Bearer auth.
+ *
+ * https://developers.google.com/calendar/api/v3/reference/events/patch
+ */
+async function calendarPatch<T>(url: string, token: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "(unreadable)");
+    const err = new Error(`Calendar API error: HTTP ${response.status} — ${errorText}`);
+    (err as NodeJS.ErrnoException).code = String(response.status);
+    throw err;
+  }
+
+  return (await response.json()) as T;
+}
+
+/**
  * Fetch events list from Google Calendar API.
  * https://developers.google.com/calendar/api/v3/reference/events/list
  *
@@ -308,6 +334,26 @@ function handleRouteError(
     message: "Google Calendar request failed. See integ-api logs for details.",
     service: "calendar",
   });
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function parseRsvpBody(body: unknown): { responseStatus: string; sendUpdates: string } | null {
+  if (!isObject(body)) return null;
+  const responseStatus = String(body["responseStatus"] ?? "");
+  const sendUpdates = String(body["sendUpdates"] ?? "none");
+  if (!["accepted", "declined", "tentative"].includes(responseStatus)) return null;
+  if (!["none", "all", "externalOnly"].includes(sendUpdates)) return null;
+  return { responseStatus, sendUpdates };
+}
+
+function findSelfEmail(raw: GoogleEvent): string | null {
+  const attendeeSelf = raw.attendees?.find((a) => a.self);
+  if (attendeeSelf?.email) return attendeeSelf.email;
+  if (raw.organizer?.self && raw.organizer.email) return raw.organizer.email;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +503,98 @@ export function registerCalendarRoutes(
       res.json(result);
     } catch (err) {
       handleRouteError(err, res, "GET /calendar/free-busy");
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /calendar/event/:id/rsvp
+  // RSVP "accepted" / "declined" / "tentative" for the authenticated user.
+  //
+  // Implementation strategy:
+  // - Fetch event detail first to discover which attendee entry belongs to "self"
+  // - Patch event attendees, updating only the self attendee's responseStatus
+  //
+  // Google Calendar Events get:
+  // https://developers.google.com/calendar/api/v3/reference/events/get
+  // Google Calendar Events patch:
+  // https://developers.google.com/calendar/api/v3/reference/events/patch
+  //
+  // NOTE: This requires a write scope, e.g.:
+  //   https://www.googleapis.com/auth/calendar.events
+  // -------------------------------------------------------------------------
+  router.post("/calendar/event/:id/rsvp", async (req: ParsedRequest, res: JsonResponse) => {
+    const eventId = req.params.id;
+    if (!eventId) {
+      res.error({ error: "invalid_request", message: "Event ID is required.", service: "calendar" });
+      return;
+    }
+
+    const parsed = parseRsvpBody(req.body);
+    if (!parsed) {
+      res.error({
+        error: "invalid_request",
+        message:
+          "Body must be JSON: { responseStatus: 'accepted'|'declined'|'tentative', sendUpdates?: 'none'|'all'|'externalOnly' }",
+        service: "calendar",
+      });
+      return;
+    }
+
+    try {
+      const { token } = await authMgr.getAccessToken("calendar");
+
+      // 1) Fetch current event to find the attendee entry that belongs to the authenticated user
+      const getUrl = `${CALENDAR_API_BASE}/calendars/primary/events/${encodeURIComponent(eventId)}`;
+      const current = await calendarGet<GoogleEvent>(getUrl, token);
+
+      const selfEmail = findSelfEmail(current);
+      if (!selfEmail) {
+        res.error({
+          error: "service_unavailable",
+          message:
+            "Unable to RSVP: could not determine which attendee belongs to the authenticated user (missing attendee.self).",
+          service: "calendar",
+        });
+        return;
+      }
+
+      if (!current.attendees || current.attendees.length === 0) {
+        res.error({
+          error: "service_unavailable",
+          message: "Unable to RSVP: this event has no attendees list.",
+          service: "calendar",
+        });
+        return;
+      }
+
+      const updatedAttendees = current.attendees.map((a) => {
+        if (a.self || a.email === selfEmail) return { ...a, responseStatus: parsed.responseStatus };
+        return a;
+      });
+
+      // 2) Patch the event with updated attendees
+      const patchParams = new URLSearchParams({ sendUpdates: parsed.sendUpdates });
+      const patchUrl = `${CALENDAR_API_BASE}/calendars/primary/events/${encodeURIComponent(eventId)}?${patchParams.toString()}`;
+      const updated = await calendarPatch<GoogleEvent>(patchUrl, token, { attendees: updatedAttendees });
+
+      res.json({
+        ok: true,
+        responseStatus: parsed.responseStatus,
+        sendUpdates: parsed.sendUpdates,
+        event: mapEvent(updated),
+      });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "403") {
+        res.error({
+          error: "insufficient_scope",
+          message:
+            "Google Calendar refused the RSVP update (HTTP 403). You likely authenticated with a read-only scope. Add scope 'https://www.googleapis.com/auth/calendar.events' to integApi.services.calendar.scopes and re-run 'pa integapi auth google'.",
+          service: "calendar",
+        });
+        return;
+      }
+      handleRouteError(err, res, "POST /calendar/event/:id/rsvp");
     }
   });
 }
