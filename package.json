@@ -11,7 +11,8 @@
     "daemon": "tsx src/daemon.ts",
     "build": "tsc && rm -rf dist/templates && cp -r src/templates dist/templates",
     "test": "vitest",
-    "test:coverage": "vitest --coverage"
+    "test:coverage": "vitest --coverage",
+    "postinstall": "node scripts/prune-gpu-prebuilds.mjs"
   },
   "engines": {
     "node": ">=22.0.0"
