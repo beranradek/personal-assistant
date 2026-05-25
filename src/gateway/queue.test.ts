@@ -238,7 +238,7 @@ describe("MessageQueue", () => {
       expect(processed).toBe(true);
       expect(backend.runTurnSync).toHaveBeenCalledWith(
         "Hello",
-        "telegram--123456",
+        "user--default",
       );
     });
 
@@ -359,7 +359,7 @@ describe("MessageQueue", () => {
 
       expect(backend.runTurnSync).toHaveBeenCalledWith(
         "late arrival",
-        "telegram--123456",
+        "user--default",
       );
     });
   });
@@ -1082,7 +1082,7 @@ describe("MessageQueue", () => {
 
       expect(telegram.sendResponse).not.toHaveBeenCalled();
       expect(mockLog.debug).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: expect.any(String) }),
+        expect.objectContaining({ sessionKey: "user--default" }),
         expect.stringContaining("heartbeat OK"),
       );
     });

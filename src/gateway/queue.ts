@@ -13,7 +13,7 @@
 import type { AdapterMessage, Config } from "../core/types.js";
 import type { AgentBackend, StreamEvent, AgentTurnResult } from "../backends/interface.js";
 import type { Router } from "./router.js";
-import { resolveSessionKey } from "../session/manager.js";
+import { getUnifiedSessionKey } from "../session/unified.js";
 import { createLogger } from "../core/logger.js";
 import { isHeartbeatOk } from "../heartbeat/prompts.js";
 import { createProcessingAccumulator } from "./processing-message.js";
@@ -137,7 +137,7 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
         lastSourceByAdapter.set(message.source, message.sourceId);
       }
 
-      const sessionKey = resolveSessionKey(message.source, message.sourceId);
+      const sessionKey = getUnifiedSessionKey(config);
       log.info(
         { source: message.source, sessionKey },
         "processing message",

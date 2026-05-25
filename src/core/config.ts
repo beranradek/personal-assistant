@@ -82,6 +82,7 @@ export const DEFAULTS: Config = {
   agent: { backend: "claude" as const, model: null, maxTurns: 200 },
   session: {
     maxHistoryMessages: 20,
+    unifiedSessionKey: "user--default",
     compactionEnabled: true,
     summarizationEnabled: true,
     summarizationModel: "claude-haiku-4-5-20251001",

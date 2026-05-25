@@ -54,6 +54,7 @@ import { runWeeklyReflection } from "./memory/weekly-reflection.js";
 import { createLogger } from "./core/logger.js";
 import { createRedactor, CONSERVATIVE_PATTERNS } from "./security/content-redaction.js";
 import type { Adapter, AdapterMessage } from "./core/types.js";
+import { migrateLegacySessionsToUnified } from "./session/unified.js";
 
 const log = createLogger("daemon");
 
@@ -71,6 +72,7 @@ export async function startDaemon(configDir: string): Promise<void> {
   // 1. Load config & ensure workspace
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
+  await migrateLegacySessionsToUnified(config);
 
   // Shared shutdown flag (used by child process restart logic and shutdown handler)
   let shuttingDown = false;

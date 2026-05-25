@@ -139,6 +139,11 @@ export const CodexConfigSchema = z.object({
 
 export const SessionConfigSchema = z.object({
   maxHistoryMessages: z.number().int().positive(),
+  /**
+   * Unified session key used across all adapters (Telegram/Slack/heartbeat/terminal).
+   * This ensures a single continuous conversation history even when the channel changes.
+   */
+  unifiedSessionKey: z.string().min(1).default("user--default"),
   compactionEnabled: z.boolean(),
   summarizationEnabled: z.boolean().default(true),
   summarizationModel: z.string().default("claude-haiku-4-5-20251001"),

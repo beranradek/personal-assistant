@@ -53,6 +53,8 @@ export async function loadConversationHistory(
     .filter((m): m is SessionMessage & { role: "user" | "assistant" } =>
       m.role === "user" || m.role === "assistant",
     )
+    // Keep only the tail, but return in chronological order (oldest -> newest).
+    .slice(-MAX_MESSAGES_FOR_SUMMARY)
     .map((m) => ({ role: m.role, content: m.content }));
 }
 
