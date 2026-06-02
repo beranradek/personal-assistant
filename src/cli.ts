@@ -124,7 +124,13 @@ async function startMcpServer(configDir: string): Promise<void> {
     indexDailyLogs: config.memory.indexDailyLogs,
     dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
   });
-  await indexer.syncFiles(memoryFiles);
+  // Run file sync in the background. When pa runs as a daemon, the daemon's
+  // own indexer already handles periodic reindexing, so we must not block
+  // MCP server startup on a potentially long sync (would exceed codex's
+  // startup_timeout_sec and cause every turn to fail).
+  indexer.syncFiles(memoryFiles).catch(() => {
+    // Ignore errors — search will work with whatever is already indexed.
+  });
 
   const searchMemory = createRobustMemorySearch({
     workspaceDir: config.security.workspace,

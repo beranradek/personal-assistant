@@ -284,7 +284,7 @@ export async function createCodexBackend(
     "personal-assistant": {
       command: "pa",
       args: mcpArgs,
-      startup_timeout_sec: 30,
+      startup_timeout_sec: 120,
       tool_timeout_sec: 120,
     },
     ...claudeConfiguredMcpServers,
