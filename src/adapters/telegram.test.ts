@@ -164,6 +164,45 @@ function makeMockDocumentContext(overrides: {
   };
 }
 
+function makeMockPhotoContext(overrides: {
+  userId?: number;
+  chatId?: number;
+  firstName?: string;
+  username?: string;
+  messageId?: number;
+  caption?: string;
+  photos?: Array<{
+    file_id: string;
+    file_size?: number;
+    width?: number;
+    height?: number;
+  }>;
+} = {}) {
+  const {
+    userId = 111,
+    chatId = 999,
+    firstName = "Test",
+    username = "testuser",
+    messageId = 888,
+    caption = "Please read my notes",
+    photos = [
+      { file_id: "FILE_SMALL", file_size: 500, width: 90, height: 90 },
+      { file_id: "FILE_LARGE", file_size: 2500, width: 1280, height: 960 },
+    ],
+  } = overrides;
+
+  return {
+    message: {
+      message_id: messageId,
+      from: { id: userId, first_name: firstName, username },
+      chat: { id: chatId },
+      caption,
+      photo: photos,
+    },
+    reply: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function getHandler(eventName: string): (ctx: any) => Promise<void> {
   const call = mocks.botOn.mock.calls.find((c) => c[0] === eventName);
   if (!call) {
@@ -213,6 +252,13 @@ describe("Telegram Adapter", () => {
       createTelegramAdapter(makeConfig(), onMessage);
 
       expect(mocks.botOn).toHaveBeenCalledWith("message:text", expect.any(Function));
+    });
+
+    it("registers a message:photo handler on the bot", () => {
+      const onMessage = vi.fn();
+      createTelegramAdapter(makeConfig(), onMessage);
+
+      expect(mocks.botOn).toHaveBeenCalledWith("message:photo", expect.any(Function));
     });
   });
 
@@ -368,12 +414,109 @@ describe("Telegram Adapter", () => {
       }
     });
 
+    it("forwards document captions with the saved file path", async () => {
+      const prevFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => {
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes.buffer,
+          text: async () => "",
+        } as unknown as Response;
+      }) as unknown as typeof fetch;
+
+      try {
+        const onMessage = vi.fn();
+        createTelegramAdapter(makeConfig(), onMessage, { workspaceDir: "/tmp/ws" });
+
+        mocks.botApiGetFile.mockResolvedValueOnce({ file_path: "docs/contract.pdf" });
+        const handler = getHandler("message:document");
+        const ctx = makeMockDocumentContext({ fileName: "contract.pdf" });
+        ctx.message.caption = "Use this PDF as context";
+
+        await handler(ctx);
+
+        expect(onMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: expect.stringContaining("User caption:\nUse this PDF as context"),
+            metadata: expect.objectContaining({
+              attachments: ["documents/telegram-inbox/777-contract.pdf"],
+            }),
+          }),
+        );
+      } finally {
+        globalThis.fetch = prevFetch;
+      }
+    });
+
     it("ignores documents from unauthorized users", async () => {
       const onMessage = vi.fn();
       createTelegramAdapter(makeConfig(), onMessage, { workspaceDir: "/tmp/ws" });
 
       const handler = getHandler("message:document");
       const ctx = makeMockDocumentContext({ userId: 999 });
+
+      await handler(ctx);
+
+      expect(fsMocks.writeFile).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("photo uploads", () => {
+    it("saves inbound Telegram photos to documents/telegram-inbox and forwards caption", async () => {
+      const prevFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => {
+        const bytes = new Uint8Array([9, 8, 7, 6]);
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => bytes.buffer,
+          text: async () => "",
+        } as unknown as Response;
+      }) as unknown as typeof fetch;
+
+      try {
+        const onMessage = vi.fn();
+        createTelegramAdapter(makeConfig(), onMessage, { workspaceDir: "/tmp/ws" });
+
+        mocks.botApiGetFile.mockResolvedValueOnce({ file_path: "photos/note.jpg" });
+        const handler = getHandler("message:photo");
+        const ctx = makeMockPhotoContext();
+
+        await handler(ctx);
+
+        expect(fsMocks.writeFile).toHaveBeenCalledWith(
+          "/tmp/ws/documents/telegram-inbox/telegram-photo-888.jpg",
+          expect.any(Uint8Array),
+          expect.objectContaining({ flag: "wx" }),
+        );
+        expect(mocks.botApiSendMessage).toHaveBeenCalledWith(
+          999,
+          expect.stringContaining("documents/telegram-inbox/telegram-photo-888.jpg"),
+        );
+        expect(onMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            source: "telegram",
+            sourceId: "999",
+            text: expect.stringContaining("User caption:\nPlease read my notes"),
+            metadata: expect.objectContaining({
+              attachments: ["documents/telegram-inbox/telegram-photo-888.jpg"],
+            }),
+          }),
+        );
+      } finally {
+        globalThis.fetch = prevFetch;
+      }
+    });
+
+    it("ignores photos from unauthorized users", async () => {
+      const onMessage = vi.fn();
+      createTelegramAdapter(makeConfig(), onMessage, { workspaceDir: "/tmp/ws" });
+
+      const handler = getHandler("message:photo");
+      const ctx = makeMockPhotoContext({ userId: 999 });
 
       await handler(ctx);
 

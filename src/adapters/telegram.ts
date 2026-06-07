@@ -20,6 +20,7 @@ const log = createLogger("telegram-adapter");
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
 const INPUT_TYPE_METADATA_KEY = "inputType";
 const TELEGRAM_MAX_DOCUMENT_SIZE_MB = 50;
+const TELEGRAM_MAX_PHOTO_SIZE_MB = 50;
 
 // ---------------------------------------------------------------------------
 // Config type (matches TelegramConfigSchema fields we need)
@@ -378,16 +379,22 @@ export function createTelegramAdapter(
       const relPath = path.posix.join("documents", "telegram-inbox", saved.fileName);
       await safeSendText(chatId, `Saved: ${relPath}`);
 
+      const caption = typeof msg.caption === "string" ? msg.caption.trim() : "";
+      const forwardedText = caption
+        ? `Received document and saved it to ${relPath}\n\nUser caption:\n${caption}`
+        : `Received document and saved it to ${relPath}`;
+
       const adapterMessage = createAdapterMessage(
         "telegram",
         String(chatId),
-        `Received document and saved it to ${relPath}`,
+        forwardedText,
         {
           userName: msg.from?.username,
           userId,
           chatId,
           firstName: msg.from?.first_name,
           [INPUT_TYPE_METADATA_KEY]: "document",
+          attachments: [relPath],
           telegram: {
             messageId: msg.message_id,
             fileId,
@@ -395,6 +402,7 @@ export function createTelegramAdapter(
             savedPath: relPath,
             mime: doc?.mime_type,
             size: doc?.file_size,
+            caption,
           },
         },
       );
@@ -410,9 +418,98 @@ export function createTelegramAdapter(
     }
   }
 
+  async function handleInboundPhoto(ctx: { message?: any }): Promise<void> {
+    const msg = ctx.message;
+    if (!msg) return;
+
+    const userId = msg.from?.id;
+    const chatId = msg.chat?.id;
+    if (typeof chatId !== "number") return;
+
+    if (!config.allowedUserIds.includes(userId)) {
+      log.warn({ userId }, "unauthorized user, ignoring photo message");
+      return;
+    }
+
+    if (!telegramInboxDir) {
+      log.warn("workspaceDir not provided — skipping Telegram photo saving");
+      return;
+    }
+
+    const photos = Array.isArray(msg.photo) ? msg.photo : [];
+    const photo = photos.at(-1);
+    const fileId: string | undefined = photo?.file_id;
+    if (!fileId) return;
+
+    const fileSize: number | undefined = photo?.file_size;
+    if (fileSize != null) {
+      const maxBytes = TELEGRAM_MAX_PHOTO_SIZE_MB * 1024 * 1024;
+      if (fileSize > maxBytes) {
+        await safeSendText(chatId, `Photo is too large (max ${TELEGRAM_MAX_PHOTO_SIZE_MB} MB).`);
+        return;
+      }
+    }
+
+    try {
+      const { buffer, filePath } = await downloadTelegramFile(fileId);
+      const extFromPath = typeof filePath === "string" ? path.extname(filePath) : "";
+      const ext = extFromPath || ".jpg";
+      const baseName = `telegram-photo-${msg.message_id ?? Date.now()}${ext}`;
+      const bytes = new Uint8Array(buffer);
+      const saved = await writeUniqueFile({
+        dir: telegramInboxDir,
+        baseName,
+        bytes,
+      });
+
+      const relPath = path.posix.join("documents", "telegram-inbox", saved.fileName);
+      await safeSendText(chatId, `Saved image: ${relPath}`);
+
+      const caption = typeof msg.caption === "string" ? msg.caption.trim() : "";
+      const forwardedText = caption
+        ? `Received image and saved it to ${relPath}\n\nUser caption:\n${caption}`
+        : `Received image and saved it to ${relPath}`;
+
+      const adapterMessage = createAdapterMessage(
+        "telegram",
+        String(chatId),
+        forwardedText,
+        {
+          userName: msg.from?.username,
+          userId,
+          chatId,
+          firstName: msg.from?.first_name,
+          [INPUT_TYPE_METADATA_KEY]: "image",
+          attachments: [relPath],
+          telegram: {
+            messageId: msg.message_id,
+            fileId,
+            fileName: saved.fileName,
+            savedPath: relPath,
+            mime: "image/jpeg",
+            size: photo?.file_size,
+            width: photo?.width,
+            height: photo?.height,
+            caption,
+          },
+        },
+      );
+
+      try {
+        onMessage(adapterMessage);
+      } catch (err) {
+        log.error({ err }, "onMessage callback failed");
+      }
+    } catch (err) {
+      log.error({ err, userId }, "failed to process inbound photo");
+      await safeSendText(chatId, "Sorry, I couldn't save that image. Please try again.");
+    }
+  }
+
   bot.on("message:voice", (ctx) => handleInboundAudio(ctx).catch((err) => log.error({ err }, "voice handler failed")));
   bot.on("message:audio", (ctx) => handleInboundAudio(ctx).catch((err) => log.error({ err }, "audio handler failed")));
   bot.on("message:document", (ctx) => handleInboundDocument(ctx).catch((err) => log.error({ err }, "document handler failed")));
+  bot.on("message:photo", (ctx) => handleInboundPhoto(ctx).catch((err) => log.error({ err }, "photo handler failed")));
 
   // -------------------------------------------------------------------------
   // Adapter interface
