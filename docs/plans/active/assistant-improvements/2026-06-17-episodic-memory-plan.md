@@ -233,6 +233,55 @@ Takeaway:
 - phase 1 should preserve enough raw evidence for later replay
 - phase 2+ can add scoring / critic / reward-like consolidation
 
+## 10. Mem0
+
+Mem0's current docs reinforce that memory layers should be separated by lifetime and scope rather than pushed into one generic store.
+
+Evidence:
+
+- [Mem0 memory types](https://docs.mem0.ai/core-concepts/memory-types) explicitly separates conversation, session, user, and organizational layers and recommends using `run_id` for short-lived task-scoped context
+
+What to borrow:
+
+- model **session/task memory** explicitly in addition to long-lived memory
+- keep retrieval layer-aware instead of treating every memory object equally
+
+Mapping to `personal-assistant`:
+
+- conversation = current model/tool context
+- session = current task/job run state
+- episodic = completed task experiences
+- semantic = distilled long-lived notes in markdown
+
+## 11. Hindsight
+
+Hindsight adds useful pressure in one direction: memory should help the agent learn from outcomes, not just remember similar text.
+
+Evidence:
+
+- [Hindsight GitHub README](https://github.com/vectorize-io/hindsight) frames the system as "learn, not just remember"
+- [Hindsight paper abstract](https://arxiv.org/abs/2512.12818) describes four logical networks for facts, experiences, summaries, and evolving beliefs with retain/recall/reflect operations
+
+What to borrow:
+
+- keep **experiences** separate from **facts**
+- make reflection a first-class operation in the architecture
+- derive summaries/beliefs from episodes, not from raw logs alone
+
+## 12. MemMachine
+
+MemMachine contributes the strongest recent evidence for a ground-truth-preserving design.
+
+Evidence:
+
+- [MemMachine](https://arxiv.org/abs/2604.04853) stores full conversational episodes and reports larger gains from retrieval-stage optimizations than from ingestion-stage chunking tweaks
+
+What to borrow:
+
+- preserve raw evidence and link episode records back to it
+- avoid aggressive lossy summarization at ingestion time
+- invest early in retrieval routing, formatting, and provenance
+
 ## Proposed design for `personal-assistant`
 
 ### Design principles
@@ -243,6 +292,8 @@ Takeaway:
 4. Introduce a first-class episodic store rather than overloading `MEMORY.md`.
 5. Support both exact retrieval and semantic retrieval.
 6. Consolidate gradually; do not require full autonomy on day 1.
+7. Separate current task/session state from completed episodic memory.
+8. Prefer ground-truth preservation and better retrieval over heavier early summarization.
 
 ### Memory stack after the change
 
@@ -250,17 +301,28 @@ Takeaway:
    - existing `daily/*.jsonl`
    - append-only evidence
 
-2. **Episodic store** (new)
+2. **Session/task state** (new, thin layer)
+   - active job/task scoped state
+   - recent tool outcomes, open blockers, unresolved decisions
+   - expires or closes when the task boundary is reached
+
+3. **Episodic store** (new)
    - one row/document per meaningful task episode
    - structured metadata + summary + step trace + outcome
 
-3. **Semantic memory**
+4. **Semantic memory**
    - existing indexed markdown memory files
    - receives distilled decisions, lessons, stable facts
 
-4. **Procedural memory**
+5. **Procedural memory**
    - existing `skills/`
    - receives promoted repeatable workflows
+
+Why add a separate session/task layer:
+
+- in-progress work should not be treated as validated past experience
+- temporary blockers and partial tool outputs are useful during a run, but often too noisy for long-lived episodic recall
+- this aligns better with both Mem0's session concept and the current heartbeat/job workflow
 
 ### Episode schema v1
 
@@ -273,6 +335,7 @@ interface EpisodeRecord {
   endedAt: string;
   source: "telegram" | "slack" | "terminal" | "heartbeat" | "system";
   sessionKey: string;
+  sessionId?: string | null;
   initiator: "user" | "heartbeat" | "system";
 
   action: string;
@@ -348,6 +411,9 @@ Add a new MCP server or extend the current one with episodic tools:
 - `episode_stats`
   - count exact matches, last success/failure, recurring blockers
 
+- `episode_get_context`
+  - optimized convenience lookup for "what happened last time on this same kind of task?"
+
 Example return shape:
 
 ```json
@@ -372,6 +438,11 @@ Phase 1 heuristic boundaries:
 - background process completion
 - significant failure requiring user-visible explanation
 
+Additionally:
+
+- keep lightweight session/task state updates between boundaries
+- avoid creating a full episode for every small conversational turn
+
 Phase 2:
 
 - add lightweight episode boundary detection using labels from audit entries and tool traces
@@ -394,6 +465,7 @@ Important:
 - deterministic extraction first
 - LLM enrichment second
 - raw evidence retained always
+- retrieval formatting and provenance may matter more than richer ingestion in v1
 
 ### Consolidation strategy
 
@@ -423,6 +495,7 @@ Promotion rules:
 
 - new `src/memory/episodes/` module
 - SQLite schema + repository layer
+- lightweight session/task state layer
 - deterministic episode creation API
 - internal recording from selected boundaries
 - CLI/debug commands for listing episodes
@@ -496,6 +569,7 @@ Later heartbeat cycles should still cover:
 - EverMemOS / MemState / Zep / Mirix / HeLa-Mem / MemBench / LongMemEval
 - whether graph edges are worth phase 1 or should wait for phase 3
 - whether episodic retrieval should support anti-pattern recall (“what failed last time?”) as first-class API
+- whether current `daily/*.jsonl` carries enough identity fields to derive task/session linkage automatically
 
 ## Immediate recommendation
 
