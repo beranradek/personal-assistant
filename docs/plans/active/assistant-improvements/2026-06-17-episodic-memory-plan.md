@@ -43,6 +43,7 @@ What is missing today:
 3. No exact retrieval by work identity (`project`, `job`, `issueId`, `pullRequestId`, `skillUsed`).
 4. No episode outcome model (`success`, `partial_success`, `error`, evidence, blockers).
 5. No explicit promotion pipeline from episode → semantic memory / skill update.
+6. Current audit entries preserve `sessionKey` and `source`, but do not persist richer work-identity fields (`job`, `project`, `issueId`, `pullRequestId`) even when some adapters already know them at enqueue time.
 
 ## External findings
 
@@ -490,6 +491,7 @@ Promotion rules:
 - finish source review and fill remaining gaps
 - define episode schema and retrieval API
 - identify where current backends can emit richer structured audit events
+- decide whether to extend `AuditEntrySchema` directly or add a parallel lightweight task-context event so issue/job/project identity is not lost before episode formation
 
 ### Phase 1 — episodic foundation
 
@@ -581,6 +583,23 @@ That gives the best tradeoff:
 - good auditability
 - strong fit to current architecture
 - clean path from “search notes” to “recall past runs”
+
+## Newly validated implementation constraint
+
+After re-checking current source code on 2026-06-17:
+
+- `AuditEntrySchema` stores `timestamp`, `source`, `sessionKey`, interaction/tool/error payloads, and optional text fields
+- it does **not** store explicit work identity such as `jobName`, `projectName`, `issueId`, or `pullRequestId`
+- some adapters already have richer metadata earlier in the pipeline, but that identity is not preserved into daily audit entries today
+
+Consequence:
+
+- v1 episodic memory can derive some grouping from `sessionKey`
+- but robust exact retrieval by job/project/issue will require either:
+  - extending audit logging to carry structured task identity, or
+  - persisting task-context records in parallel before episode synthesis
+
+This should be treated as an explicit phase-0 design decision, not left implicit.
 
 ## Source set used in this draft
 
