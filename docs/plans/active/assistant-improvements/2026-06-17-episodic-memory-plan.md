@@ -906,6 +906,66 @@ Once write-path and evaluation are stable, the next safe sequence is:
 
 This keeps episodic memory as evidence-first infrastructure rather than turning it into another opaque autonomous summarizer.
 
+## Observability and rollback draft
+
+Before broadening Slice 4 write-path automation, the rollout should also define what "healthy" and "unhealthy" behavior looks like in production-like usage.
+
+### Recommended write-path observability fields
+
+At minimum, later write-path logging/metrics should expose:
+
+1. episode emission attempts
+2. successful episode writes
+3. skipped emissions by reason
+   - no bounded window
+   - duplicate/idempotent hit
+   - policy denied
+   - source/category not allowlisted
+4. failed episode writes
+5. episode build latency
+6. episode store write latency
+
+### Recommended diagnostic dimensions
+
+Each metric/log should be attributable, where practical, by:
+
+- source (`terminal`, `telegram`, `slack`, `github`, `heartbeat`)
+- category
+- projectName
+- outcome
+- rollout phase / feature flag state
+
+### Rollback expectations for Slice 4
+
+The first write-path rollout should be reversible without schema rollback.
+
+Required rollback properties:
+
+1. disabling the feature flag stops new automatic writes immediately
+2. existing `episodes.db` remains readable by retrieval tools
+3. assistant turn execution remains healthy even if episode writes are disabled
+4. rollout can fall back from broader source coverage to narrower source coverage without data loss
+
+### Early warning signals
+
+The following should be treated as rollout regressions:
+
+- sudden spike in failed episode writes
+- duplicate episode growth beyond expected idempotent baseline
+- noticeable assistant turn latency increase after enabling write-path
+- frequent degraded startup due to episodic store issues
+- retrieval quality dropping because of noisy/low-value auto-emitted episodes
+
+### First operational playbook
+
+If Slice 4 rollout causes problems, the response order should be:
+
+1. disable automatic episode emission via flag/allowlist
+2. keep retrieval enabled if reads are still healthy
+3. inspect failed/skipped emission reasons
+4. compare row-growth and latency before/after rollout
+5. only consider schema/data repair after narrowing the active emission surface
+
 ## Recommended first implementation order
 
 1. Slice 1 — enrich audit/task identity
