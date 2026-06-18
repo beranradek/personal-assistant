@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AuditEntrySchema } from "../core/types.js";
-import type { AuditEntry } from "../core/types.js";
+import type { AuditEntry, AuditTaskContext } from "../core/types.js";
 import { createLogger } from "../core/logger.js";
 
 const log = createLogger("daily-log");
@@ -24,11 +24,24 @@ function redactAuditEntry(
   entry: AuditEntry,
   redact: (text: string) => string,
 ): AuditEntry {
+  const redactTaskContext = (
+    taskContext: AuditTaskContext | undefined,
+  ): AuditTaskContext | undefined => {
+    if (!taskContext) return undefined;
+    return Object.fromEntries(
+      Object.entries(taskContext).map(([key, value]) => [
+        key,
+        typeof value === "string" ? redact(value) : value,
+      ]),
+    ) as AuditTaskContext;
+  };
+
   return {
     ...entry,
     ...(entry.userMessage ? { userMessage: redact(entry.userMessage) } : {}),
     ...(entry.errorMessage ? { errorMessage: redact(entry.errorMessage) } : {}),
     ...(entry.assistantResponse ? { assistantResponse: redact(entry.assistantResponse) } : {}),
+    ...(entry.taskContext ? { taskContext: redactTaskContext(entry.taskContext) } : {}),
     ...(entry.toolResult && typeof entry.toolResult === "string"
       ? { toolResult: redact(entry.toolResult) }
       : {}),

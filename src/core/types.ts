@@ -420,6 +420,19 @@ export type SessionMessage = z.infer<typeof SessionMessageSchema>;
 // Audit log types
 // ---------------------------------------------------------------------------
 
+/** Optional structured work identity preserved in audit entries. */
+export const AuditTaskContextSchema = z.object({
+  projectName: z.string().optional(),
+  jobName: z.string().optional(),
+  issueId: z.string().optional(),
+  pullRequestId: z.string().optional(),
+  detailedMemoryFile: z.string().optional(),
+  category: z.string().optional(),
+});
+
+/** Structured work identity attached to an audit entry when available. */
+export type AuditTaskContext = z.infer<typeof AuditTaskContextSchema>;
+
 /** Zod schema for an audit log entry. */
 export const AuditEntrySchema = z.object({
   timestamp: z.string(),
@@ -435,6 +448,7 @@ export const AuditEntrySchema = z.object({
   errorMessage: z.string().optional(),
   stack: z.string().optional(),
   context: z.string().optional(),
+  taskContext: AuditTaskContextSchema.optional(),
 });
 
 /** A single entry in the daily audit log (JSONL). */

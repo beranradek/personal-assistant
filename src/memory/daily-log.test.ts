@@ -138,6 +138,34 @@ describe("daily audit log", () => {
       expect(entries[0].context).toBe("processing user message");
     });
 
+    it("writes optional taskContext fields when provided", async () => {
+      const entry: AuditEntry = {
+        timestamp: "2025-06-15T10:32:00.000Z",
+        source: "github",
+        sessionKey: "github--owner/repo#123",
+        type: "interaction",
+        userMessage: "Implement issue",
+        assistantResponse: "Working on it",
+        taskContext: {
+          projectName: "personal-assistant",
+          jobName: "003-personal-assistant-episodic-memory",
+          issueId: "owner/repo#123",
+          category: "issue-automation",
+        },
+      };
+
+      await appendAuditEntry(tmpDir, entry);
+
+      const entries = await readAuditEntries(tmpDir, "2025-06-15");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].taskContext).toEqual({
+        projectName: "personal-assistant",
+        jobName: "003-personal-assistant-episodic-memory",
+        issueId: "owner/repo#123",
+        category: "issue-automation",
+      });
+    });
+
     it("appends multiple entries on the same day to the same file", async () => {
       const entry1: AuditEntry = {
         timestamp: "2025-06-15T10:00:00.000Z",
@@ -293,6 +321,38 @@ describe("daily audit log", () => {
       expect(entries).toHaveLength(2);
       expect(entries[0]).toEqual(entry1);
       expect(entries[1]).toEqual(entry2);
+    });
+
+    it("redacts taskContext string fields when a redactor is provided", async () => {
+      const entry: AuditEntry = {
+        timestamp: "2025-06-15T10:00:00.000Z",
+        source: "github",
+        sessionKey: "github--owner/repo#123",
+        type: "interaction",
+        userMessage: "secret issue",
+        assistantResponse: "secret response",
+        taskContext: {
+          projectName: "secret-project",
+          detailedMemoryFile: "memory/secret-project.md",
+          issueId: "owner/repo#123",
+        },
+      };
+
+      await appendAuditEntry(
+        tmpDir,
+        entry,
+        (text) => text.replaceAll("secret", "[redacted]"),
+      );
+
+      const entries = await readAuditEntries(tmpDir, "2025-06-15");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].userMessage).toBe("[redacted] issue");
+      expect(entries[0].assistantResponse).toBe("[redacted] response");
+      expect(entries[0].taskContext).toEqual({
+        projectName: "[redacted]-project",
+        detailedMemoryFile: "memory/[redacted]-project.md",
+        issueId: "owner/repo#123",
+      });
     });
   });
 });
