@@ -8,6 +8,7 @@ import { createEmbeddingProvider } from "../memory/embeddings.js";
 import { createVectorStore } from "../memory/vector-store.js";
 import { createIndexer } from "../memory/indexer.js";
 import { createRobustMemorySearch } from "../memory/robust-search.js";
+import { createEpisodeStore } from "../memory/episodes/store.js";
 import { createMemoryServer } from "../tools/memory-server.js";
 import { createAssistantServer } from "../tools/assistant-server.js";
 import { loadHabits, markHabit } from "../heartbeat/habits.js";
@@ -17,10 +18,12 @@ import { getSession, listSessions } from "../exec/process-registry.js";
 import { buildAgentOptions } from "../core/agent-runner.js";
 import { createBackend } from "../backends/factory.js";
 import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
+import { createLogger } from "../core/logger.js";
 import type { AgentBackend } from "../backends/interface.js";
 import type { Config } from "../core/types.js";
 
 export const TERMINAL_SESSION_KEY = "terminal--default";
+const log = createLogger("terminal-session");
 
 export interface TerminalSession {
   config: Config;
@@ -46,6 +49,12 @@ export async function createTerminalSession(
   const embedder = await createEmbeddingProvider();
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
+  let episodeStore: ReturnType<typeof createEpisodeStore> | undefined;
+  try {
+    episodeStore = createEpisodeStore(path.join(config.security.dataDir, "episodes.db"));
+  } catch (err) {
+    log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+  }
   const indexer = createIndexer(store, embedder);
 
   const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
@@ -74,10 +83,13 @@ export async function createTerminalSession(
       recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
     },
   });
+  const redact = createRedactor(CONSERVATIVE_PATTERNS);
 
   // Create MCP servers (memory + assistant + user-configured)
   const memoryServer = createMemoryServer({
     search: searchMemory,
+    redact,
+    ...(episodeStore ? { listEpisodes: (filters) => episodeStore.listEpisodes(filters) } : {}),
   });
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
@@ -128,7 +140,6 @@ export async function createTerminalSession(
     mcpServers,
   );
 
-  const redact = createRedactor(CONSERVATIVE_PATTERNS);
   const backend = await createBackend(config, agentOptions, { configDir, redact });
 
   return {
@@ -139,6 +150,7 @@ export async function createTerminalSession(
       memoryWatcher.close();
       if (backend.close) await backend.close();
       cronManager.stop();
+      episodeStore?.close();
       store.close();
       await embedder.close();
     },

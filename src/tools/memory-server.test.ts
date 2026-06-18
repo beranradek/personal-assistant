@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { SearchResult } from "../core/types.js";
+import type { EpisodeRecord, EpisodeListFilters } from "../memory/episodes/types.js";
 
 // ─── Mock the SDK ────────────────────────────────────────────────────
 // The SDK bundles native dependencies, so we mock it at the module level
@@ -44,6 +45,12 @@ function mockSearch(
   return vi.fn(async () => results);
 }
 
+function mockListEpisodes(
+  implementation?: (filters?: EpisodeListFilters) => EpisodeRecord[],
+): (filters?: EpisodeListFilters) => EpisodeRecord[] {
+  return vi.fn((filters?: EpisodeListFilters) => implementation?.(filters) ?? []);
+}
+
 const sampleResults: SearchResult[] = [
   {
     path: "notes/2024-preferences.md",
@@ -60,6 +67,86 @@ const sampleResults: SearchResult[] = [
     score: 0.85,
   },
 ];
+
+const sampleEpisodes: EpisodeRecord[] = [
+  {
+    id: "ep-2",
+    startedAt: "2026-06-18T14:00:00.000Z",
+    endedAt: "2026-06-18T14:05:00.000Z",
+    source: "github",
+    sessionKey: "github--owner/repo#12",
+    sessionId: "github--owner/repo#12",
+    initiator: "user",
+    action: "Implement MCP episodic retrieval",
+    normalizedAction: "implement mcp episodic retrieval",
+    summary: "Added episode_search and episode_recent tools.",
+    why: "Slice 5",
+    projectName: "personal-assistant",
+    jobName: "003-personal-assistant-episodic-memory",
+    issueId: "owner/repo#12",
+    pullRequestId: null,
+    detailedMemoryFile: "memory/personal-assistant-episodic-memory.md",
+    category: "coding",
+    skillsUsed: ["tdd-workflow"],
+    toolsUsed: ["functions.exec_command"],
+    tags: ["github", "coding", "personal-assistant"],
+    outcome: "success",
+    successScore: 1,
+    blockers: [],
+    errors: [],
+    evidenceIncomplete: [],
+    trajectory: [],
+    semanticEmbeddingText: "action: Implement MCP episodic retrieval",
+  },
+  {
+    id: "ep-1",
+    startedAt: "2026-06-18T13:00:00.000Z",
+    endedAt: "2026-06-18T13:05:00.000Z",
+    source: "heartbeat",
+    sessionKey: "heartbeat--default",
+    sessionId: "heartbeat--default",
+    initiator: "heartbeat",
+    action: "Continue with active job",
+    normalizedAction: "continue with active job",
+    summary: "Builder slice shipped.",
+    why: null,
+    projectName: "personal-assistant",
+    jobName: "003-personal-assistant-episodic-memory",
+    issueId: null,
+    pullRequestId: null,
+    detailedMemoryFile: "memory/personal-assistant-episodic-memory.md",
+    category: "heartbeat",
+    skillsUsed: ["heartbeat-runbook"],
+    toolsUsed: ["functions.exec_command"],
+    tags: ["heartbeat", "coding", "personal-assistant"],
+    outcome: "partial_success",
+    successScore: 0.6,
+    blockers: [],
+    errors: ["review finding"],
+    evidenceIncomplete: [],
+    trajectory: [],
+    semanticEmbeddingText: "action: Continue with active job",
+  },
+];
+
+const secretEpisode: EpisodeRecord = {
+  ...sampleEpisodes[0],
+  id: "ep-secret",
+  action: "secret action",
+  summary: "secret summary",
+  why: "secret why",
+  blockers: ["secret blocker"],
+  errors: ["secret error"],
+  evidenceIncomplete: ["secret evidence"],
+  trajectory: [
+    {
+      at: "2026-06-18T14:01:00.000Z",
+      kind: "action",
+      label: "secret raw trajectory",
+    },
+  ],
+  semanticEmbeddingText: "secret embedding text",
+};
 
 // ─── Tests ───────────────────────────────────────────────────────────
 
@@ -100,6 +187,18 @@ describe("createMemoryServer", () => {
     const serverOpts = mockCreateSdkMcpServer.mock.calls[0][0];
     expect(serverOpts.tools).toHaveLength(1);
     expect(serverOpts.tools[0]).toHaveProperty("name", "memory_search");
+  });
+
+  it("registers episodic tools when listEpisodes dependency is provided", () => {
+    createMemoryServer({ search: mockSearch(), listEpisodes: mockListEpisodes() });
+
+    const toolNames = mockTool.mock.calls.map((call) => call[0]);
+    expect(toolNames).toEqual([
+      "memory_search",
+      "episode_recent",
+      "episode_search",
+      "episode_stats",
+    ]);
   });
 
   // --- Tool input schema ---
@@ -195,5 +294,137 @@ describe("createMemoryServer", () => {
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed).toEqual([]);
+  });
+
+  it("episode_recent passes exact filters through to listEpisodes", async () => {
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes });
+
+    const handler = mockTool.mock.calls[1][3] as (
+      args: EpisodeListFilters,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    const result = await handler({ projectName: "personal-assistant", limit: 1 }, {});
+
+    expect(listEpisodes).toHaveBeenCalledWith({
+      projectName: "personal-assistant",
+      limit: 1,
+    });
+    expect(JSON.parse(result.content[0].text)).toEqual([
+      expect.objectContaining({
+        id: "ep-2",
+        action: "Implement MCP episodic retrieval",
+        summary: "Added episode_search and episode_recent tools.",
+        trajectoryStepCount: 0,
+        trajectoryKinds: [],
+      }),
+      expect.objectContaining({
+        id: "ep-1",
+        action: "Continue with active job",
+        summary: "Builder slice shipped.",
+        trajectoryStepCount: 0,
+        trajectoryKinds: [],
+      }),
+    ]);
+  });
+
+  it("episode_recent omits raw trajectory data and redacts exposed strings", async () => {
+    const listEpisodes = mockListEpisodes(() => [secretEpisode]);
+    createMemoryServer({
+      search: mockSearch(),
+      listEpisodes,
+      redact: (text) => text.replaceAll("secret", "[redacted]"),
+    });
+
+    const handler = mockTool.mock.calls[1][3] as (
+      args: EpisodeListFilters,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    const result = await handler({}, {});
+    const parsed = JSON.parse(result.content[0].text);
+
+    expect(parsed).toEqual([
+      expect.objectContaining({
+        id: "ep-secret",
+        action: "[redacted] action",
+        summary: "[redacted] summary",
+        why: "[redacted] why",
+        blockers: ["[redacted] blocker"],
+        errors: ["[redacted] error"],
+        evidenceIncomplete: ["[redacted] evidence"],
+      }),
+    ]);
+    expect(parsed[0]).not.toHaveProperty("normalizedAction");
+    expect(parsed[0]).not.toHaveProperty("trajectory");
+    expect(parsed[0]).not.toHaveProperty("semanticEmbeddingText");
+  });
+
+  it("episode_search ranks deterministic text matches and respects exact filters", async () => {
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes });
+
+    const handler = mockTool.mock.calls[2][3] as (
+      args: EpisodeListFilters & { query?: string; maxResults?: number },
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    const result = await handler(
+      { query: "github retrieval", source: "github", maxResults: 5 },
+      {},
+    );
+
+    expect(listEpisodes).toHaveBeenCalledWith({
+      source: "github",
+    });
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      score: expect.any(Number),
+      episode: { id: "ep-2" },
+    });
+    expect(parsed[0].matchedFields).toEqual(
+      expect.arrayContaining(["source", "action", "tags"]),
+    );
+  });
+
+  it("episode_stats summarizes counts, top dimensions, and latest timestamp", async () => {
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes });
+
+    const handler = mockTool.mock.calls[3][3] as (
+      args: EpisodeListFilters,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    const result = await handler({ projectName: "personal-assistant" }, {});
+
+    expect(listEpisodes).toHaveBeenCalledWith({
+      projectName: "personal-assistant",
+    });
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      totalEpisodes: 2,
+      latestStartedAt: "2026-06-18T14:00:00.000Z",
+      byOutcome: {
+        success: 1,
+        partial_success: 1,
+      },
+      bySource: {
+        github: 1,
+        heartbeat: 1,
+      },
+      byCategory: {
+        coding: 1,
+        heartbeat: 1,
+      },
+      topSkills: [
+        { value: "heartbeat-runbook", count: 1 },
+        { value: "tdd-workflow", count: 1 },
+      ],
+      topProjects: [
+        { value: "personal-assistant", count: 2 },
+      ],
+    });
   });
 });

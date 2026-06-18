@@ -33,6 +33,7 @@ import { createEmbeddingProvider } from "./memory/embeddings.js";
 import { createVectorStore } from "./memory/vector-store.js";
 import { createIndexer } from "./memory/indexer.js";
 import { createRobustMemorySearch } from "./memory/robust-search.js";
+import { createEpisodeStore } from "./memory/episodes/store.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
@@ -122,6 +123,12 @@ export async function startDaemon(configDir: string): Promise<void> {
   const embedder = await createEmbeddingProvider();
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
+  let episodeStore: ReturnType<typeof createEpisodeStore> | undefined;
+  try {
+    episodeStore = createEpisodeStore(path.join(config.security.dataDir, "episodes.db"));
+  } catch (err) {
+    log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+  }
   const indexer = createIndexer(store, embedder);
 
   // Sync memory files into the vector store in the background — do not block
@@ -189,10 +196,13 @@ export async function startDaemon(configDir: string): Promise<void> {
       recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
     },
   });
+  const redact = createRedactor(CONSERVATIVE_PATTERNS);
 
   // 4. Create MCP servers
   const memoryServer = createMemoryServer({
     search: searchMemory,
+    redact,
+    ...(episodeStore ? { listEpisodes: (filters) => episodeStore.listEpisodes(filters) } : {}),
   });
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
@@ -243,7 +253,6 @@ export async function startDaemon(configDir: string): Promise<void> {
   );
 
   // 6. Create backend + gateway queue & router
-  const redact = createRedactor(CONSERVATIVE_PATTERNS);
   const backend = await createBackend(config, agentOptions, { configDir, redact });
   log.info({ backend: backend.name }, "Agent backend initialized");
 
@@ -485,6 +494,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Close memory watcher/timer and system
     clearInterval(memorySyncTimer);
     memoryWatcher.close();
+    episodeStore?.close();
     store.close();
     await embedder.close();
 
