@@ -20,7 +20,7 @@ import type {
   SDKAssistantMessage,
   SDKPartialAssistantMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { Config, SessionMessage } from "./types.js";
+import type { AuditTaskContext, Config, SessionMessage } from "./types.js";
 import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { bashSecurityHook } from "../security/bash-hook.js";
@@ -324,6 +324,7 @@ export async function runAgentTurn(
   sessionKey: string,
   agentOptions: AgentOptions,
   config: Config,
+  taskContext?: AuditTaskContext,
   redact?: (text: string) => string,
 ): Promise<AgentTurnResult> {
   // 1. Build the user message
@@ -467,6 +468,7 @@ export async function runAgentTurn(
     type: "interaction",
     userMessage: message,
     assistantResponse: responseText,
+    ...(taskContext ? { taskContext } : {}),
   }, redact);
 
   return { response: responseText, messages: turnMessages, partial };
@@ -490,6 +492,7 @@ export async function* streamAgentTurn(
   sessionKey: string,
   agentOptions: AgentOptions,
   config: Config,
+  taskContext?: AuditTaskContext,
   redact?: (text: string) => string,
 ): AsyncGenerator<StreamEvent> {
   // 1. Build the user message
@@ -704,6 +707,7 @@ export async function* streamAgentTurn(
     type: "interaction",
     userMessage: message,
     assistantResponse: responseText,
+    ...(taskContext ? { taskContext } : {}),
   }, redact);
 
   // Yield final result event

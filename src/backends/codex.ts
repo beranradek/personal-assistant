@@ -32,7 +32,7 @@ import type {
   ItemCompletedEvent,
 } from "@openai/codex-sdk";
 import type { AgentBackend, StreamEvent, AgentTurnResult } from "./interface.js";
-import type { Config, SessionMessage } from "../core/types.js";
+import type { AuditTaskContext, Config, SessionMessage } from "../core/types.js";
 import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
 import { readMemoryFiles } from "../memory/files.js";
@@ -381,7 +381,11 @@ export async function createCodexBackend(
   return {
     name: "codex",
 
-    async *runTurn(message: string, sessionKey: string): AsyncGenerator<StreamEvent> {
+    async *runTurn(
+      message: string,
+      sessionKey: string,
+      taskContext?: AuditTaskContext,
+    ): AsyncGenerator<StreamEvent> {
       // I5: Refresh memory at the start of each turn
       await refreshMemory();
       // Context pruning: compact if threshold reached, load existing summary
@@ -540,6 +544,7 @@ export async function createCodexBackend(
         type: "interaction",
         userMessage: message,
         assistantResponse: responseText,
+        ...(taskContext ? { taskContext } : {}),
       }, redact);
 
       yield {
@@ -550,7 +555,11 @@ export async function createCodexBackend(
       };
     },
 
-    async runTurnSync(message: string, sessionKey: string): Promise<AgentTurnResult> {
+    async runTurnSync(
+      message: string,
+      sessionKey: string,
+      taskContext?: AuditTaskContext,
+    ): Promise<AgentTurnResult> {
       // I5: Refresh memory at the start of each turn
       await refreshMemory();
       // Context pruning: compact if threshold reached, load existing summary
@@ -621,6 +630,7 @@ export async function createCodexBackend(
           type: "interaction",
           userMessage: message,
           assistantResponse: responseText,
+          ...(taskContext ? { taskContext } : {}),
         }, redact);
 
         return { response: responseText, messages: turnMessages, partial: false };

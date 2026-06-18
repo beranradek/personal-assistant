@@ -9,7 +9,7 @@
 
 import type { AgentBackend } from "./interface.js";
 import type { AgentOptions, StreamEvent, AgentTurnResult } from "../core/agent-runner.js";
-import type { Config } from "../core/types.js";
+import type { AuditTaskContext, Config } from "../core/types.js";
 import {
   streamAgentTurn,
   runAgentTurn,
@@ -24,12 +24,20 @@ export function createClaudeBackend(
   return {
     name: "claude",
 
-    async *runTurn(message: string, sessionKey: string): AsyncGenerator<StreamEvent> {
-      yield* streamAgentTurn(message, sessionKey, agentOptions, config, redact);
+    async *runTurn(
+      message: string,
+      sessionKey: string,
+      taskContext?: AuditTaskContext,
+    ): AsyncGenerator<StreamEvent> {
+      yield* streamAgentTurn(message, sessionKey, agentOptions, config, taskContext, redact);
     },
 
-    async runTurnSync(message: string, sessionKey: string): Promise<AgentTurnResult> {
-      return runAgentTurn(message, sessionKey, agentOptions, config, redact);
+    async runTurnSync(
+      message: string,
+      sessionKey: string,
+      taskContext?: AuditTaskContext,
+    ): Promise<AgentTurnResult> {
+      return runAgentTurn(message, sessionKey, agentOptions, config, taskContext, redact);
     },
 
     clearSession(sessionKey: string): void {

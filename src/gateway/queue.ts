@@ -10,7 +10,7 @@
  * processing them serially.
  */
 
-import type { AdapterMessage, Config } from "../core/types.js";
+import type { AdapterMessage, AuditTaskContext, Config } from "../core/types.js";
 import type { AgentBackend, StreamEvent, AgentTurnResult } from "../backends/interface.js";
 import type { Router } from "./router.js";
 import { getUnifiedSessionKey } from "../session/unified.js";
@@ -20,6 +20,33 @@ import { createProcessingAccumulator } from "./processing-message.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limiter.js";
 
 const log = createLogger("gateway-queue");
+
+function deriveAuditTaskContext(message: AdapterMessage): AuditTaskContext | undefined {
+  if (message.metadata == null || typeof message.metadata !== "object") return undefined;
+  const metadata = message.metadata as Record<string, unknown>;
+
+  if (message.source !== "github") return undefined;
+
+  const repo = typeof metadata.repo === "string" ? metadata.repo : undefined;
+  const issueNumber =
+    typeof metadata.issueNumber === "number" && Number.isFinite(metadata.issueNumber)
+      ? metadata.issueNumber
+      : undefined;
+  const issueId = metadata.issueId;
+
+  const taskContext: AuditTaskContext = {
+    ...(repo ? { projectName: repo.split("/")[1] ?? repo } : {}),
+    ...(repo && issueNumber ? { jobName: `${repo}#${issueNumber}` } : {}),
+    ...(typeof issueId === "number" || typeof issueId === "string"
+      ? { issueId: String(issueId) }
+      : repo && issueNumber
+        ? { issueId: `${repo}#${issueNumber}` }
+        : {}),
+    category: "github-issue",
+  };
+
+  return Object.keys(taskContext).length > 0 ? taskContext : undefined;
+}
 
 export type EnqueueResult =
   | { accepted: true }
@@ -209,9 +236,11 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
           let finalText = "";
           let sawTool = false;
 
+          const taskContext = deriveAuditTaskContext(message);
           for await (const event of backend.runTurn(
             message.text,
             sessionKey,
+            taskContext,
           )) {
             accumulator.handleEvent(event);
             if (event.type === "tool_start") {
@@ -278,9 +307,11 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
           partial = resultEvent?.partial ?? false;
         } else {
           // Non-streaming fallback
+          const taskContext = deriveAuditTaskContext(message);
           const result: AgentTurnResult = await backend.runTurnSync(
             message.text,
             sessionKey,
+            taskContext,
           );
           responseText = result.response;
           partial = result.partial;

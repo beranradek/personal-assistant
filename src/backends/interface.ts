@@ -8,6 +8,7 @@
  */
 
 import type { StreamEvent, AgentTurnResult } from "../core/agent-runner.js";
+import type { AuditTaskContext } from "../core/types.js";
 
 export type { StreamEvent, AgentTurnResult };
 
@@ -33,6 +34,7 @@ export interface AgentBackend {
   runTurn(
     message: string,
     sessionKey: string,
+    taskContext?: AuditTaskContext,
   ): AsyncGenerator<StreamEvent>;
 
   /**
@@ -43,6 +45,7 @@ export interface AgentBackend {
   runTurnSync(
     message: string,
     sessionKey: string,
+    taskContext?: AuditTaskContext,
   ): Promise<AgentTurnResult>;
 
   /**

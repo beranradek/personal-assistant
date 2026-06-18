@@ -239,6 +239,47 @@ describe("MessageQueue", () => {
       expect(backend.runTurnSync).toHaveBeenCalledWith(
         "Hello",
         "user--default",
+        undefined,
+      );
+    });
+
+    it("derives github taskContext from adapter metadata", async () => {
+      const config = makeConfig();
+      const backend = makeBackend({
+        runTurnSync: vi.fn().mockResolvedValue({
+          response: "Working on it",
+          messages: [],
+          partial: false,
+        }),
+      });
+      const router = createRouter();
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(
+        makeMessage({
+          source: "github",
+          sourceId: "owner/repo#123",
+          text: "Implement issue",
+          metadata: {
+            repo: "owner/repo",
+            issueNumber: 123,
+            issueId: 999001,
+          },
+        }),
+      );
+
+      const processed = await queue.processNext(backend, config, router);
+
+      expect(processed).toBe(true);
+      expect(backend.runTurnSync).toHaveBeenCalledWith(
+        "Implement issue",
+        "user--default",
+        {
+          projectName: "repo",
+          jobName: "owner/repo#123",
+          issueId: "999001",
+          category: "github-issue",
+        },
       );
     });
 
@@ -360,6 +401,7 @@ describe("MessageQueue", () => {
       expect(backend.runTurnSync).toHaveBeenCalledWith(
         "late arrival",
         "user--default",
+        undefined,
       );
     });
   });
