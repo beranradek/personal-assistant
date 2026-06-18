@@ -283,6 +283,54 @@ What to borrow:
 - avoid aggressive lossy summarization at ingestion time
 - invest early in retrieval routing, formatting, and provenance
 
+## 13. Zep / Graphiti
+
+Zep's open architecture is relevant mainly as evidence that **temporal provenance and graph-style facts** can coexist with episodic ground truth rather than replacing it.
+
+Evidence:
+
+- [Graphiti README](https://github.com/getzep/graphiti) explicitly distinguishes entities, temporally valid facts/relationships, and episodes as provenance-backed raw ingested data
+- the same README positions Graphiti as the open-source temporal context graph engine beneath Zep
+
+What to borrow:
+
+- preserve derived facts separately from raw episodes
+- keep temporal validity/provenance as first-class concerns
+
+What not to copy directly into v1:
+
+- a graph engine is likely too heavy for `personal-assistant` phase 1
+- relational episodic storage plus optional links should be enough initially
+
+## 14. MIRIX
+
+MIRIX is relevant less as a direct architectural template and more as market confirmation that a reusable standalone memory layer is becoming its own product category.
+
+Evidence:
+
+- [MIRIX v0.1.6 release](https://github.com/Mirix-AI/MIRIX/releases) says the project moved from bundled desktop assistant to a standalone memory platform/API for other agents
+
+What to borrow:
+
+- treat memory as an integration surface with debug visibility, not just an internal implementation detail
+- preserve the option to expose episodic memory through a narrow API that other assistant workflows can use later
+
+## 15. Benchmarks and evaluation
+
+Recent evaluation work strongly suggests that memory quality should be measured with richer criteria than simple retrieval hit-rate.
+
+Evidence:
+
+- [LongMemEval-V2](https://arxiv.org/abs/2605.12493) evaluates memory as a context-gathering interface with `Insert` and `Query`, covering static recall, dynamic tracking, workflow knowledge, gotchas, and premise awareness across long web-agent histories
+- [EMemBench](https://arxiv.org/abs/2601.16690) generates trajectory-specific episodic questions and shows persistent weaknesses in induction and spatial reasoning
+- [MemBench](https://arxiv.org/abs/2506.21605) argues memory evaluation should cover effectiveness, efficiency, and capacity rather than only answer correctness
+
+What to borrow:
+
+- model evaluation around an explicit `Insert` / `Query` memory API
+- test not only exact recall, but also dynamic state tracking and failure/gotcha recall
+- include latency and storage-growth constraints in evaluation, not just accuracy
+
 ## Proposed design for `personal-assistant`
 
 ### Design principles
@@ -492,6 +540,7 @@ Promotion rules:
 - define episode schema and retrieval API
 - identify where current backends can emit richer structured audit events
 - decide whether to extend `AuditEntrySchema` directly or add a parallel lightweight task-context event so issue/job/project identity is not lost before episode formation
+- define an evaluation harness that mirrors `Insert` / `Query` semantics so the memory layer can be tested independently of one specific assistant backend
 
 ### Phase 1 — episodic foundation
 
@@ -540,6 +589,8 @@ Suggested tests:
 - semantic near-match retrieval tests
 - consolidation correctness tests
 - retention / pruning tests
+- dynamic-state / workflow-gotcha tests inspired by LongMemEval-V2 categories
+- latency and storage-growth tracking inspired by MemBench
 
 ## Risks and guardrails
 
