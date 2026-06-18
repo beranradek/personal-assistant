@@ -570,6 +570,161 @@ Promotion rules:
 - “don’t repeat this failed path” hints
 - recurrence-based skill candidate generation
 
+## Recommended implementation slices
+
+The next step should not be "implement episodic memory" as one big change. It should be split into small repository-grounded slices that keep tests and rollout risk under control.
+
+### Slice 1 — enrich audit/task identity
+
+Goal:
+
+- preserve enough task identity at log time so later episode formation is not forced to infer everything from free text
+
+Candidate files:
+
+- [src/core/types.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/core/types.ts:424)
+- [src/memory/daily-log.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/memory/daily-log.ts:1)
+- [src/core/agent-runner.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/core/agent-runner.ts:463)
+- [src/backends/codex.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/backends/codex.ts:536)
+- [src/adapters/github-webhook.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/adapters/github-webhook.ts:416)
+- tests:
+  - [src/memory/daily-log.test.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/memory/daily-log.test.ts:1)
+  - [src/backends/codex.test.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/backends/codex.test.ts:1)
+
+Deliverable:
+
+- either extend `AuditEntrySchema` with optional `taskContext`
+- or add a parallel lightweight task-context event model written alongside the existing audit entries
+
+Why first:
+
+- every later slice gets better exact retrieval if work identity is preserved early
+
+### Slice 2 — episodic storage module
+
+Goal:
+
+- add a local entity-oriented storage layer without touching current semantic-memory search behavior
+
+Candidate files:
+
+- new:
+  - `src/memory/episodes/types.ts`
+  - `src/memory/episodes/store.ts`
+  - `src/memory/episodes/schema.ts`
+  - `src/memory/episodes/store.test.ts`
+- adjacent reuse:
+  - [src/memory/vector-store.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/memory/vector-store.ts:1)
+  - [src/core/types.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/core/types.ts:316)
+
+Deliverable:
+
+- create/open `episodes.db`
+- support insert/list/get-by-id
+- support exact filters on `sessionKey`, `source`, outcome, and available identity fields
+
+### Slice 3 — deterministic episode builder
+
+Goal:
+
+- convert audit entries into an `EpisodeRecord` using deterministic extraction first and LLM enrichment later
+
+Candidate files:
+
+- new:
+  - `src/memory/episodes/builder.ts`
+  - `src/memory/episodes/builder.test.ts`
+- reuse:
+  - [src/memory/daily-log.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/memory/daily-log.ts:1)
+  - [src/session/store.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/session/store.ts:1)
+
+Deliverable:
+
+- build an episode from a bounded set of audit entries
+- derive:
+  - time window
+  - session key
+  - tools used
+  - outcome candidate
+  - evidence pointers
+
+### Slice 4 — write-path integration
+
+Goal:
+
+- record episodes automatically at a few explicit boundaries before adding any broad autonomous behavior
+
+Candidate files:
+
+- [src/core/agent-runner.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/core/agent-runner.ts:312)
+- [src/backends/codex.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/backends/codex.ts:384)
+- [src/session/compactor.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/session/compactor.ts:221)
+- [src/daemon.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/daemon.ts:224)
+
+Deliverable:
+
+- opt-in episode recording for:
+  - explicit completed interaction batches
+  - compaction checkpoints
+  - selected heartbeat work completions
+
+### Slice 5 — MCP retrieval surface
+
+Goal:
+
+- expose episodic recall without rewriting the existing `memory_search` tool
+
+Candidate files:
+
+- [src/tools/memory-server.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/tools/memory-server.ts:13)
+- `src/tools/episodic-memory-server.ts` or a well-scoped extension of the existing memory server
+- tests:
+  - [src/tools/memory-server.test.ts](/home/radek/.personal-assistant/workspace/dev/personal-assistant/src/tools/memory-server.test.ts:1)
+
+Deliverable:
+
+- add `episode_recent`
+- add `episode_search`
+- add `episode_stats`
+
+### Slice 6 — evaluation harness
+
+Goal:
+
+- keep memory quality measurable from the start instead of relying on anecdotal improvement
+
+Candidate files:
+
+- new:
+  - `src/memory/episodes/eval.ts`
+  - `src/memory/episodes/eval.test.ts`
+  - `fixtures/episodic-memory/`
+
+Deliverable:
+
+- `Insert` / `Query` style harness
+- initial scenarios:
+  - exact project/issue recall
+  - recurring blocker recall
+  - dynamic-state recall
+  - workflow gotcha recall
+
+## Recommended first implementation order
+
+1. Slice 1 — enrich audit/task identity
+2. Slice 2 — episodic storage module
+3. Slice 3 — deterministic episode builder
+4. Slice 5 — MCP retrieval surface
+5. Slice 4 — write-path integration
+6. Slice 6 — evaluation harness
+
+Rationale:
+
+- slices 1-3 create trustworthy data
+- slice 5 gives immediate user-visible value
+- slice 4 broadens automation only after storage/retrieval are stable
+- slice 6 keeps quality measurable before phase-3/4 learning features
+
 ## Evaluation criteria
 
 Success should not be measured only by “more stored data”.
