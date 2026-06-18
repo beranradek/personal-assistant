@@ -709,6 +709,77 @@ Deliverable:
   - dynamic-state recall
   - workflow gotcha recall
 
+## Next safe planning steps
+
+Given the current state on 2026-06-18:
+
+- Slices 1, 2, 3, and 5 are already implemented
+- the remaining work with the highest value/risk ratio is now:
+  1. tighten the plan for Slice 4 so it can be shipped behind explicit opt-in boundaries
+  2. add evaluation fixtures/harness design for Slice 6 before broadening automatic writes
+  3. only then implement write-path automation
+
+This order is intentional:
+
+- the system can already store and retrieve episodes manually/deterministically
+- broadening automatic writes too early would increase duplication/noise risk
+- evaluation coverage is now the best protection against regressions in episode creation policy
+
+### Safe follow-up checklist for Slice 4
+
+Before changing runtime code again, the next implementation pass should answer these questions explicitly:
+
+1. **Episode boundary policy**
+   - What exact events are allowed to emit an episode?
+   - Initial recommended allowlist:
+     - completed interaction batch with non-empty assistant response
+     - selected heartbeat/project-completion events
+     - session compaction checkpoint only if there is already a bounded candidate window
+
+2. **Deduplication / idempotency**
+   - How do we prevent storing the same bounded audit window twice?
+   - Recommended first guard:
+     - deterministic `episode.id` from bounded window content
+     - plus explicit write-path rule "one episode emission attempt per finalized boundary"
+
+3. **Failure isolation**
+   - Episode write failure must not fail the user-visible assistant turn
+   - Required behavior:
+     - log warning/error
+     - continue normal assistant response path
+     - keep episodic write best-effort
+
+4. **Opt-in rollout**
+   - Write-path integration should start behind a narrow flag/config switch or a tightly scoped call site
+   - Do not broaden to every adapter/source in the first pass
+
+5. **Security / privacy**
+   - Keep using sanitized builder output
+   - Do not bypass redaction by attaching raw prompt/tool payloads at write time
+
+### Safe follow-up checklist for Slice 6
+
+The evaluation harness should be designed before the next code slice with these minimal fixtures:
+
+1. `exact-identity-recall`
+   - query by `projectName + issueId`
+   - expect the right episode and no false positives
+
+2. `workflow-gotcha-recall`
+   - query by previously observed failure mode / blocker
+   - expect the prior episode to rank near the top
+
+3. `dynamic-state-recall`
+   - verify that task-specific changing state is not confused with static semantic knowledge
+
+4. `degraded-store-startup`
+   - simulate incompatible/broken `episodes.db`
+   - expect assistant startup to succeed without episodic tools
+
+5. `growth-and-latency-smoke`
+   - insert/query over a small fixture corpus
+   - capture simple timing and row-count baselines for future comparison
+
 ## Recommended first implementation order
 
 1. Slice 1 — enrich audit/task identity
