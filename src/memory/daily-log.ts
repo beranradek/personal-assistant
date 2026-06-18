@@ -24,16 +24,22 @@ function redactAuditEntry(
   entry: AuditEntry,
   redact: (text: string) => string,
 ): AuditEntry {
+  const redactUnknown = (value: unknown): unknown => {
+    if (typeof value === "string") return redact(value);
+    if (Array.isArray(value)) return value.map((item) => redactUnknown(item));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, nestedValue]) => [key, redactUnknown(nestedValue)]),
+      );
+    }
+    return value;
+  };
+
   const redactTaskContext = (
     taskContext: AuditTaskContext | undefined,
   ): AuditTaskContext | undefined => {
     if (!taskContext) return undefined;
-    return Object.fromEntries(
-      Object.entries(taskContext).map(([key, value]) => [
-        key,
-        typeof value === "string" ? redact(value) : value,
-      ]),
-    ) as AuditTaskContext;
+    return redactUnknown(taskContext) as AuditTaskContext;
   };
 
   return {
@@ -42,9 +48,8 @@ function redactAuditEntry(
     ...(entry.errorMessage ? { errorMessage: redact(entry.errorMessage) } : {}),
     ...(entry.assistantResponse ? { assistantResponse: redact(entry.assistantResponse) } : {}),
     ...(entry.taskContext ? { taskContext: redactTaskContext(entry.taskContext) } : {}),
-    ...(entry.toolResult && typeof entry.toolResult === "string"
-      ? { toolResult: redact(entry.toolResult) }
-      : {}),
+    ...(entry.toolInput !== undefined ? { toolInput: redactUnknown(entry.toolInput) } : {}),
+    ...(entry.toolResult !== undefined ? { toolResult: redactUnknown(entry.toolResult) } : {}),
   };
 }
 

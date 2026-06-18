@@ -355,6 +355,41 @@ describe("daily audit log", () => {
       });
     });
 
+    it("redacts nested tool input and object tool results when a redactor is provided", async () => {
+      const entry: AuditEntry = {
+        timestamp: "2025-06-15T10:31:00.000Z",
+        source: "terminal",
+        sessionKey: "terminal--default",
+        type: "tool_call",
+        toolName: "bash",
+        toolInput: {
+          token: "SECRET_INPUT",
+          nested: { password: "SECRET_PASSWORD" },
+        },
+        toolResult: {
+          output: "SECRET_OUTPUT",
+          nested: { apiKey: "SECRET_KEY" },
+        },
+      };
+
+      await appendAuditEntry(
+        tmpDir,
+        entry,
+        (text) => text.replace(/SECRET_[A-Z_]+/g, "[REDACTED]"),
+      );
+
+      const entries = await readAuditEntries(tmpDir, "2025-06-15");
+
+      expect(entries[0].toolInput).toEqual({
+        token: "[REDACTED]",
+        nested: { password: "[REDACTED]" },
+      });
+      expect(entries[0].toolResult).toEqual({
+        output: "[REDACTED]",
+        nested: { apiKey: "[REDACTED]" },
+      });
+    });
+
     it("preserves unknown taskContext fields for forward compatibility", async () => {
       const dailyDir = path.join(tmpDir, "daily");
       await fs.mkdir(dailyDir, { recursive: true });
