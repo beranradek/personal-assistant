@@ -354,5 +354,35 @@ describe("daily audit log", () => {
         issueId: "owner/repo#123",
       });
     });
+
+    it("preserves unknown taskContext fields for forward compatibility", async () => {
+      const dailyDir = path.join(tmpDir, "daily");
+      await fs.mkdir(dailyDir, { recursive: true });
+      await fs.writeFile(
+        path.join(dailyDir, "2025-06-15.jsonl"),
+        JSON.stringify({
+          timestamp: "2025-06-15T10:00:00.000Z",
+          source: "github",
+          sessionKey: "github--owner/repo#123",
+          type: "interaction",
+          userMessage: "Hello",
+          assistantResponse: "Hi",
+          taskContext: {
+            projectName: "personal-assistant",
+            unknownFutureField: "keep-me",
+            nestedMetadata: { status: "candidate" },
+          },
+        }) + "\n",
+        "utf-8",
+      );
+
+      const entries = await readAuditEntries(tmpDir, "2025-06-15");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].taskContext).toEqual({
+        projectName: "personal-assistant",
+        unknownFutureField: "keep-me",
+        nestedMetadata: { status: "candidate" },
+      });
+    });
   });
 });

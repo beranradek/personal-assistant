@@ -421,14 +421,16 @@ export type SessionMessage = z.infer<typeof SessionMessageSchema>;
 // ---------------------------------------------------------------------------
 
 /** Optional structured work identity preserved in audit entries. */
-export const AuditTaskContextSchema = z.object({
-  projectName: z.string().optional(),
-  jobName: z.string().optional(),
-  issueId: z.string().optional(),
-  pullRequestId: z.string().optional(),
-  detailedMemoryFile: z.string().optional(),
-  category: z.string().optional(),
-});
+export const AuditTaskContextSchema = z
+  .object({
+    projectName: z.string().optional(),
+    jobName: z.string().optional(),
+    issueId: z.string().optional(),
+    pullRequestId: z.string().optional(),
+    detailedMemoryFile: z.string().optional(),
+    category: z.string().optional(),
+  })
+  .catchall(z.unknown());
 
 /** Structured work identity attached to an audit entry when available. */
 export type AuditTaskContext = z.infer<typeof AuditTaskContextSchema>;
