@@ -4,6 +4,7 @@ export const EpisodeSourceSchema = z.enum([
   "telegram",
   "slack",
   "terminal",
+  "github",
   "heartbeat",
   "system",
 ]);
@@ -85,6 +86,7 @@ export const EpisodeListFiltersSchema = z.object({
   pullRequestId: z.string().optional(),
   detailedMemoryFile: z.string().optional(),
   category: z.string().optional(),
+  skillUsed: z.string().optional(),
   limit: z.number().int().positive().max(1000).optional(),
 });
 

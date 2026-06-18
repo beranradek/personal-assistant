@@ -3,13 +3,22 @@ import { chmodSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import {
   EpisodeListFiltersSchema,
+  EpisodeStepSchema,
   EpisodeRecordSchema,
   type EpisodeListFilters,
   type EpisodeRecord,
 } from "./types.js";
 import {
+  CREATE_EPISODE_BLOCKERS_TABLE_SQL,
+  CREATE_EPISODE_ERRORS_TABLE_SQL,
+  CREATE_EPISODE_EVIDENCE_TABLE_SQL,
+  CREATE_EPISODE_SKILLS_TABLE_SQL,
+  CREATE_EPISODE_STEPS_TABLE_SQL,
+  CREATE_EPISODE_TAGS_TABLE_SQL,
+  CREATE_EPISODE_TOOLS_TABLE_SQL,
   CREATE_EPISODES_INDEXES_SQL,
   CREATE_EPISODES_TABLE_SQL,
+  EPISODE_SCHEMA_VERSION,
 } from "./schema.js";
 
 export interface EpisodeStore {
@@ -37,24 +46,72 @@ type EpisodeRow = {
   pull_request_id: string | null;
   detailed_memory_file: string | null;
   category: string | null;
-  skills_used_json: string;
-  tools_used_json: string;
-  tags_json: string;
   outcome: string;
   success_score: number | null;
-  blockers_json: string;
-  errors_json: string;
-  evidence_incomplete_json: string;
-  trajectory_json: string;
   semantic_embedding_text: string;
 };
 
-function deserializeJsonArray(value: string): string[] {
-  const parsed = JSON.parse(value);
-  return Array.isArray(parsed) ? parsed.map(String) : [];
+type EpisodeStepRow = {
+  at: string;
+  kind: string;
+  label: string;
+  data_json: string | null;
+};
+
+function migrateSchema(db: Database.Database): void {
+  const currentVersion = Number(db.pragma("user_version", { simple: true }) ?? 0);
+  if (currentVersion > EPISODE_SCHEMA_VERSION) {
+    throw new Error(
+      `episodes.db schema version ${currentVersion} is newer than supported ${EPISODE_SCHEMA_VERSION}`,
+    );
+  }
+  if (currentVersion === EPISODE_SCHEMA_VERSION) return;
+
+  db.transaction(() => {
+    db.exec(CREATE_EPISODES_TABLE_SQL);
+    db.exec(CREATE_EPISODES_INDEXES_SQL);
+    db.exec(CREATE_EPISODE_SKILLS_TABLE_SQL);
+    db.exec(CREATE_EPISODE_TOOLS_TABLE_SQL);
+    db.exec(CREATE_EPISODE_TAGS_TABLE_SQL);
+    db.exec(CREATE_EPISODE_BLOCKERS_TABLE_SQL);
+    db.exec(CREATE_EPISODE_ERRORS_TABLE_SQL);
+    db.exec(CREATE_EPISODE_EVIDENCE_TABLE_SQL);
+    db.exec(CREATE_EPISODE_STEPS_TABLE_SQL);
+    db.pragma(`user_version = ${EPISODE_SCHEMA_VERSION}`);
+  })();
 }
 
-function rowToEpisode(row: EpisodeRow): EpisodeRecord {
+function loadStringValues(
+  stmt: Database.Statement<[string], { value: string }>,
+  episodeId: string,
+): string[] {
+  return stmt.all(episodeId).map((row) => row.value);
+}
+
+function loadSteps(
+  stmt: Database.Statement<[string], EpisodeStepRow>,
+  episodeId: string,
+) {
+  return stmt.all(episodeId).map((row) => EpisodeStepSchema.parse({
+    at: row.at,
+    kind: row.kind,
+    label: row.label,
+    data: row.data_json ? JSON.parse(row.data_json) : undefined,
+  }));
+}
+
+function rowToEpisode(
+  row: EpisodeRow,
+  loaders: {
+    skills: Database.Statement<[string], { value: string }>;
+    tools: Database.Statement<[string], { value: string }>;
+    tags: Database.Statement<[string], { value: string }>;
+    blockers: Database.Statement<[string], { value: string }>;
+    errors: Database.Statement<[string], { value: string }>;
+    evidence: Database.Statement<[string], { value: string }>;
+    steps: Database.Statement<[string], EpisodeStepRow>;
+  },
+): EpisodeRecord {
   return EpisodeRecordSchema.parse({
     id: row.id,
     startedAt: row.started_at,
@@ -73,15 +130,15 @@ function rowToEpisode(row: EpisodeRow): EpisodeRecord {
     pullRequestId: row.pull_request_id,
     detailedMemoryFile: row.detailed_memory_file,
     category: row.category,
-    skillsUsed: deserializeJsonArray(row.skills_used_json),
-    toolsUsed: deserializeJsonArray(row.tools_used_json),
-    tags: deserializeJsonArray(row.tags_json),
+    skillsUsed: loadStringValues(loaders.skills, row.id),
+    toolsUsed: loadStringValues(loaders.tools, row.id),
+    tags: loadStringValues(loaders.tags, row.id),
     outcome: row.outcome,
     successScore: row.success_score,
-    blockers: deserializeJsonArray(row.blockers_json),
-    errors: deserializeJsonArray(row.errors_json),
-    evidenceIncomplete: deserializeJsonArray(row.evidence_incomplete_json),
-    trajectory: JSON.parse(row.trajectory_json),
+    blockers: loadStringValues(loaders.blockers, row.id),
+    errors: loadStringValues(loaders.errors, row.id),
+    evidenceIncomplete: loadStringValues(loaders.evidence, row.id),
+    trajectory: loadSteps(loaders.steps, row.id),
     semanticEmbeddingText: row.semantic_embedding_text,
   });
 }
@@ -106,17 +163,20 @@ function episodeToParams(episode: EpisodeRecord) {
     pull_request_id: parsed.pullRequestId ?? null,
     detailed_memory_file: parsed.detailedMemoryFile ?? null,
     category: parsed.category ?? null,
-    skills_used_json: JSON.stringify(parsed.skillsUsed),
-    tools_used_json: JSON.stringify(parsed.toolsUsed),
-    tags_json: JSON.stringify(parsed.tags),
     outcome: parsed.outcome,
     success_score: parsed.successScore ?? null,
-    blockers_json: JSON.stringify(parsed.blockers),
-    errors_json: JSON.stringify(parsed.errors),
-    evidence_incomplete_json: JSON.stringify(parsed.evidenceIncomplete),
-    trajectory_json: JSON.stringify(parsed.trajectory),
     semantic_embedding_text: parsed.semanticEmbeddingText,
   };
+}
+
+function insertOrderedStringValues(
+  stmt: Database.Statement,
+  episodeId: string,
+  values: string[],
+): void {
+  for (const [position, value] of values.entries()) {
+    stmt.run(episodeId, value, position);
+  }
 }
 
 export function createEpisodeStore(dbPath: string): EpisodeStore {
@@ -131,39 +191,112 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
   }
 
   db.pragma("journal_mode = WAL");
-  db.exec(CREATE_EPISODES_TABLE_SQL);
-  db.exec(CREATE_EPISODES_INDEXES_SQL);
+  db.pragma("foreign_keys = ON");
+  migrateSchema(db);
 
   const insertEpisodeStmt = db.prepare(`
     INSERT INTO episodes (
       id, started_at, ended_at, source, session_key, session_id, initiator,
       action, normalized_action, summary, why, project_name, job_name,
       issue_id, pull_request_id, detailed_memory_file, category,
-      skills_used_json, tools_used_json, tags_json, outcome, success_score,
-      blockers_json, errors_json, evidence_incomplete_json, trajectory_json,
-      semantic_embedding_text
+      outcome, success_score, semantic_embedding_text
     ) VALUES (
       @id, @started_at, @ended_at, @source, @session_key, @session_id, @initiator,
       @action, @normalized_action, @summary, @why, @project_name, @job_name,
       @issue_id, @pull_request_id, @detailed_memory_file, @category,
-      @skills_used_json, @tools_used_json, @tags_json, @outcome, @success_score,
-      @blockers_json, @errors_json, @evidence_incomplete_json, @trajectory_json,
-      @semantic_embedding_text
+      @outcome, @success_score, @semantic_embedding_text
     )
+  `);
+  const insertSkillStmt = db.prepare(`
+    INSERT INTO episode_skills (episode_id, skill, position) VALUES (?, ?, ?)
+  `);
+  const insertToolStmt = db.prepare(`
+    INSERT INTO episode_tools (episode_id, tool, position) VALUES (?, ?, ?)
+  `);
+  const insertTagStmt = db.prepare(`
+    INSERT INTO episode_tags (episode_id, tag, position) VALUES (?, ?, ?)
+  `);
+  const insertBlockerStmt = db.prepare(`
+    INSERT INTO episode_blockers (episode_id, blocker, position) VALUES (?, ?, ?)
+  `);
+  const insertErrorStmt = db.prepare(`
+    INSERT INTO episode_errors (episode_id, error, position) VALUES (?, ?, ?)
+  `);
+  const insertEvidenceStmt = db.prepare(`
+    INSERT INTO episode_evidence_incomplete (episode_id, evidence, position) VALUES (?, ?, ?)
+  `);
+  const insertStepStmt = db.prepare(`
+    INSERT INTO episode_steps (episode_id, position, at, kind, label, data_json)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const getEpisodeByIdStmt = db.prepare(`
     SELECT * FROM episodes WHERE id = ?
   `);
+  const loadSkillsStmt = db.prepare<[string], { value: string }>(`
+    SELECT skill AS value FROM episode_skills WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadToolsStmt = db.prepare<[string], { value: string }>(`
+    SELECT tool AS value FROM episode_tools WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadTagsStmt = db.prepare<[string], { value: string }>(`
+    SELECT tag AS value FROM episode_tags WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadBlockersStmt = db.prepare<[string], { value: string }>(`
+    SELECT blocker AS value FROM episode_blockers WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadErrorsStmt = db.prepare<[string], { value: string }>(`
+    SELECT error AS value FROM episode_errors WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadEvidenceStmt = db.prepare<[string], { value: string }>(`
+    SELECT evidence AS value FROM episode_evidence_incomplete WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadStepsStmt = db.prepare<[string], EpisodeStepRow>(`
+    SELECT at, kind, label, data_json
+    FROM episode_steps
+    WHERE episode_id = ?
+    ORDER BY position ASC
+  `);
+
+  const insertEpisodeTx = db.transaction((episode: EpisodeRecord) => {
+    const parsed = EpisodeRecordSchema.parse(episode);
+    insertEpisodeStmt.run(episodeToParams(parsed));
+    insertOrderedStringValues(insertSkillStmt, parsed.id, parsed.skillsUsed);
+    insertOrderedStringValues(insertToolStmt, parsed.id, parsed.toolsUsed);
+    insertOrderedStringValues(insertTagStmt, parsed.id, parsed.tags);
+    insertOrderedStringValues(insertBlockerStmt, parsed.id, parsed.blockers);
+    insertOrderedStringValues(insertErrorStmt, parsed.id, parsed.errors);
+    insertOrderedStringValues(insertEvidenceStmt, parsed.id, parsed.evidenceIncomplete);
+    for (const [position, step] of parsed.trajectory.entries()) {
+      insertStepStmt.run(
+        parsed.id,
+        position,
+        step.at,
+        step.kind,
+        step.label,
+        step.data === undefined ? null : JSON.stringify(step.data),
+      );
+    }
+  });
+
+  const rowLoaders = {
+    skills: loadSkillsStmt,
+    tools: loadToolsStmt,
+    tags: loadTagsStmt,
+    blockers: loadBlockersStmt,
+    errors: loadErrorsStmt,
+    evidence: loadEvidenceStmt,
+    steps: loadStepsStmt,
+  };
 
   return {
     insertEpisode(episode) {
-      insertEpisodeStmt.run(episodeToParams(episode));
+      insertEpisodeTx(episode);
     },
 
     getEpisodeById(id) {
       const row = getEpisodeByIdStmt.get(id) as EpisodeRow | undefined;
-      return row ? rowToEpisode(row) : null;
+      return row ? rowToEpisode(row, rowLoaders) : null;
     },
 
     listEpisodes(filters = {}) {
@@ -190,6 +323,12 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
           values.push(value);
         }
       }
+      if (parsed.skillUsed !== undefined) {
+        clauses.push(
+          "EXISTS (SELECT 1 FROM episode_skills s WHERE s.episode_id = episodes.id AND s.skill = ?)",
+        );
+        values.push(parsed.skillUsed);
+      }
 
       const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
       const limitClause = parsed.limit !== undefined ? "LIMIT ?" : "";
@@ -205,7 +344,7 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
         ${limitClause}
       `);
 
-      return (stmt.all(...values) as EpisodeRow[]).map(rowToEpisode);
+      return (stmt.all(...values) as EpisodeRow[]).map((row) => rowToEpisode(row, rowLoaders));
     },
 
     close() {

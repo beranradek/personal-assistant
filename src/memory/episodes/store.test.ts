@@ -95,6 +95,30 @@ describe("EpisodeStore", () => {
     expect(store.getEpisodeById("ep-roundtrip")).toEqual(episode);
   });
 
+  it("reopens a file-backed database and preserves normalized child rows", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "episode-store-reopen-"));
+    const dbPath = path.join(tmpDir, "episodes.db");
+    const episode = makeEpisode("ep-file", {
+      source: "github",
+      skillsUsed: ["tdd-workflow", "systematic-debugging"],
+      tags: ["github", "episodic-memory"],
+      blockers: ["await review"],
+      errors: ["none yet"],
+      evidenceIncomplete: ["need screenshot"],
+      trajectory: [
+        { at: "2026-06-18T10:01:00.000Z", kind: "decision", label: "picked slice 2" },
+      ],
+    });
+
+    store = createEpisodeStore(dbPath);
+    store.insertEpisode(episode);
+    store.close();
+
+    store = createEpisodeStore(dbPath);
+
+    expect(store.getEpisodeById("ep-file")).toEqual(episode);
+  });
+
   it("lists episodes ordered by startedAt descending", () => {
     store = createEpisodeStore(":memory:");
     store.insertEpisode(makeEpisode("older", { startedAt: "2026-06-18T09:00:00.000Z" }));
@@ -111,24 +135,36 @@ describe("EpisodeStore", () => {
       source: "heartbeat",
       sessionKey: "hb-1",
       outcome: "failure",
+      projectName: "personal-assistant",
+      jobName: "job-alpha",
       issueId: "9001",
       pullRequestId: "77",
+      detailedMemoryFile: "memory/a.md",
       category: "heartbeat",
+      skillsUsed: ["heartbeat-runbook"],
     }));
     store.insertEpisode(makeEpisode("other", {
       source: "telegram",
       sessionKey: "tg-1",
       outcome: "success",
+      projectName: "other-project",
+      jobName: "job-beta",
       issueId: "42",
       pullRequestId: "88",
+      detailedMemoryFile: "memory/b.md",
       category: "chat",
+      skillsUsed: ["integrations"],
     }));
 
     expect(store.listEpisodes({ source: "heartbeat" }).map((episode) => episode.id)).toEqual(["match-1"]);
     expect(store.listEpisodes({ outcome: "failure" }).map((episode) => episode.id)).toEqual(["match-1"]);
     expect(store.listEpisodes({ sessionKey: "hb-1" }).map((episode) => episode.id)).toEqual(["match-1"]);
+    expect(store.listEpisodes({ projectName: "personal-assistant" }).map((episode) => episode.id)).toEqual(["match-1"]);
+    expect(store.listEpisodes({ jobName: "job-alpha" }).map((episode) => episode.id)).toEqual(["match-1"]);
     expect(store.listEpisodes({ issueId: "9001", pullRequestId: "77" }).map((episode) => episode.id)).toEqual(["match-1"]);
+    expect(store.listEpisodes({ detailedMemoryFile: "memory/b.md" }).map((episode) => episode.id)).toEqual(["other"]);
     expect(store.listEpisodes({ category: "chat" }).map((episode) => episode.id)).toEqual(["other"]);
+    expect(store.listEpisodes({ skillUsed: "heartbeat-runbook" }).map((episode) => episode.id)).toEqual(["match-1"]);
   });
 
   it("applies the limit parameter after sorting", () => {
