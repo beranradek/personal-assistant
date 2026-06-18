@@ -837,6 +837,75 @@ The first eval fixture set should intentionally stay small and hand-auditable:
    - two episodes with similar wording but different identity/outcome
    - validates ranking and exact-filter interplay
 
+## Retention and promotion policy draft
+
+The next major design question after slices 4 and 6 is not "store more", but "decide what stays episodic and what gets promoted".
+
+### Default retention stance
+
+For v1:
+
+- keep `daily/*.jsonl` as immutable ground truth
+- keep `episodes.db` as the structured mid-term layer
+- do **not** automatically prune episode rows aggressively in the first rollout
+- instead, measure growth and retrieval quality first
+
+Rationale:
+
+- premature pruning makes debugging and evaluation harder
+- current corpus size is still small enough that auditability matters more than optimization
+
+### First retention thresholds to measure before enforcing
+
+Do not hard-code deletion yet, but add these as planning thresholds for later enforcement:
+
+1. row count in `episodes`
+2. total `episodes.db` size on disk
+3. retrieval latency for exact filtered queries
+4. retrieval latency for `episode_search`
+
+Only after these are measured over real usage should retention move from "observe" to "enforce".
+
+### Promotion candidates
+
+Episodes should become candidates for promotion only when they satisfy one of these conditions:
+
+1. **Repeated successful workflow**
+   - same workflow succeeds repeatedly with similar steps
+   - likely candidate for procedural memory / skill improvement
+
+2. **Repeated failure or blocker**
+   - same gotcha recurs across tasks or projects
+   - likely candidate for semantic warning note or procedural guardrail
+
+3. **User-specific stable preference**
+   - repeated episode evidence supports a stable user preference/constraint
+   - likely candidate for semantic memory
+
+4. **Project-specific stable decision**
+   - repeated use of the same architectural or operational decision
+   - likely candidate for project memory / semantic note
+
+### Promotion non-goals for v1
+
+These should explicitly stay out of scope in the first rollout:
+
+- automatic skill file edits from episodes
+- automatic markdown memory writes from a single episode
+- autonomous episode summarization with irreversible compression
+- deletion of source episodes immediately after promotion
+
+### Suggested later promotion pipeline
+
+Once write-path and evaluation are stable, the next safe sequence is:
+
+1. detect promotion candidates from repeated patterns
+2. prepare human-auditable proposed semantic/procedural deltas
+3. review/verify those proposals
+4. only then write to `MEMORY.md`, `memory/*.md`, or `skills/`
+
+This keeps episodic memory as evidence-first infrastructure rather than turning it into another opaque autonomous summarizer.
+
 ## Recommended first implementation order
 
 1. Slice 1 — enrich audit/task identity
