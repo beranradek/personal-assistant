@@ -757,6 +757,35 @@ Before changing runtime code again, the next implementation pass should answer t
    - Keep using sanitized builder output
    - Do not bypass redaction by attaching raw prompt/tool payloads at write time
 
+### Proposed Slice 4 boundary decision table
+
+The next implementation pass should start from this default matrix:
+
+| Boundary candidate | Emit episode by default? | Reason |
+| --- | --- | --- |
+| Normal user/assistant turn with non-empty assistant response | Yes, behind opt-in flag | Highest value, bounded naturally by finalized turn |
+| Heartbeat that actually completed a concrete project step | Yes, selectively | Useful for longitudinal project recall |
+| Heartbeat that only checked status / no-op | No | Too noisy, little replay value |
+| Session compaction event with no clearly bounded task window | No | Risk of duplicate/synthetic episodes |
+| Session compaction event linked to an already bounded completed task | Maybe later | Could be useful, but only after dedup rules are proven |
+| Tool failure without final assistant response | Yes, if bounded window is still coherent | Important for recurring failure/gotcha recall |
+| Partial turn interrupted by backend/process failure | No in first rollout | Harder to guarantee clean boundaries and non-duplication |
+
+### Proposed Slice 4 rollout phases
+
+1. **Phase 4A**
+   - opt-in emission only for finalized interactive turns
+   - sources: `terminal`, `telegram`, `slack`, `github`
+   - skip heartbeat and compaction
+
+2. **Phase 4B**
+   - add selected non-no-op heartbeat completions
+   - require explicit allowlist for categories/projects
+
+3. **Phase 4C**
+   - evaluate whether compaction-linked emission is useful at all
+   - keep this phase optional; do not assume it is necessary
+
 ### Safe follow-up checklist for Slice 6
 
 The evaluation harness should be designed before the next code slice with these minimal fixtures:
@@ -779,6 +808,34 @@ The evaluation harness should be designed before the next code slice with these 
 5. `growth-and-latency-smoke`
    - insert/query over a small fixture corpus
    - capture simple timing and row-count baselines for future comparison
+
+### Proposed initial fixture corpus for Slice 6
+
+The first eval fixture set should intentionally stay small and hand-auditable:
+
+1. `github-issue-success`
+   - coding task with `projectName`, `jobName`, `issueId`
+   - final successful outcome
+
+2. `github-issue-failure`
+   - similar project/issue space
+   - recurring blocker or tool failure
+
+3. `heartbeat-project-progress`
+   - non-no-op heartbeat with concrete project step
+   - validates cross-source episodic recall
+
+4. `chat-admin-workflow`
+   - user-facing admin/task-assistant workflow
+   - non-coding but still procedural
+
+5. `degraded-store-startup`
+   - synthetic broken/incompatible `episodes.db`
+   - startup should keep assistant alive without episodic tools
+
+6. `near-match-retrieval`
+   - two episodes with similar wording but different identity/outcome
+   - validates ranking and exact-filter interplay
 
 ## Recommended first implementation order
 
