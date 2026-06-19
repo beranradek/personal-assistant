@@ -1323,6 +1323,95 @@ The reflection integration should be considered healthy when:
 3. disabling episodic auto-write does not break the existing reflection pipeline
 4. reflection output remains readable and higher-level than raw episodic retrieval
 
+## Minimal episode schema v1 draft
+
+The first rollout should keep the episode object intentionally small enough to stay deterministic and auditable, while still supporting exact recall and outcome-aware ranking.
+
+### Required fields for every v1 episode
+
+These should exist on every persisted episode record:
+
+- `id`
+- `startedAt`
+- `endedAt`
+- `source`
+- `sessionKey`
+- `action`
+- `summary`
+- `outcome`
+- `successScore`
+- `toolsUsed`
+- `trajectoryStepCount`
+
+Rationale:
+
+- these fields are enough to identify a bounded experience
+- they support recency, outcome, and rough complexity ranking
+- they do not require speculative LLM-only enrichment
+
+### Required structured identity fields when available
+
+These should remain optional at schema level but mandatory to preserve when the upstream context already knows them:
+
+- `projectName`
+- `jobName`
+- `issueId`
+- `pullRequestId`
+- `skillUsed`
+- `category`
+
+Rationale:
+
+- exact work recall depends on them
+- omitting already-known identity would throw away the highest-value retrieval signal
+
+### Recommended optional v1 evidence fields
+
+These are useful in v1 but should stay nullable/optional:
+
+- `why`
+- `blockers`
+- `errors`
+- `evidenceIncomplete`
+- `tags`
+- `trajectoryKinds`
+
+Rationale:
+
+- they improve failure recall and debugging
+- but they may be absent for simple successful turns
+
+### Fields that should stay derived, not authoritative
+
+The following should be computed or projected from stored data rather than treated as separate authoritative truth:
+
+- ranking score
+- match explanation
+- promotion candidate status
+- reflection aggregates
+
+This avoids storing stale secondary interpretations that can drift from source evidence.
+
+### Fields explicitly out of scope for v1
+
+Do not make these required in the first rollout:
+
+- full raw transcript duplication
+- raw `toolInput` / `toolResult`
+- LLM-written long-form retrospectives
+- graph edges between episodes
+- reward/critic scores
+- autonomous memory-edit instructions
+
+### First schema health criteria
+
+The minimal v1 schema is good enough when:
+
+1. exact recall by project/job/issue/PR works without needing transcript search
+2. failure episodes preserve enough blocker/error context to prevent repeated mistakes
+3. successful simple episodes can be stored without fabricating missing fields
+4. retrieval and reflection can derive richer views without mutating the source episode object
+
 ## Risks and guardrails
 
 1. **Over-storage / noise accumulation**
