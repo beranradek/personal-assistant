@@ -35,6 +35,7 @@ import type { AgentBackend, StreamEvent, AgentTurnResult } from "./interface.js"
 import type { AuditTaskContext, Config, SessionMessage } from "../core/types.js";
 import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
+import { maybeAutoWriteEpisode } from "../memory/episodes/emitter.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { createLogger } from "../core/logger.js";
 import { appendPromptLog } from "../core/prompt-log.js";
@@ -537,7 +538,7 @@ export async function createCodexBackend(
 
       await saveInteraction(sessionKey, turnMessages, config, redact);
       turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
-      await appendAuditEntry(config.security.workspace, {
+      const auditEntry = {
         timestamp: new Date().toISOString(),
         source: sessionKey.split("--")[0],
         sessionKey,
@@ -545,7 +546,9 @@ export async function createCodexBackend(
         userMessage: message,
         assistantResponse: responseText,
         ...(taskContext ? { taskContext } : {}),
-      }, redact);
+      } as const;
+      await appendAuditEntry(config.security.workspace, auditEntry, redact);
+      await maybeAutoWriteEpisode(config, auditEntry);
 
       yield {
         type: "result",
@@ -623,7 +626,7 @@ export async function createCodexBackend(
 
         await saveInteraction(sessionKey, turnMessages, config, redact);
         turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
-        await appendAuditEntry(config.security.workspace, {
+        const auditEntry = {
           timestamp: new Date().toISOString(),
           source: sessionKey.split("--")[0],
           sessionKey,
@@ -631,7 +634,9 @@ export async function createCodexBackend(
           userMessage: message,
           assistantResponse: responseText,
           ...(taskContext ? { taskContext } : {}),
-        }, redact);
+        } as const;
+        await appendAuditEntry(config.security.workspace, auditEntry, redact);
+        await maybeAutoWriteEpisode(config, auditEntry);
 
         return { response: responseText, messages: turnMessages, partial: false };
       } catch (err) {

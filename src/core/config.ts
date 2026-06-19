@@ -102,6 +102,15 @@ export const DEFAULTS: Config = {
     extraPaths: [],
     indexDailyLogs: true,
     dailyLogRetentionDays: 90,
+    episodicMemory: {
+      autoWrite: {
+        enabled: false,
+        dryRun: false,
+        sources: ["github"],
+        requireTaskContext: true,
+        maxWindowEntries: 200,
+      },
+    },
   },
   reflection: {
     enabled: true,

@@ -35,6 +35,7 @@ import {
   flushPreCompactionContext,
 } from "../session/compactor.js";
 import { TtlMap, DAY_MS } from "./ttl-map.js";
+import { maybeAutoWriteEpisode } from "../memory/episodes/emitter.js";
 
 // ---------------------------------------------------------------------------
 // SDK session ID cache
@@ -461,7 +462,7 @@ export async function runAgentTurn(
   sessionTurnCounts.set(sessionKey, (sessionTurnCounts.get(sessionKey) ?? 0) + 1);
 
   // 7. Append audit entry
-  await appendAuditEntry(config.security.workspace, {
+  const auditEntry = {
     timestamp: new Date().toISOString(),
     source: sessionKey.split("--")[0],
     sessionKey,
@@ -469,7 +470,9 @@ export async function runAgentTurn(
     userMessage: message,
     assistantResponse: responseText,
     ...(taskContext ? { taskContext } : {}),
-  }, redact);
+  } as const;
+  await appendAuditEntry(config.security.workspace, auditEntry, redact);
+  await maybeAutoWriteEpisode(config, auditEntry);
 
   return { response: responseText, messages: turnMessages, partial };
 }
@@ -700,7 +703,7 @@ export async function* streamAgentTurn(
   sessionTurnCounts.set(sessionKey, (sessionTurnCounts.get(sessionKey) ?? 0) + 1);
 
   // Append audit entry
-  await appendAuditEntry(config.security.workspace, {
+  const auditEntry = {
     timestamp: new Date().toISOString(),
     source: sessionKey.split("--")[0],
     sessionKey,
@@ -708,7 +711,9 @@ export async function* streamAgentTurn(
     userMessage: message,
     assistantResponse: responseText,
     ...(taskContext ? { taskContext } : {}),
-  }, redact);
+  } as const;
+  await appendAuditEntry(config.security.workspace, auditEntry, redact);
+  await maybeAutoWriteEpisode(config, auditEntry);
 
   // Yield final result event
   yield { type: "result", response: responseText, messages: turnMessages, partial };
