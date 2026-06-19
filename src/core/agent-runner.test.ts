@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { Config } from "./types.js";
+import type { AuditEntry, Config } from "./types.js";
+
+const auditEntries: AuditEntry[] = [];
+const episodeStoreMock = {
+  insertEpisode: vi.fn(),
+  getEpisodeById: vi.fn(() => null),
+  listEpisodes: vi.fn(() => []),
+  close: vi.fn(),
+};
 
 // ---------------------------------------------------------------------------
 // Mocks – must be declared before importing the module under test
@@ -17,7 +25,16 @@ vi.mock("../session/manager.js", () => ({
 
 // Mock daily audit log
 vi.mock("../memory/daily-log.js", () => ({
-  appendAuditEntry: vi.fn(),
+  appendAuditEntry: vi.fn(async (_workspaceDir: string, entry: AuditEntry) => {
+    auditEntries.push(entry);
+  }),
+  readAuditEntries: vi.fn(async (_workspaceDir: string, date: string) =>
+    auditEntries.filter((entry) => entry.timestamp.startsWith(`${date}T`))),
+}));
+
+// Mock episodic store
+vi.mock("../memory/episodes/store.js", () => ({
+  createEpisodeStore: vi.fn(() => episodeStoreMock),
 }));
 
 // Mock bash security hook
@@ -37,7 +54,8 @@ import {
 } from "./agent-runner.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { saveInteraction } from "../session/manager.js";
-import { appendAuditEntry } from "../memory/daily-log.js";
+import { appendAuditEntry, readAuditEntries } from "../memory/daily-log.js";
+import { createEpisodeStore } from "../memory/episodes/store.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,6 +128,18 @@ describe("agent-runner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearSdkSessionIds();
+    auditEntries.length = 0;
+    vi.mocked(appendAuditEntry).mockImplementation(async (_workspaceDir: string, entry: AuditEntry) => {
+      auditEntries.push(entry);
+    });
+    vi.mocked(readAuditEntries).mockImplementation(async (_workspaceDir: string, date: string) =>
+      auditEntries.filter((entry) => entry.timestamp.startsWith(`${date}T`)));
+    episodeStoreMock.insertEpisode.mockReset();
+    episodeStoreMock.getEpisodeById.mockReset();
+    episodeStoreMock.getEpisodeById.mockReturnValue(null);
+    episodeStoreMock.listEpisodes.mockReset();
+    episodeStoreMock.listEpisodes.mockReturnValue([]);
+    episodeStoreMock.close.mockReset();
     vi.useFakeTimers({ now: new Date("2025-06-15T12:00:00.000Z") });
   });
 
@@ -813,6 +843,102 @@ describe("agent-runner", () => {
         runAgentTurn("Hi", sessionKey, agentOptions, config),
       ).rejects.toThrow("ProcessTransport is not ready");
     });
+
+    it("auto-writes an episode after a finalized github turn when enabled", async () => {
+      const config = makeConfig({
+        memory: {
+          search: {
+            enabled: false,
+            hybridWeights: { vector: 0.7, keyword: 0.3 },
+            minScore: 0.3,
+            maxResults: 10,
+            chunkTokens: 512,
+            chunkOverlap: 64,
+          },
+          extraPaths: [],
+          episodicMemory: {
+            autoWrite: {
+              enabled: true,
+              dryRun: false,
+              sources: ["github"],
+              requireTaskContext: true,
+              maxWindowEntries: 50,
+            },
+          },
+        } as Config["memory"],
+      });
+      const sessionKey = "github--owner/repo#12";
+      const taskContext = {
+        projectName: "repo",
+        jobName: "owner/repo#12",
+        issueId: "owner/repo#12",
+        category: "github-issue",
+      };
+      auditEntries.push(
+        {
+          timestamp: "2025-06-15T11:45:00.000Z",
+          source: "github",
+          sessionKey,
+          type: "interaction",
+          userMessage: "Previous task",
+          assistantResponse: "Previous response",
+          taskContext,
+        },
+        {
+          timestamp: "2025-06-15T11:58:00.000Z",
+          source: "github",
+          sessionKey,
+          type: "tool_call",
+          toolName: "functions.exec_command",
+          toolInput: { cmd: "pnpm test" },
+          toolResult: { exitCode: 0 },
+          taskContext,
+        },
+      );
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            message: {
+              content: [{ type: "text", text: "Implemented the fix." }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            result: "Implemented the fix.",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      await runAgentTurn(
+        "Fix issue 12",
+        sessionKey,
+        agentOptions,
+        config,
+        taskContext,
+      );
+
+      expect(createEpisodeStore).toHaveBeenCalledWith("/tmp/data/episodes.db");
+      expect(episodeStoreMock.getEpisodeById).toHaveBeenCalledOnce();
+      expect(episodeStoreMock.insertEpisode).toHaveBeenCalledOnce();
+      expect(episodeStoreMock.close).toHaveBeenCalledOnce();
+      expect(episodeStoreMock.insertEpisode).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "github",
+          sessionKey,
+          action: "Fix issue 12",
+          summary: "Implemented the fix.",
+          projectName: "repo",
+          issueId: "owner/repo#12",
+          category: "github-issue",
+          toolsUsed: ["functions.exec_command"],
+        }),
+      );
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -1319,6 +1445,59 @@ describe("agent-runner", () => {
       // Tool should NOT be re-yielded from assistant message (already streamed)
       const toolStarts = events.filter((e) => e.type === "tool_start");
       expect(toolStarts).toHaveLength(0);
+    });
+
+    it("does not auto-write stream turns when required taskContext is missing", async () => {
+      const config = makeConfig({
+        memory: {
+          search: {
+            enabled: false,
+            hybridWeights: { vector: 0.7, keyword: 0.3 },
+            minScore: 0.3,
+            maxResults: 10,
+            chunkTokens: 512,
+            chunkOverlap: 64,
+          },
+          extraPaths: [],
+          episodicMemory: {
+            autoWrite: {
+              enabled: true,
+              dryRun: false,
+              sources: ["telegram"],
+              requireTaskContext: true,
+              maxWindowEntries: 50,
+            },
+          },
+        } as Config["memory"],
+      });
+      const sessionKey = "telegram--123456";
+
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([
+          {
+            type: "assistant",
+            session_id: "sdk-stream-skip",
+            message: {
+              content: [{ type: "text", text: "No task context here." }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            session_id: "sdk-stream-skip",
+            result: "No task context here.",
+          },
+        ]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      await collectEvents(
+        streamAgentTurn("Chat reply", sessionKey, agentOptions, config),
+      );
+
+      expect(createEpisodeStore).not.toHaveBeenCalled();
+      expect(episodeStoreMock.insertEpisode).not.toHaveBeenCalled();
     });
   });
 });
