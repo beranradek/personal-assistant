@@ -1262,6 +1262,67 @@ In addition to the earlier fixture corpus list, the first scorecard should expli
 
 This makes Slice 6 useful as a real rollout gate rather than a thin smoke test.
 
+## Reflection integration draft
+
+The episodic layer should not create a second independent summarization pipeline that competes with existing `daily-reflection` and `weekly-reflection`.
+
+### Proposed ownership boundaries
+
+In v1, the responsibilities should stay split like this:
+
+- `daily/*.jsonl`
+  - immutable ground-truth audit trail
+- `episodes.db`
+  - bounded, structured task experiences for exact/semantic episodic recall
+- `daily-reflection`
+  - human-readable daily synthesis across many events, not just one episode
+- `weekly-reflection`
+  - broader pattern extraction and trend spotting across days
+- `MEMORY.md` / `memory/*.md`
+  - durable curated facts, preferences, and project decisions
+
+### What episodic memory should feed into reflection
+
+Once Slice 4 exists, reflections should consume episode-level signals as inputs, not rebuild them from scratch when avoidable.
+
+Useful v1 reflection inputs from episodes:
+
+- counts by `outcome`
+- repeated blockers/errors
+- repeated tools/workflows
+- repeated project or job identities
+- candidate promotion hints
+
+This reduces duplicated extraction logic and keeps reflections aligned with the same structured evidence used for retrieval.
+
+### What reflections should not do in v1
+
+To keep the boundary clean, `daily-reflection` and `weekly-reflection` should not:
+
+- rewrite or mutate source episodes
+- become the only place where blockers/outcomes are computed
+- silently generate new procedural memory from a single reflection pass
+
+Reflections may summarize patterns, but episodes remain the underlying evidence objects.
+
+### Proposed first integration order
+
+The safest order after Slice 4/6 is:
+
+1. keep current reflections working unchanged
+2. add optional episode-derived aggregates as extra reflection inputs
+3. compare reflection quality and duplication against the old path
+4. only then delete overlapping extraction logic, if duplication is proven
+
+### First integration acceptance criteria
+
+The reflection integration should be considered healthy when:
+
+1. reflections can mention repeated blockers/workflows with episode-backed provenance
+2. the same blocker or success pattern is not recomputed inconsistently in two places
+3. disabling episodic auto-write does not break the existing reflection pipeline
+4. reflection output remains readable and higher-level than raw episodic retrieval
+
 ## Risks and guardrails
 
 1. **Over-storage / noise accumulation**
