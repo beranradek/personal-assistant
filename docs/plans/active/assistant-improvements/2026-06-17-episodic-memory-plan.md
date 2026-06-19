@@ -1186,6 +1186,82 @@ Suggested tests:
 - dynamic-state / workflow-gotcha tests inspired by LongMemEval-V2 categories
 - latency and storage-growth tracking inspired by MemBench
 
+## Slice 6 evaluation scorecard draft
+
+The first evaluation harness should not stop at "query returned something". It should score whether retrieval returned the right kind of memory for the question.
+
+### Proposed per-fixture fields
+
+Each eval fixture should define at least:
+
+- fixture id
+- source scenario
+- inserted episodes / audit windows
+- query text or structured lookup input
+- expected retrieval mode
+  - exact episodic
+  - semantic episodic
+  - semantic markdown
+  - raw-audit fallback
+- expected must-hit evidence
+- expected must-avoid evidence
+- expected top-k constraints
+
+### Proposed metrics per query
+
+For each fixture query, record:
+
+1. `modeCorrect`
+   - whether the routing layer chose the expected memory tier first
+2. `mustHitRecall`
+   - whether required episode or fact identifiers appeared in the returned set
+3. `mustAvoidPrecision`
+   - whether known distractors were correctly excluded
+4. `top1Correct`
+   - whether the first returned result is the expected primary match
+5. `topKBounded`
+   - whether the result set stayed within the intended `k` without noisy overflow
+6. `latencyMs`
+   - end-to-end retrieval latency
+7. `explanationPresent`
+   - whether compact provenance/reason-for-match is present in the response payload
+
+### Minimum pass thresholds for v1
+
+Before broadening write-path automation, the first harness should aim for:
+
+- `modeCorrect` on all exact-identity fixtures
+- `top1Correct` on most exact-identity fixtures
+- no `mustAvoidPrecision` failures on anti-pattern/failure fixtures
+- bounded latency without obvious regression versus current retrieval-only startup
+- no degraded-startup fixture failures
+
+### First failure interpretation rules
+
+The harness should distinguish between these regression classes:
+
+- **routing regression**
+  - wrong memory tier chosen even though the right data exists
+- **ranking regression**
+  - correct tier chosen but wrong episode outranks the expected one
+- **noise regression**
+  - distractor episodes or broad semantic notes swamp the answer set
+- **availability regression**
+  - degraded store or startup path harms assistant availability
+- **latency regression**
+  - retrieval becomes materially slower after enabling episodic features
+
+### Recommended first golden fixtures
+
+In addition to the earlier fixture corpus list, the first scorecard should explicitly include:
+
+1. exact GitHub issue follow-up with two similar issues in the same repo
+2. repeated deploy failure where the correct answer is a prior failed episode, not a successful unrelated deploy
+3. stable preference question where markdown memory should outrank episodic recall
+4. degraded episodic store startup where assistant still serves semantic memory
+
+This makes Slice 6 useful as a real rollout gate rather than a thin smoke test.
+
 ## Risks and guardrails
 
 1. **Over-storage / noise accumulation**
