@@ -1555,6 +1555,56 @@ The emission lifecycle is good enough for the first coding pass when:
 3. skipped writes are explainable by explicit policy reasons
 4. write failures do not degrade the already-finished assistant turn
 
+## Degraded-store startup test matrix draft
+
+One remaining gap before broadening the rollout is explicit runtime coverage for damaged or incompatible `episodes.db` startup paths.
+
+### Goal for v1
+
+Prove that episodic features can fail closed while the assistant still starts and serves non-episodic memory features.
+
+### Minimum startup scenarios to cover
+
+The first degraded-store matrix should include:
+
+1. missing `episodes.db`
+   - expected result: clean initialization or no-tool degraded mode, depending on call site
+2. corrupted SQLite file
+   - expected result: assistant startup still succeeds, episodic tools disabled
+3. incompatible schema / unexpected `user_version`
+   - expected result: assistant startup still succeeds, episodic tools disabled or migration rejected safely
+4. partial child-table mismatch
+   - expected result: reads/writes fail closed without crashing the daemon/terminal startup
+5. store open permission failure
+   - expected result: assistant startup still succeeds in degraded mode
+
+### Assertions per scenario
+
+For each degraded-store fixture, assert at minimum:
+
+- daemon startup exit path remains healthy
+- terminal startup exit path remains healthy
+- existing semantic memory tools still register
+- episodic MCP tools are either disabled cleanly or return controlled unavailable errors
+- no uncaught exception escapes to the top-level startup path
+
+### Optional second-wave scenarios
+
+These are useful after the minimum matrix exists:
+
+- write-path failure after successful open
+- store becomes unreadable between startup and first query
+- duplicate row conflict during write-path
+
+### First acceptance criteria
+
+The degraded-store coverage is good enough when:
+
+1. every known startup failure mode degrades predictably
+2. non-episodic assistant capabilities still work
+3. user-visible behavior is controlled and explainable
+4. the rollout can rely on tests, not only on manual confidence, for failure isolation
+
 ## Risks and guardrails
 
 1. **Over-storage / noise accumulation**
