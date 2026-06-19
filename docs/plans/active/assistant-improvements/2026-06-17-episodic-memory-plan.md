@@ -966,6 +966,114 @@ If Slice 4 rollout causes problems, the response order should be:
 4. compare row-growth and latency before/after rollout
 5. only consider schema/data repair after narrowing the active emission surface
 
+## Retrieval routing and injection draft
+
+Before adding broader automatic writes, the read path should also be explicit about which memory layer answers which class of question.
+
+### Proposed retrieval order
+
+For assistant turns that need memory, the preferred order in v1 should be:
+
+1. current turn context and live session/task state
+2. exact episodic recall by structured identity
+3. semantic episodic recall over sanitized summaries
+4. semantic markdown memory (`MEMORY.md`, `memory/*.md`)
+5. daily logs or raw audit search only as a deeper fallback
+
+This keeps the assistant from jumping to broad semantic notes when the user is actually asking about a specific prior run.
+
+### Query classes and routing
+
+#### 1. Exact work recall
+
+Use exact episodic retrieval first when the prompt or tool context contains one of:
+
+- `projectName`
+- `jobName`
+- `issueId`
+- `pullRequestId`
+- `sessionKey`
+- `skillUsed`
+
+Expected behavior:
+
+- filter by exact identity first
+- rank within the filtered set by recency plus outcome relevance
+- only fall back to semantic episodic search if the exact filter returns nothing useful
+
+#### 2. Near-match workflow recall
+
+Use semantic episodic retrieval first when the prompt is about a similar but not identical task, for example:
+
+- "How did we solve a similar deploy failure before?"
+- "Did we already debug this kind of startup problem?"
+
+Expected behavior:
+
+- search over sanitized episode fields (`action`, `summary`, `why`, `toolsUsed`, `blockers`, `errors`)
+- prefer `success` and `partial_success` episodes unless the user is clearly asking about failures
+- return compact provenance so the model can judge whether the match is truly relevant
+
+#### 3. Anti-pattern / failure recall
+
+When the user intent is about avoiding repeated mistakes, failed episodes should become first-class candidates instead of being hidden behind successful ones.
+
+Expected behavior:
+
+- route to episodic retrieval with `outcome in (failure, partial_success)` preference
+- favor exact identity when available
+- surface `blockers`, `errors`, and last-known outcome before broader semantic memory
+
+This is the safest place for a future explicit API like "what failed last time?" without needing a separate storage model.
+
+#### 4. Stable facts or preferences
+
+When the user asks for long-lived facts, preferences, or standing decisions, markdown semantic memory should usually win over episodic recall.
+
+Examples:
+
+- user preferences
+- server facts
+- standing project rules
+- durable business goals
+
+Expected behavior:
+
+- query semantic memory first
+- optionally add 1 supporting episode only when provenance or recency matters
+
+### Injection format guardrails
+
+Even when episodic retrieval finds rich history, the assistant should not inject raw episode payloads into the model context.
+
+Recommended v1 injected shape:
+
+- episode id
+- timestamp range
+- why it matched
+- action
+- summary
+- outcome
+- project/job/issue/PR identity if present
+- `trajectoryStepCount` and `trajectoryKinds`
+- short blockers/errors only when relevant
+
+Avoid injecting:
+
+- raw `trajectory`
+- raw `semanticEmbeddingText`
+- large unbounded evidence blobs
+- duplicated full audit-log text
+
+### First success criteria for retrieval routing
+
+The routing design should be considered healthy when:
+
+1. exact identity prompts return the correct prior run before broad semantic notes
+2. near-match prompts return a small number of actually comparable episodes
+3. failure-avoidance prompts surface prior blockers without swamping the model with noise
+4. stable preference questions still resolve primarily from curated markdown memory
+
 ## Recommended first implementation order
 
 1. Slice 1 — enrich audit/task identity
