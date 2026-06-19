@@ -1412,6 +1412,81 @@ The minimal v1 schema is good enough when:
 3. successful simple episodes can be stored without fabricating missing fields
 4. retrieval and reflection can derive richer views without mutating the source episode object
 
+## Deterministic blocker and why extraction draft
+
+The first rollout should avoid introducing an LLM dependency just to label every episode with a polished explanation.
+
+### Goal for v1
+
+Produce useful `blockers` and a short `why` summary when the signal is already obvious in structured audit evidence, and leave them empty otherwise.
+
+This is better than fabricating low-confidence reasoning text.
+
+### Safe v1 extraction sources
+
+The first deterministic pass should only derive from signals such as:
+
+- error audit entries
+- tool failures or tool-result status fields
+- explicit assistant/user phrases that match narrow blocker patterns
+- final success/failure transition in the bounded audit window
+
+### Recommended blocker heuristics
+
+Populate `blockers` only for high-confidence cases such as:
+
+- command/tool execution error
+- network/API failure
+- auth/permission failure
+- missing file/resource
+- test/build failure
+- validation/schema failure
+- explicit user wait-state
+
+These can start as normalized labels or short phrases, for example:
+
+- `command_failed`
+- `auth_denied`
+- `network_unavailable`
+- `missing_resource`
+- `test_failure`
+- `waiting_for_user`
+
+### Recommended why heuristics
+
+`why` should stay short and mechanical in v1. Prefer a compact template-based explanation over free-form generation.
+
+Possible construction order:
+
+1. identify the last meaningful task transition
+2. identify the strongest outcome signal
+3. optionally attach one high-confidence blocker or success reason
+
+Example shapes:
+
+- `Resolved GitHub issue workflow after test failure fix`
+- `Stopped on auth_denied while updating repository settings`
+- `Collected project status without code changes`
+
+### Explicit skip rules
+
+Do not populate `why` or `blockers` when:
+
+- the only evidence is vague conversational text
+- multiple conflicting failure causes exist in the same short window
+- the bounded window is too small or truncated to infer a stable outcome
+
+In those cases, null/empty is preferred.
+
+### First extraction acceptance criteria
+
+The deterministic extraction is good enough for v1 when:
+
+1. obvious command/test/auth/network failures are captured consistently
+2. successful simple workflows do not invent blockers
+3. ambiguous chatty sessions mostly leave `why` sparse instead of hallucinated
+4. later LLM enrichment can be added as a separate optional layer without changing source truth
+
 ## Risks and guardrails
 
 1. **Over-storage / noise accumulation**
