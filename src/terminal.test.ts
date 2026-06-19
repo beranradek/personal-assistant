@@ -28,6 +28,10 @@ vi.mock("./memory/vector-store.js", () => ({
   createVectorStore: vi.fn(),
 }));
 
+vi.mock("./memory/episodes/store.js", () => ({
+  createEpisodeStore: vi.fn(),
+}));
+
 vi.mock("./memory/indexer.js", () => ({
   createIndexer: vi.fn(),
 }));
@@ -92,6 +96,7 @@ import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
 import { createEmbeddingProvider } from "./memory/embeddings.js";
 import { createVectorStore } from "./memory/vector-store.js";
+import { createEpisodeStore } from "./memory/episodes/store.js";
 import { createIndexer } from "./memory/indexer.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
@@ -235,6 +240,12 @@ describe("terminal", () => {
       vi.mocked(ensureWorkspace).mockResolvedValue(undefined);
       vi.mocked(createEmbeddingProvider).mockResolvedValue(mockEmbedder);
       vi.mocked(createVectorStore).mockReturnValue(mockStore as any);
+      vi.mocked(createEpisodeStore).mockReturnValue({
+        insertEpisode: vi.fn(),
+        getEpisodeById: vi.fn(),
+        listEpisodes: vi.fn(() => []),
+        close: vi.fn(),
+      } as any);
       vi.mocked(createIndexer).mockReturnValue(mockIndexer);
       vi.mocked(readMemoryFiles).mockResolvedValue("memory content");
       vi.mocked(createMemoryServer).mockReturnValue({} as any);
@@ -331,6 +342,26 @@ describe("terminal", () => {
       expect(mockCronManager.stop).toHaveBeenCalled();
       expect(mockStore.close).toHaveBeenCalled();
       expect(mockEmbedder.close).toHaveBeenCalled();
+    });
+
+    it("continues startup when episodic store open fails", async () => {
+      const config = makeConfig();
+      setupSessionMocks(config);
+      vi.mocked(createEpisodeStore).mockImplementation(() => {
+        throw new Error("episodes.db corrupted");
+      });
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
+
+      await createTerminalSession("/app");
+
+      expect(createMemoryServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.any(Function),
+          redact: expect.any(Function),
+        }),
+      );
+      const deps = vi.mocked(createMemoryServer).mock.calls[0][0] as Record<string, unknown>;
+      expect(deps).not.toHaveProperty("listEpisodes");
     });
   });
 

@@ -30,6 +30,10 @@ vi.mock("./memory/vector-store.js", () => ({
   createVectorStore: vi.fn(),
 }));
 
+vi.mock("./memory/episodes/store.js", () => ({
+  createEpisodeStore: vi.fn(),
+}));
+
 vi.mock("./memory/indexer.js", () => ({
   createIndexer: vi.fn(),
 }));
@@ -145,6 +149,7 @@ import { readMemoryFiles } from "./memory/files.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
 import { createEmbeddingProvider } from "./memory/embeddings.js";
 import { createVectorStore } from "./memory/vector-store.js";
+import { createEpisodeStore } from "./memory/episodes/store.js";
 import { createIndexer } from "./memory/indexer.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
@@ -284,7 +289,6 @@ function makeMockIndexer() {
     syncIfDirty: vi.fn().mockResolvedValue(undefined),
     abort: vi.fn(),
     close: vi.fn(),
-    abort: vi.fn(),
   };
 }
 
@@ -346,6 +350,12 @@ function setupMocks(config: Config) {
   vi.mocked(ensureWorkspace).mockResolvedValue(undefined);
   vi.mocked(createEmbeddingProvider).mockResolvedValue(mockEmbedder);
   vi.mocked(createVectorStore).mockReturnValue(mockStore as any);
+  vi.mocked(createEpisodeStore).mockReturnValue({
+    insertEpisode: vi.fn(),
+    getEpisodeById: vi.fn(),
+    listEpisodes: vi.fn(() => []),
+    close: vi.fn(),
+  } as any);
   vi.mocked(createIndexer).mockReturnValue(mockIndexer);
   vi.mocked(readMemoryFiles).mockResolvedValue("memory content");
   vi.mocked(buildAgentOptions).mockReturnValue({
@@ -426,6 +436,26 @@ describe("daemon", () => {
     expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object), expect.objectContaining({ configDir: expect.any(String), redact: expect.any(Function) }));
     expect(createMemoryServer).toHaveBeenCalled();
     expect(createAssistantServer).toHaveBeenCalled();
+    expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
+  });
+
+  it("continues startup when episodic store open fails", async () => {
+    const config = makeConfig();
+    const { mockQueue, mockBackend } = setupMocks(config);
+    vi.mocked(createEpisodeStore).mockImplementation(() => {
+      throw new Error("episodes.db incompatible schema");
+    });
+
+    await startDaemon("/app");
+
+    expect(createMemoryServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        search: expect.any(Function),
+        redact: expect.any(Function),
+      }),
+    );
+    const deps = vi.mocked(createMemoryServer).mock.calls[0][0] as Record<string, unknown>;
+    expect(deps).not.toHaveProperty("listEpisodes");
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
   });
 
