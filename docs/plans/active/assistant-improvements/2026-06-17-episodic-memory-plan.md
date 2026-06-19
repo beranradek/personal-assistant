@@ -966,6 +966,80 @@ If Slice 4 rollout causes problems, the response order should be:
 4. compare row-growth and latency before/after rollout
 5. only consider schema/data repair after narrowing the active emission surface
 
+### Proposed Slice 4A feature-flag and config shape
+
+The first coding pass for automatic writes should avoid a single on/off boolean with hidden policy inside code.
+
+Prefer an explicit config shape that can be narrowed without redeploying schema or changing retrieval behavior.
+
+Suggested v1 config fields:
+
+- `episodicMemory.autoWrite.enabled`
+- `episodicMemory.autoWrite.sourcesAllowlist`
+- `episodicMemory.autoWrite.categoriesAllowlist`
+- `episodicMemory.autoWrite.minAssistantChars`
+- `episodicMemory.autoWrite.requireTaskContextForSources`
+- `episodicMemory.autoWrite.maxWindowEntries`
+- `episodicMemory.autoWrite.dryRun`
+
+### Intended behavior of the first config fields
+
+`enabled`
+
+- hard master switch for automatic episode emission
+- default should remain `false` until Slice 4A is explicitly rolled out
+
+`sourcesAllowlist`
+
+- limits early rollout to narrow sources such as `github` and optionally `terminal`
+- keeps `telegram`, `slack`, and `heartbeat` disabled until exact value is demonstrated
+
+`categoriesAllowlist`
+
+- optional second guard when source alone is too broad
+- helps exclude low-value categories such as trivial admin chatter
+
+`minAssistantChars`
+
+- skips very short turns that are unlikely to represent a meaningful bounded episode
+- reduces noise from acknowledgements or one-line operational replies
+
+`requireTaskContextForSources`
+
+- for selected sources, emit only when structured identity exists
+- useful for `github` and other project-linked workflows where exact recall matters most
+
+`maxWindowEntries`
+
+- bounds how much audit history a single emission attempt may inspect
+- keeps latency and failure blast radius predictable
+
+`dryRun`
+
+- computes builder/store eligibility and observability without persisting rows
+- useful for validating skip reasons and volume before enabling writes
+
+### Recommended first rollout defaults
+
+For the first production-like pass, the safest defaults are:
+
+- `enabled=false`
+- `sourcesAllowlist=[\"github\"]`
+- `categoriesAllowlist=[]`
+- `minAssistantChars=200`
+- `requireTaskContextForSources=[\"github\"]`
+- `maxWindowEntries` aligned with the deterministic builder bound
+- `dryRun=true` before the first real write rollout
+
+### First config acceptance criteria
+
+The first write-path config should be considered good enough when:
+
+1. it can narrow rollout by source without code edits
+2. it can switch between dry-run and real writes without changing retrieval tools
+3. it can disable writes immediately while preserving read-path health
+4. it makes rollout state visible in logs/metrics for every emission attempt
+
 ## Retrieval routing and injection draft
 
 Before adding broader automatic writes, the read path should also be explicit about which memory layer answers which class of question.
