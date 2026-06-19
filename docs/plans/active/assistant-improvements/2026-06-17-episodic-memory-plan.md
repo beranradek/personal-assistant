@@ -1487,6 +1487,74 @@ The deterministic extraction is good enough for v1 when:
 3. ambiguous chatty sessions mostly leave `why` sparse instead of hallucinated
 4. later LLM enrichment can be added as a separate optional layer without changing source truth
 
+## Slice 4A emission lifecycle draft
+
+The first automatic write-path should be tied to one explicit finalized-boundary hook, not scattered across multiple tool/backend code paths.
+
+### Preferred first call site
+
+For v1, the safest place to attempt automatic episode emission is:
+
+- after a bounded assistant turn/session segment is finalized
+- after the final audit entries for that segment are already persisted
+- before control fully returns to the outer caller, so observability can still record success/failure
+
+This keeps `daily/*.jsonl` as the source of truth and makes episode emission a derived post-processing step.
+
+### First lifecycle steps
+
+The first rollout should follow this exact sequence:
+
+1. identify a finalized boundary candidate
+2. check rollout config / source allowlist / minimum-shape requirements
+3. read the bounded audit window for that boundary
+4. build deterministic episode candidate
+5. compute idempotent episode id / duplicate key
+6. in `dryRun`, log skip/write decision only
+7. in write mode, insert only if duplicate check passes
+8. emit observability for `attempt`, `skip`, `success`, or `failure`
+
+### Boundary candidate requirements
+
+The first rollout boundary should only be considered valid when:
+
+- the assistant response exists and is finalized
+- the audit window is bounded and readable
+- the source is allowlisted
+- any required `taskContext` for that source is present
+
+If any of these fail, the emission should be skipped rather than partially inferred.
+
+### Duplicate prevention rules
+
+The first rollout should avoid duplicates without needing complex distributed coordination.
+
+Recommended v1 rules:
+
+- derive a deterministic episode id from bounded audit content plus source/session envelope
+- keep "one emission attempt per finalized boundary" as policy
+- treat duplicate insert/conflict as a benign `skip_duplicate`, not a hard failure
+- never generate a fresh random id on retry for the same boundary
+
+### Failure isolation rules
+
+Episode emission failure in Slice 4A should never invalidate the already-completed user-visible turn.
+
+Required behavior:
+
+- assistant response path remains successful even if episode build/write fails
+- write-path errors are logged and counted, not rethrown into the user turn
+- later retries or future turns may still succeed without repair of the failed turn
+
+### First lifecycle acceptance criteria
+
+The emission lifecycle is good enough for the first coding pass when:
+
+1. exactly one deterministic episode candidate is associated with one finalized boundary
+2. retries do not create duplicate rows
+3. skipped writes are explainable by explicit policy reasons
+4. write failures do not degrade the already-finished assistant turn
+
 ## Risks and guardrails
 
 1. **Over-storage / noise accumulation**
