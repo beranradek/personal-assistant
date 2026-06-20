@@ -32,7 +32,10 @@ import { createIndexer } from "./indexer.js";
 import { createRobustMemorySearch } from "./robust-search.js";
 import { createRedactor } from "../security/content-redaction.js";
 import { initializeEpisodeMemoryServer } from "./episodes/runtime-probes.js";
-import { initializeStartupMemoryServices } from "./startup-services.js";
+import {
+  initializeStartupMemoryServices,
+  runDegradedStartupMemoryServicesProbe,
+} from "./startup-services.js";
 
 function makeConfig(): Config {
   return {
@@ -125,6 +128,9 @@ describe("initializeStartupMemoryServices", () => {
     expect(result.episodeStore).toBe(episodeStore);
     expect(result.searchMemory).toBe(searchMemory);
     expect(result.redact).toBe(redact);
+    expect(result.fallbackTriggered).toBe(false);
+    expect(result.warningTriggered).toBe(false);
+    expect(result.episodicSurfaceExposed).toBe(true);
   });
 
   it("forwards episodic warning callback through the shared startup helper", async () => {
@@ -157,5 +163,39 @@ describe("initializeStartupMemoryServices", () => {
 
     expect(onEpisodeWarn).toHaveBeenCalledOnce();
     expect(onEpisodeWarn.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("reports degraded shared startup probe using the full startup-services path", async () => {
+    const config = makeConfig();
+    const embedder = { dimensions: 768, close: vi.fn(), embed: vi.fn(), embedBatch: vi.fn() };
+    const store = { close: vi.fn() };
+    const indexer = { close: vi.fn(), syncFiles: vi.fn(), markDirty: vi.fn(), isDirty: vi.fn(), syncIfDirty: vi.fn(), abort: vi.fn() };
+    const searchMemory = vi.fn(async () => []);
+    const redact = vi.fn((text: string) => text);
+
+    vi.mocked(createEmbeddingProvider).mockResolvedValue(embedder as any);
+    vi.mocked(createVectorStore).mockReturnValue(store as any);
+    vi.mocked(createIndexer).mockReturnValue(indexer as any);
+    vi.mocked(createRobustMemorySearch).mockReturnValue(searchMemory);
+    vi.mocked(createRedactor).mockReturnValue(redact);
+    vi.mocked(initializeEpisodeMemoryServer).mockImplementation(({ onWarn }) => {
+      onWarn?.(new Error("episodes.db incompatible schema"));
+      return {
+        episodeStore: undefined,
+        memoryServer: { name: "memory" },
+        assistantAvailable: true,
+        fallbackTriggered: true,
+        warningTriggered: true,
+        episodicSurfaceExposed: false,
+      };
+    });
+
+    const probe = await runDegradedStartupMemoryServicesProbe({ config });
+
+    expect(probe.actualMode).toBe("raw_audit_fallback");
+    expect(probe.assistantAvailable).toBe(true);
+    expect(probe.warningTriggered).toBe(true);
+    expect(probe.episodicSurfaceExposed).toBe(false);
+    expect(probe.actualResults[0]?.explanation).toContain("degraded correctly");
   });
 });

@@ -11,6 +11,15 @@ type EpisodeMemoryServerProbeDeps = {
 
 type EpisodeMemoryServerFactory = (deps: EpisodeMemoryServerProbeDeps) => unknown;
 
+export type EpisodeMemoryRuntimeInit = {
+  dbPath: string;
+  search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
+  redact: (text: string) => string;
+  openStore?: (dbPath: string) => EpisodeStore;
+  onWarn?: (err: unknown) => void;
+  createServer?: EpisodeMemoryServerFactory;
+};
+
 export function openEpisodeStoreSafely(args: {
   dbPath: string;
   openStore?: (dbPath: string) => EpisodeStore;
@@ -58,14 +67,7 @@ export function initializeEpisodeMemoryRuntime(args: {
   };
 }
 
-export function initializeEpisodeMemoryServer(args: {
-  dbPath: string;
-  search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
-  redact: (text: string) => string;
-  openStore?: (dbPath: string) => EpisodeStore;
-  onWarn?: (err: unknown) => void;
-  createServer?: EpisodeMemoryServerFactory;
-}): {
+export function initializeEpisodeMemoryServer(args: EpisodeMemoryRuntimeInit): {
   episodeStore?: EpisodeStore;
   memoryServer: unknown;
   assistantAvailable: true;

@@ -11,11 +11,13 @@ export type EpisodeEvalReport = {
   totalFixtures: number;
   runtimeFixtures: number;
   syntheticFixtures: number;
-  sharedStartupHelperFixtures: number;
+  sharedStartupWiringFixtures: number;
+  sharedMemoryStartupFixtures: number;
   passedFixtures: number;
   runtimePassedFixtures: number;
   syntheticPassedFixtures: number;
-  sharedStartupHelperPassedFixtures: number;
+  sharedStartupWiringPassedFixtures: number;
+  sharedMemoryStartupPassedFixtures: number;
   failedFixtures: number;
   failedFixtureIds: string[];
   fixtureKinds: Record<string, EpisodeEvalFixtureKind>;
@@ -33,6 +35,8 @@ function formatFixtureKindSummary(kind: EpisodeEvalFixtureKind, passed: number, 
       return `Synthetic fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
     case "shared_startup_wiring":
       return `Shared startup wiring fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
+    case "shared_memory_startup":
+      return `Shared memory startup fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
     case "runtime":
       return `Runtime fixtures: ${passed}/${total} passed`;
   }
@@ -48,14 +52,22 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
     .map((result) => result.fixtureId);
   const runtimeFixtures = fixtures.filter((fixture) => resolveFixtureKind(fixture) === "runtime").length;
   const syntheticFixtures = fixtures.filter((fixture) => resolveFixtureKind(fixture) === "synthetic").length;
-  const sharedStartupHelperFixtures = fixtures.filter(
+  const sharedStartupWiringFixtures = fixtures.filter(
     (fixture) => resolveFixtureKind(fixture) === "shared_startup_wiring",
+  ).length;
+  const sharedMemoryStartupFixtures = fixtures.filter(
+    (fixture) => resolveFixtureKind(fixture) === "shared_memory_startup",
   ).length;
   const syntheticPassedFixtures = results.filter(
     (result) => fixtureKinds[result.fixtureId] === "synthetic" && result.failureClasses.length === 0,
   ).length;
-  const sharedStartupHelperPassedFixtures = results.filter(
-    (result) => fixtureKinds[result.fixtureId] === "shared_startup_wiring" && result.failureClasses.length === 0,
+  const sharedStartupWiringPassedFixtures = results.filter(
+    (result) =>
+      fixtureKinds[result.fixtureId] === "shared_startup_wiring" && result.failureClasses.length === 0,
+  ).length;
+  const sharedMemoryStartupPassedFixtures = results.filter(
+    (result) =>
+      fixtureKinds[result.fixtureId] === "shared_memory_startup" && result.failureClasses.length === 0,
   ).length;
   const runtimePassedFixtures = results.filter(
     (result) => fixtureKinds[result.fixtureId] === "runtime" && result.failureClasses.length === 0,
@@ -66,11 +78,13 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
     totalFixtures: results.length,
     runtimeFixtures,
     syntheticFixtures,
-    sharedStartupHelperFixtures,
+    sharedStartupWiringFixtures,
+    sharedMemoryStartupFixtures,
     passedFixtures: results.length - failedFixtureIds.length,
     runtimePassedFixtures,
     syntheticPassedFixtures,
-    sharedStartupHelperPassedFixtures,
+    sharedStartupWiringPassedFixtures,
+    sharedMemoryStartupPassedFixtures,
     failedFixtures: failedFixtureIds.length,
     failedFixtureIds,
     fixtureKinds,
@@ -86,12 +100,21 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
   if (report.syntheticFixtures > 0) {
     lines.push(formatFixtureKindSummary("synthetic", report.syntheticPassedFixtures, report.syntheticFixtures));
   }
-  if (report.sharedStartupHelperFixtures > 0) {
+  if (report.sharedStartupWiringFixtures > 0) {
     lines.push(
       formatFixtureKindSummary(
         "shared_startup_wiring",
-        report.sharedStartupHelperPassedFixtures,
-        report.sharedStartupHelperFixtures,
+        report.sharedStartupWiringPassedFixtures,
+        report.sharedStartupWiringFixtures,
+      ),
+    );
+  }
+  if (report.sharedMemoryStartupFixtures > 0) {
+    lines.push(
+      formatFixtureKindSummary(
+        "shared_memory_startup",
+        report.sharedMemoryStartupPassedFixtures,
+        report.sharedMemoryStartupFixtures,
       ),
     );
   }
@@ -117,5 +140,5 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
 }
 
 export async function runDefaultEpisodeEval(): Promise<EpisodeEvalReport> {
-  return evaluateEpisodeFixtures(createDefaultEpisodeEvalFixtures());
+  return evaluateEpisodeFixtures(await createDefaultEpisodeEvalFixtures());
 }

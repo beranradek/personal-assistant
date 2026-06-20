@@ -4,30 +4,32 @@ import type { EpisodeEvalFixture } from "./eval.js";
 import { evaluateEpisodeFixtures, formatEpisodeEvalReport } from "./eval-runner.js";
 
 describe("episode eval runner", () => {
-  it("evaluates the default fixture corpus without failures", () => {
-    const report = evaluateEpisodeFixtures(createDefaultEpisodeEvalFixtures());
+  it("evaluates the default fixture corpus without failures", async () => {
+    const report = evaluateEpisodeFixtures(await createDefaultEpisodeEvalFixtures());
 
     expect(report.totalFixtures).toBe(6);
     expect(report.passedFixtures).toBe(6);
     expect(report.failedFixtures).toBe(0);
     expect(report.runtimeFixtures).toBe(5);
     expect(report.syntheticFixtures).toBe(0);
-    expect(report.sharedStartupHelperFixtures).toBe(1);
+    expect(report.sharedStartupWiringFixtures).toBe(0);
+    expect(report.sharedMemoryStartupFixtures).toBe(1);
     expect(report.runtimePassedFixtures).toBe(5);
     expect(report.syntheticPassedFixtures).toBe(0);
-    expect(report.sharedStartupHelperPassedFixtures).toBe(1);
+    expect(report.sharedStartupWiringPassedFixtures).toBe(0);
+    expect(report.sharedMemoryStartupPassedFixtures).toBe(1);
     expect(report.failedFixtureIds).toEqual([]);
-    expect(report.fixtureKinds["degraded-store-startup"]).toBe("shared_startup_wiring");
+    expect(report.fixtureKinds["degraded-store-startup"]).toBe("shared_memory_startup");
   });
 
-  it("formats a concise human-readable report", () => {
-    const report = evaluateEpisodeFixtures(createDefaultEpisodeEvalFixtures());
+  it("formats a concise human-readable report", async () => {
+    const report = evaluateEpisodeFixtures(await createDefaultEpisodeEvalFixtures());
     const text = formatEpisodeEvalReport(report);
 
     expect(text).toContain("Episode eval report: 5/5 runtime fixtures passed");
-    expect(text).toContain("Shared startup wiring fixtures: 1/1 passed");
+    expect(text).toContain("Shared memory startup fixtures: 1/1 passed");
     expect(text).toContain("github-issue-success: PASS | kind=runtime");
-    expect(text).toContain("degraded-store-startup: PASS | kind=shared_startup_wiring");
+    expect(text).toContain("degraded-store-startup: PASS | kind=shared_memory_startup");
   });
 
   it("reports both legacy synthetic and shared-startup-helper fixture summaries", () => {
@@ -49,7 +51,7 @@ describe("episode eval runner", () => {
       },
       {
         id: "startup-helper",
-        fixtureKind: "shared_startup_wiring",
+        fixtureKind: "shared_memory_startup",
         insertedEpisodes: [],
         expectedMode: "raw_audit_fallback",
         actualMode: "raw_audit_fallback",
@@ -67,8 +69,9 @@ describe("episode eval runner", () => {
 
     expect(report.runtimeFixtures).toBe(1);
     expect(report.syntheticFixtures).toBe(1);
-    expect(report.sharedStartupHelperFixtures).toBe(1);
+    expect(report.sharedStartupWiringFixtures).toBe(0);
+    expect(report.sharedMemoryStartupFixtures).toBe(1);
     expect(text).toContain("Synthetic fixtures: 1/1 passed");
-    expect(text).toContain("Shared startup wiring fixtures: 1/1 passed");
+    expect(text).toContain("Shared memory startup fixtures: 1/1 passed");
   });
 });

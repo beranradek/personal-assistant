@@ -7,9 +7,26 @@ import { createIndexer, type Indexer } from "./indexer.js";
 import { createRobustMemorySearch } from "./robust-search.js";
 import { initializeEpisodeMemoryServer } from "./episodes/runtime-probes.js";
 import type { EpisodeStore } from "./episodes/store.js";
+import type { EpisodeMemoryRuntimeInit } from "./episodes/runtime-probes.js";
 
 type MemorySearchFn = (query: string, maxResults?: number) => Promise<SearchResult[]>;
 type RedactFn = (text: string) => string;
+
+type StartupMemoryDeps = {
+  createEmbeddingProvider?: typeof createEmbeddingProvider;
+  createVectorStore?: typeof createVectorStore;
+  createIndexer?: typeof createIndexer;
+  createRobustMemorySearch?: typeof createRobustMemorySearch;
+  createRedactor?: typeof createRedactor;
+  initializeEpisodeMemoryServer?: (args: EpisodeMemoryRuntimeInit) => {
+    episodeStore?: EpisodeStore;
+    memoryServer: unknown;
+    assistantAvailable: true;
+    fallbackTriggered: boolean;
+    warningTriggered: boolean;
+    episodicSurfaceExposed: boolean;
+  };
+};
 
 export type StartupMemoryServices = {
   embedder: EmbeddingProvider;
@@ -19,17 +36,29 @@ export type StartupMemoryServices = {
   redact: RedactFn;
   memoryServer: unknown;
   episodeStore?: EpisodeStore;
+  fallbackTriggered: boolean;
+  warningTriggered: boolean;
+  episodicSurfaceExposed: boolean;
 };
 
 export async function initializeStartupMemoryServices(args: {
   config: Config;
   onEpisodeWarn?: (err: unknown) => void;
+  deps?: StartupMemoryDeps;
 }): Promise<StartupMemoryServices> {
-  const embedder = await createEmbeddingProvider();
+  const createEmbeddingProviderImpl = args.deps?.createEmbeddingProvider ?? createEmbeddingProvider;
+  const createVectorStoreImpl = args.deps?.createVectorStore ?? createVectorStore;
+  const createIndexerImpl = args.deps?.createIndexer ?? createIndexer;
+  const createRobustMemorySearchImpl = args.deps?.createRobustMemorySearch ?? createRobustMemorySearch;
+  const createRedactorImpl = args.deps?.createRedactor ?? createRedactor;
+  const initializeEpisodeMemoryServerImpl =
+    args.deps?.initializeEpisodeMemoryServer ?? initializeEpisodeMemoryServer;
+
+  const embedder = await createEmbeddingProviderImpl();
   const dbPath = path.join(args.config.security.dataDir, "vectors.db");
-  const store = createVectorStore(dbPath, embedder.dimensions);
-  const indexer = createIndexer(store, embedder);
-  const searchMemory = createRobustMemorySearch({
+  const store = createVectorStoreImpl(dbPath, embedder.dimensions);
+  const indexer = createIndexerImpl(store, embedder);
+  const searchMemory = createRobustMemorySearchImpl({
     workspaceDir: args.config.security.workspace,
     extraPaths: args.config.memory.extraPaths,
     store,
@@ -43,8 +72,8 @@ export async function initializeStartupMemoryServices(args: {
       recencyHalfLifeDays: args.config.memory.search.recencyHalfLifeDays,
     },
   });
-  const redact = createRedactor(CONSERVATIVE_PATTERNS);
-  const episodeRuntime = initializeEpisodeMemoryServer({
+  const redact = createRedactorImpl(CONSERVATIVE_PATTERNS);
+  const episodeRuntime = initializeEpisodeMemoryServerImpl({
     dbPath: path.join(args.config.security.dataDir, "episodes.db"),
     search: searchMemory,
     redact,
@@ -59,5 +88,50 @@ export async function initializeStartupMemoryServices(args: {
     redact,
     memoryServer: episodeRuntime.memoryServer,
     episodeStore: episodeRuntime.episodeStore,
+    fallbackTriggered: episodeRuntime.fallbackTriggered,
+    warningTriggered: episodeRuntime.warningTriggered,
+    episodicSurfaceExposed: episodeRuntime.episodicSurfaceExposed,
+  };
+}
+
+export async function runDegradedStartupMemoryServicesProbe(args: {
+  config: Config;
+  deps?: StartupMemoryDeps;
+}): Promise<{
+  actualMode: "raw_audit_fallback";
+  actualResults: Array<{
+    id: string;
+    matchedFields: string[];
+    matchedFilters: string[];
+    explanation: string;
+  }>;
+  assistantAvailable: boolean;
+  warningTriggered: boolean;
+  episodicSurfaceExposed: boolean;
+}> {
+  let warningTriggered = false;
+  const services = await initializeStartupMemoryServices({
+    config: args.config,
+    onEpisodeWarn: () => {
+      warningTriggered = true;
+    },
+    deps: args.deps,
+  });
+
+  return {
+    actualMode: "raw_audit_fallback",
+    actualResults: [
+      {
+        id: "startup-log-daemon-fallback",
+        matchedFields: [],
+        matchedFilters: [],
+        explanation: warningTriggered && !services.episodeStore
+          ? "Shared startup memory services degraded correctly and continued without episodic surface."
+          : "Shared startup memory services stayed available; degraded fallback did not trigger.",
+      },
+    ],
+    assistantAvailable: true,
+    warningTriggered,
+    episodicSurfaceExposed: services.episodicSurfaceExposed,
   };
 }

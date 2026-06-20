@@ -1,6 +1,8 @@
 import type { EpisodeEvalFixture } from "./eval.js";
-import { runDegradedStoreStartupProbe } from "./runtime-probes.js";
 import type { EpisodeRecord } from "./types.js";
+import { runDegradedStartupMemoryServicesProbe } from "../startup-services.js";
+import type { Config } from "../../core/types.js";
+import { DEFAULTS } from "../../core/config.js";
 
 const personalAssistantIssueSuccess: EpisodeRecord = {
   id: "ep-github-12",
@@ -153,10 +155,59 @@ const adminWorkflow: EpisodeRecord = {
   semanticEmbeddingText: "admin telegram summary reminders next actions",
 };
 
-export function createDefaultEpisodeEvalFixtures(): EpisodeEvalFixture[] {
-  const degradedStartupProbe = runDegradedStoreStartupProbe({
-    openStore: () => {
-      throw new Error("episodes.db incompatible schema");
+function createEvalConfig(): Config {
+  return {
+    ...DEFAULTS,
+    security: {
+      ...DEFAULTS.security,
+      workspace: "/tmp/workspace",
+      dataDir: "/tmp/data",
+    },
+  };
+}
+
+export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFixture[]> {
+  const degradedStartupProbe = await runDegradedStartupMemoryServicesProbe({
+    config: createEvalConfig(),
+    deps: {
+      createEmbeddingProvider: async () => ({
+        dimensions: 768,
+        embed: async () => [],
+        embedBatch: async () => [],
+        close: async () => {},
+      }),
+      createVectorStore: () => ({
+        upsertChunk: () => {},
+        searchVector: () => [],
+        searchKeyword: () => [],
+        deleteChunksForFile: () => {},
+        getFileHash: () => null,
+        setFileHash: () => {},
+        getTrackedFilePaths: () => [],
+        deleteFileHash: () => {},
+        close: () => {},
+      }),
+      createIndexer: () => ({
+        syncFiles: async () => {},
+        markDirty: () => {},
+        isDirty: () => false,
+        syncIfDirty: async () => {},
+        abort: () => {},
+        close: () => {},
+      }),
+      createRobustMemorySearch: () => async () => [],
+      createRedactor: () => (text: string) => text,
+      initializeEpisodeMemoryServer: ({ onWarn }) => {
+        onWarn?.(new Error("episodes.db incompatible schema"));
+        return {
+          episodeStore: undefined,
+          memoryServer: { name: "memory" },
+          assistantAvailable: true,
+          fallbackTriggered: true,
+          warningTriggered: true,
+          episodicSurfaceExposed: false,
+        };
+      },
     },
   });
   return [
@@ -216,7 +267,7 @@ export function createDefaultEpisodeEvalFixtures(): EpisodeEvalFixture[] {
     },
     {
       id: "degraded-store-startup",
-      fixtureKind: "shared_startup_wiring",
+      fixtureKind: "shared_memory_startup",
       insertedEpisodes: [],
       expectedMode: "raw_audit_fallback",
       actualMode: degradedStartupProbe.actualMode,
