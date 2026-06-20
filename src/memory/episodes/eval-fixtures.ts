@@ -1,4 +1,5 @@
 import type { EpisodeEvalFixture } from "./eval.js";
+import { runDegradedStoreStartupProbe } from "./runtime-probes.js";
 import type { EpisodeRecord } from "./types.js";
 
 const personalAssistantIssueSuccess: EpisodeRecord = {
@@ -153,6 +154,11 @@ const adminWorkflow: EpisodeRecord = {
 };
 
 export function createDefaultEpisodeEvalFixtures(): EpisodeEvalFixture[] {
+  const degradedStartupProbe = runDegradedStoreStartupProbe({
+    openStore: () => {
+      throw new Error("episodes.db incompatible schema");
+    },
+  });
   return [
     {
       id: "github-issue-success",
@@ -213,21 +219,14 @@ export function createDefaultEpisodeEvalFixtures(): EpisodeEvalFixture[] {
       synthetic: true,
       insertedEpisodes: [],
       expectedMode: "raw_audit_fallback",
-      actualMode: "raw_audit_fallback",
-      actualResults: [
-        {
-          id: "startup-log-daemon-fallback",
-          matchedFields: [],
-          matchedFilters: [],
-          explanation: "Fell back to startup log evidence after episodic store open failure.",
-        },
-      ],
+      actualMode: degradedStartupProbe.actualMode,
+      actualResults: degradedStartupProbe.actualResults,
       mustHitIds: ["startup-log-daemon-fallback"],
       mustAvoidIds: [],
       expectedTop1Id: "startup-log-daemon-fallback",
       expectedTopKAtMost: 1,
       availabilityExpected: true,
-      availabilityActual: true,
+      availabilityActual: degradedStartupProbe.assistantAvailable,
       maxLatencyMs: 50,
     },
     {

@@ -129,13 +129,15 @@ vi.mock("./memory/watcher.js", () => ({
   createMemoryWatcher: vi.fn().mockReturnValue({ close: vi.fn() }),
 }));
 
+const mockLogger = vi.hoisted(() => ({
+  info: vi.fn(),
+  error: vi.fn(),
+  warn: vi.fn(),
+  debug: vi.fn(),
+}));
+
 vi.mock("./core/logger.js", () => ({
-  createLogger: vi.fn(() => ({
-    info: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-    debug: vi.fn(),
-  })),
+  createLogger: vi.fn(() => mockLogger),
 }));
 
 // ---------------------------------------------------------------------------
@@ -163,6 +165,7 @@ import { loadCronStore } from "./cron/store.js";
 import { armTimer } from "./cron/timer.js";
 import { createCronToolManager } from "./cron/tool.js";
 import { createBackend } from "./backends/factory.js";
+import { createLogger } from "./core/logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -401,6 +404,10 @@ describe("daemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLogger.info.mockReset();
+    mockLogger.error.mockReset();
+    mockLogger.warn.mockReset();
+    mockLogger.debug.mockReset();
     signalHandlers = new Map();
     // Capture signal handlers without actually registering them on process
     originalProcessOn = process.on;
@@ -457,6 +464,10 @@ describe("daemon", () => {
     const deps = vi.mocked(createMemoryServer).mock.calls[0][0] as Record<string, unknown>;
     expect(deps).not.toHaveProperty("listEpisodes");
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      "episodic memory store unavailable; episodic MCP tools disabled",
+    );
   });
 
   // -----------------------------------------------------------------------

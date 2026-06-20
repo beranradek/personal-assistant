@@ -8,7 +8,7 @@ import { createEmbeddingProvider } from "../memory/embeddings.js";
 import { createVectorStore } from "../memory/vector-store.js";
 import { createIndexer } from "../memory/indexer.js";
 import { createRobustMemorySearch } from "../memory/robust-search.js";
-import { createEpisodeStore } from "../memory/episodes/store.js";
+import { buildEpisodeMemoryServerDeps, openEpisodeStoreSafely } from "../memory/episodes/runtime-probes.js";
 import { createMemoryServer } from "../tools/memory-server.js";
 import { createAssistantServer } from "../tools/assistant-server.js";
 import { loadHabits, markHabit } from "../heartbeat/habits.js";
@@ -49,12 +49,12 @@ export async function createTerminalSession(
   const embedder = await createEmbeddingProvider();
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
-  let episodeStore: ReturnType<typeof createEpisodeStore> | undefined;
-  try {
-    episodeStore = createEpisodeStore(path.join(config.security.dataDir, "episodes.db"));
-  } catch (err) {
-    log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
-  }
+  const episodeStore = openEpisodeStoreSafely({
+    dbPath: path.join(config.security.dataDir, "episodes.db"),
+    onWarn: (err) => {
+      log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+    },
+  });
   const indexer = createIndexer(store, embedder);
 
   const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
@@ -89,7 +89,7 @@ export async function createTerminalSession(
   const memoryServer = createMemoryServer({
     search: searchMemory,
     redact,
-    ...(episodeStore ? { listEpisodes: (filters) => episodeStore.listEpisodes(filters) } : {}),
+    ...buildEpisodeMemoryServerDeps(episodeStore),
   });
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
