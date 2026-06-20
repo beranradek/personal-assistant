@@ -144,7 +144,7 @@ vi.mock("./core/logger.js", () => ({
 // Imports -- after mocks are registered
 // ---------------------------------------------------------------------------
 
-import { startDaemon } from "./daemon.js";
+import { runDegradedDaemonStartupProbe, startDaemon } from "./daemon.js";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
@@ -468,6 +468,42 @@ describe("daemon", () => {
       expect.objectContaining({ err: expect.any(Error) }),
       "episodic memory store unavailable; episodic MCP tools disabled",
     );
+  });
+
+  it("reports degraded daemon startup through the entrypoint probe", async () => {
+    const config = makeConfig();
+    setupMocks(config);
+    vi.mocked(createEpisodeStore).mockImplementation(() => {
+      throw new Error("episodes.db incompatible schema");
+    });
+
+    const probe = await runDegradedDaemonStartupProbe({
+      config,
+      configDir: "/app",
+    });
+
+    expect(probe.actualMode).toBe("raw_audit_fallback");
+    expect(probe.assistantAvailable).toBe(true);
+    expect(probe.fallbackTriggered).toBe(true);
+    expect(probe.warningTriggered).toBe(true);
+    expect(probe.episodicSurfaceExposed).toBe(false);
+    expect(probe.actualResults[0]?.id).toBe("startup-log-daemon-entrypoint-fallback");
+  });
+
+  it("reports a healthy daemon startup probe without false degraded signal", async () => {
+    const config = makeConfig();
+    setupMocks(config);
+
+    const probe = await runDegradedDaemonStartupProbe({
+      config,
+      configDir: "/app",
+    });
+
+    expect(probe.assistantAvailable).toBe(true);
+    expect(probe.fallbackTriggered).toBe(false);
+    expect(probe.warningTriggered).toBe(false);
+    expect(probe.episodicSurfaceExposed).toBe(true);
+    expect(probe.actualResults[0]?.explanation).toContain("did not trigger");
   });
 
   // -----------------------------------------------------------------------

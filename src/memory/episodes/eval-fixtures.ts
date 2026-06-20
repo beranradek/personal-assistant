@@ -4,6 +4,7 @@ import { initializeStartupMemoryServices } from "../startup-services.js";
 import type { Config } from "../../core/types.js";
 import { DEFAULTS } from "../../core/config.js";
 import { runDegradedTerminalSessionProbe } from "../../terminal/session.js";
+import { runDegradedDaemonStartupProbe } from "../../daemon.js";
 
 const personalAssistantIssueSuccess: EpisodeRecord = {
   id: "ep-github-12",
@@ -239,6 +240,49 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
       }),
     },
   });
+  const degradedDaemonProbe = await runDegradedDaemonStartupProbe({
+    config: createEvalConfig(),
+    deps: {
+      initializeStartupMemoryServices: (args) =>
+        initializeStartupMemoryServices({
+          ...args,
+          deps: startupDeps,
+        }),
+      collectMemoryFiles: () => [],
+      createMemoryWatcher: () => ({ close: () => {} }),
+      readMemoryFiles: async () => "",
+      createCronToolManager: (() => ({
+        handleAction: async () => ({ success: true, message: "ok" }),
+        rearmTimer: async () => {},
+        stop: () => {},
+      })) as any,
+      createAssistantServer: (() => ({ name: "assistant" } as any)) as any,
+      createMessageQueue: (() => ({
+        enqueue: () => ({ accepted: true }),
+        processNext: async () => {},
+        size: () => 0,
+        processLoop: () => {},
+        stop: () => {},
+      })) as any,
+      createRouter: (() => ({
+        register: () => {},
+        unregister: () => {},
+        route: () => undefined,
+      })) as any,
+      buildAgentOptions: () => ({} as any),
+      createBackend: async () => ({
+        name: "test",
+        async *runTurn() {},
+        runTurnSync: async () => ({
+          response: "",
+          messages: [],
+          partial: false,
+        }),
+        clearSession: () => {},
+        close: async () => {},
+      }),
+    },
+  });
   return [
     {
       id: "github-issue-success",
@@ -332,6 +376,31 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
       mustAvoidIds: ["ep-github-21"],
       expectedTop1Id: "ep-github-12",
       expectedTopKAtMost: 1,
+      maxLatencyMs: 50,
+    },
+    {
+      id: "degraded-daemon-startup",
+      fixtureKind: "daemon_startup_entrypoint",
+      insertedEpisodes: [],
+      expectedMode: "raw_audit_fallback",
+      actualMode: degradedDaemonProbe.actualMode,
+      actualResults: degradedDaemonProbe.actualResults,
+      mustHitIds: ["startup-log-daemon-entrypoint-fallback"],
+      mustAvoidIds: [],
+      expectedTop1Id: "startup-log-daemon-entrypoint-fallback",
+      expectedTopKAtMost: 1,
+      availabilityExpected: true,
+      availabilityActual: degradedDaemonProbe.assistantAvailable,
+      probeStateExpected: {
+        fallbackTriggered: true,
+        warningTriggered: true,
+        episodicSurfaceExposed: false,
+      },
+      probeStateActual: {
+        fallbackTriggered: degradedDaemonProbe.fallbackTriggered,
+        warningTriggered: degradedDaemonProbe.warningTriggered,
+        episodicSurfaceExposed: degradedDaemonProbe.episodicSurfaceExposed,
+      },
       maxLatencyMs: 50,
     },
   ];

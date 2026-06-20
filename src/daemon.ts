@@ -48,10 +48,243 @@ import cron from "node-cron";
 import { runDailyReflection } from "./memory/daily-reflection.js";
 import { runWeeklyReflection } from "./memory/weekly-reflection.js";
 import { createLogger } from "./core/logger.js";
-import type { Adapter, AdapterMessage } from "./core/types.js";
+import type { Adapter, AdapterMessage, Config } from "./core/types.js";
 import { migrateLegacySessionsToUnified } from "./session/unified.js";
+import type { AgentBackend } from "./backends/interface.js";
 
 const log = createLogger("daemon");
+
+type DaemonCoreDeps = {
+  initializeStartupMemoryServices?: typeof initializeStartupMemoryServices;
+  collectMemoryFiles?: typeof collectMemoryFiles;
+  createMemoryWatcher?: typeof createMemoryWatcher;
+  readMemoryFiles?: typeof readMemoryFiles;
+  createCronToolManager?: typeof createCronToolManager;
+  createAssistantServer?: typeof createAssistantServer;
+  createMessageQueue?: typeof createMessageQueue;
+  createRouter?: typeof createRouter;
+  buildAgentOptions?: typeof buildAgentOptions;
+  createBackend?: typeof createBackend;
+};
+
+type DaemonCoreRuntime = {
+  backend: AgentBackend;
+  queue: ReturnType<typeof createMessageQueue>;
+  router: ReturnType<typeof createRouter>;
+  cronManager: ReturnType<typeof createCronToolManager>;
+  episodeStore?: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["episodeStore"];
+  store: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["store"];
+  embedder: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["embedder"];
+  indexer: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["indexer"];
+  memoryWatcher: ReturnType<typeof createMemoryWatcher>;
+  memorySyncTimer: ReturnType<typeof setInterval>;
+  warningTriggered: boolean;
+  fallbackTriggered: boolean;
+  episodicSurfaceExposed: boolean;
+};
+
+async function createDaemonCoreFromConfig(args: {
+  config: Config;
+  configDir: string;
+  deps?: DaemonCoreDeps;
+}): Promise<DaemonCoreRuntime> {
+  const initializeStartupMemoryServicesImpl =
+    args.deps?.initializeStartupMemoryServices ?? initializeStartupMemoryServices;
+  const collectMemoryFilesImpl = args.deps?.collectMemoryFiles ?? collectMemoryFiles;
+  const createMemoryWatcherImpl = args.deps?.createMemoryWatcher ?? createMemoryWatcher;
+  const readMemoryFilesImpl = args.deps?.readMemoryFiles ?? readMemoryFiles;
+  const createCronToolManagerImpl = args.deps?.createCronToolManager ?? createCronToolManager;
+  const createAssistantServerImpl = args.deps?.createAssistantServer ?? createAssistantServer;
+  const createMessageQueueImpl = args.deps?.createMessageQueue ?? createMessageQueue;
+  const createRouterImpl = args.deps?.createRouter ?? createRouter;
+  const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
+  const createBackendImpl = args.deps?.createBackend ?? createBackend;
+
+  let warningTriggered = false;
+  const { embedder, store, indexer, searchMemory, redact, memoryServer, episodeStore, fallbackTriggered, episodicSurfaceExposed } =
+    await initializeStartupMemoryServicesImpl({
+      config: args.config,
+      onEpisodeWarn: (err) => {
+        warningTriggered = true;
+        log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+      },
+    });
+
+  const memoryFiles = collectMemoryFilesImpl(
+    args.config.security.workspace,
+    args.config.memory.extraPaths,
+    {
+      indexDailyLogs: args.config.memory.indexDailyLogs,
+      dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
+    },
+  );
+  indexer.syncFiles(memoryFiles).catch((err) => {
+    log.error({ err }, "Initial memory indexing failed (non-fatal)");
+  });
+
+  let syncInProgress = false;
+  const syncMemoryFiles = async (reason: string) => {
+    if (syncInProgress) return;
+    syncInProgress = true;
+    try {
+      const files = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
+        indexDailyLogs: args.config.memory.indexDailyLogs,
+        dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
+      });
+      log.info({ fileCount: files.length, reason }, "Reindexing memory files");
+      await indexer.syncFiles(files);
+    } catch (err) {
+      log.error({ err, reason }, "Reindex failed");
+    } finally {
+      syncInProgress = false;
+    }
+  };
+
+  const memoryWatcher = createMemoryWatcherImpl(args.config.security.workspace, () => {
+    syncMemoryFiles("watcher");
+  });
+
+  const MEMORY_RESYNC_INTERVAL_MS = 60_000;
+  const memorySyncTimer = setInterval(() => {
+    syncMemoryFiles("periodic");
+  }, MEMORY_RESYNC_INTERVAL_MS);
+  memorySyncTimer.unref();
+
+  const memoryContent = await readMemoryFilesImpl(args.config.security.workspace, {
+    includeHeartbeat: true,
+  });
+
+  const cronStorePath = path.join(args.config.security.dataDir, "cron-jobs.json");
+  const cronManager = createCronToolManagerImpl({
+    storePath: cronStorePath,
+  });
+
+  const assistantServer = createAssistantServerImpl({
+    handleCronAction: cronManager.handleAction,
+    handleExec: (options) => handleExec(options, args.config),
+    getProcessSession: getSession,
+    listProcessSessions: listSessions,
+    handleHabitCheck: async (pillarLabel, done) => {
+      if (!args.config.habits.enabled) {
+        return { success: false, message: "Habits tracking is disabled in config" };
+      }
+      await markHabit(args.config.security.workspace, pillarLabel, done);
+      return { success: true, message: `Habit "${pillarLabel}" marked as ${done ? "done" : "undone"}` };
+    },
+    handleHabitStatus: async () => {
+      if (!args.config.habits.enabled) {
+        return { error: "Habits tracking is disabled in config" };
+      }
+      const data = await loadHabits(args.config.security.workspace);
+      if (!data) return { error: "HABITS.md not found in workspace" };
+      return {
+        pillars: data.pillars.map((p) => ({
+          label: p.label,
+          type: p.type,
+          done: data.checklist[p.label] === true,
+        })),
+      };
+    },
+  });
+
+  const mcpServers: Record<string, unknown> = {
+    ...args.config.mcpServers,
+    memory: memoryServer,
+    assistant: assistantServer,
+  };
+
+  const agentOptions = buildAgentOptionsImpl(
+    args.config,
+    args.config.security.workspace,
+    memoryContent,
+    mcpServers,
+  );
+
+  const backend = await createBackendImpl(args.config, agentOptions, { configDir: args.configDir, redact });
+  log.info({ backend: backend.name }, "Agent backend initialized");
+
+  if (args.config.agent.backend === "codex") {
+    log.info(
+      { sandbox: args.config.codex.sandboxMode, approval: args.config.codex.approvalPolicy },
+      "Codex backend active — PA security hooks (bash allowlist, path validation) are " +
+      "not used. Command security is enforced by Codex CLI sandbox and approval policy.",
+    );
+  }
+
+  const queue = createMessageQueueImpl(args.config, redact);
+  const router = createRouterImpl();
+
+  return {
+    backend,
+    queue,
+    router,
+    cronManager,
+    episodeStore,
+    store,
+    embedder,
+    indexer,
+    memoryWatcher,
+    memorySyncTimer,
+    warningTriggered,
+    fallbackTriggered,
+    episodicSurfaceExposed,
+  };
+}
+
+export async function runDegradedDaemonStartupProbe(args: {
+  config: Config;
+  configDir?: string;
+  deps?: DaemonCoreDeps;
+}): Promise<{
+  actualMode: "raw_audit_fallback";
+  actualResults: Array<{
+    id: string;
+    matchedFields: string[];
+    matchedFilters: string[];
+    explanation: string;
+  }>;
+  assistantAvailable: boolean;
+  fallbackTriggered: boolean;
+  warningTriggered: boolean;
+  episodicSurfaceExposed: boolean;
+}> {
+  const runtime = await createDaemonCoreFromConfig({
+    config: args.config,
+    configDir: args.configDir ?? "/probe",
+    deps: args.deps,
+  });
+
+  runtime.queue.processLoop(runtime.backend, args.config, runtime.router);
+  runtime.queue.stop();
+  runtime.cronManager.stop();
+  runtime.indexer.abort();
+  clearInterval(runtime.memorySyncTimer);
+  runtime.memoryWatcher.close();
+  runtime.episodeStore?.close();
+  runtime.store.close();
+  await runtime.embedder.close();
+  if (runtime.backend.close) await runtime.backend.close();
+
+  return {
+    actualMode: "raw_audit_fallback",
+    actualResults: [
+      {
+        id: "startup-log-daemon-entrypoint-fallback",
+        matchedFields: [],
+        matchedFilters: [],
+        explanation: runtime.fallbackTriggered
+          ? runtime.warningTriggered && !runtime.episodicSurfaceExposed
+            ? "Daemon startup degraded correctly and continued without episodic surface."
+            : "Daemon startup partially degraded but probe signals were inconsistent."
+          : "Daemon startup stayed fully available; degraded fallback did not trigger.",
+      },
+    ],
+    assistantAvailable: true,
+    fallbackTriggered: runtime.fallbackTriggered,
+    warningTriggered: runtime.warningTriggered,
+    episodicSurfaceExposed: runtime.episodicSurfaceExposed,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Exported startDaemon (testable without auto-running)
@@ -113,127 +346,18 @@ export async function startDaemon(configDir: string): Promise<void> {
     log.info({ port: config.integApi.port }, "integ-api child process forked");
   }
 
-  // 3. Initialize memory system
-  const { embedder, store, indexer, searchMemory, redact, memoryServer, episodeStore } =
-    await initializeStartupMemoryServices({
-      config,
-      onEpisodeWarn: (err) => {
-        log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
-      },
-    });
-
-  // Sync memory files into the vector store in the background — do not block
-  // adapter startup so that Telegram/Slack are responsive immediately while
-  // the index catches up.  Search uses whatever data is already in the DB.
-  const memoryFiles = collectMemoryFiles(
-    config.security.workspace,
-    config.memory.extraPaths,
-    {
-      indexDailyLogs: config.memory.indexDailyLogs,
-      dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
-    },
-  );
-  indexer.syncFiles(memoryFiles).catch((err) => {
-    log.error({ err }, "Initial memory indexing failed (non-fatal)");
-  });
-
-  // Guard against concurrent syncFiles calls (watcher + periodic timer can overlap)
-  let syncInProgress = false;
-  const syncMemoryFiles = async (reason: string) => {
-    if (syncInProgress) return;
-    syncInProgress = true;
-    try {
-      const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
-        indexDailyLogs: config.memory.indexDailyLogs,
-        dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
-      });
-      log.info({ fileCount: files.length, reason }, "Reindexing memory files");
-      await indexer.syncFiles(files);
-    } catch (err) {
-      log.error({ err, reason }, "Reindex failed");
-    } finally {
-      syncInProgress = false;
-    }
-  };
-
-  // Watch for memory file changes and reindex
-  const memoryWatcher = createMemoryWatcher(config.security.workspace, () => {
-    syncMemoryFiles("watcher");
-  });
-
-  // Periodic re-sync as a safety net (fs.watch can miss events on Linux)
-  const MEMORY_RESYNC_INTERVAL_MS = 60_000;
-  const memorySyncTimer = setInterval(() => {
-    syncMemoryFiles("periodic");
-  }, MEMORY_RESYNC_INTERVAL_MS);
-  memorySyncTimer.unref();
-
-  // 3. Read memory files for system prompt
-  const memoryContent = await readMemoryFiles(config.security.workspace, {
-    includeHeartbeat: true,
-  });
-
-  const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
-  const cronManager = createCronToolManager({
-    storePath: cronStorePath,
-  });
-
-  const assistantServer = createAssistantServer({
-    handleCronAction: cronManager.handleAction,
-    handleExec: (options) => handleExec(options, config),
-    getProcessSession: getSession,
-    listProcessSessions: listSessions,
-    handleHabitCheck: async (pillarLabel, done) => {
-      if (!config.habits.enabled) {
-        return { success: false, message: "Habits tracking is disabled in config" };
-      }
-      await markHabit(config.security.workspace, pillarLabel, done);
-      return { success: true, message: `Habit "${pillarLabel}" marked as ${done ? "done" : "undone"}` };
-    },
-    handleHabitStatus: async () => {
-      if (!config.habits.enabled) {
-        return { error: "Habits tracking is disabled in config" };
-      }
-      const data = await loadHabits(config.security.workspace);
-      if (!data) return { error: "HABITS.md not found in workspace" };
-      return {
-        pillars: data.pillars.map((p) => ({
-          label: p.label,
-          type: p.type,
-          done: data.checklist[p.label] === true,
-        })),
-      };
-    },
-  });
-
-  // 5. Build agent options (built-in + user-configured MCP servers)
-  const mcpServers: Record<string, unknown> = {
-    ...config.mcpServers,
-    memory: memoryServer,
-    assistant: assistantServer,
-  };
-
-  const agentOptions = buildAgentOptions(
-    config,
-    config.security.workspace,
-    memoryContent,
-    mcpServers,
-  );
-
-  // 6. Create backend + gateway queue & router
-  const backend = await createBackend(config, agentOptions, { configDir, redact });
-  log.info({ backend: backend.name }, "Agent backend initialized");
-
-  if (config.agent.backend === "codex") {
-    log.info(
-      { sandbox: config.codex.sandboxMode, approval: config.codex.approvalPolicy },
-      "Codex backend active — PA security hooks (bash allowlist, path validation) are " +
-      "not used. Command security is enforced by Codex CLI sandbox and approval policy.",
-    );
-  }
-
-  const queue = createMessageQueue(config, redact);
-  const router = createRouter();
+  const {
+    embedder,
+    store,
+    indexer,
+    queue,
+    router,
+    cronManager,
+    episodeStore,
+    memoryWatcher,
+    memorySyncTimer,
+    backend,
+  } = await createDaemonCoreFromConfig({ config, configDir });
 
   // 7. Start adapters (only if enabled)
   const activeAdapters: Adapter[] = [];

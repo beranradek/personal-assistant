@@ -7,21 +7,24 @@ describe("episode eval runner", () => {
   it("evaluates the default fixture corpus without failures", async () => {
     const report = evaluateEpisodeFixtures(await createDefaultEpisodeEvalFixtures());
 
-    expect(report.totalFixtures).toBe(6);
-    expect(report.passedFixtures).toBe(6);
+    expect(report.totalFixtures).toBe(7);
+    expect(report.passedFixtures).toBe(7);
     expect(report.failedFixtures).toBe(0);
     expect(report.runtimeFixtures).toBe(5);
     expect(report.syntheticFixtures).toBe(0);
     expect(report.sharedStartupWiringFixtures).toBe(0);
     expect(report.sharedMemoryStartupFixtures).toBe(0);
     expect(report.terminalStartupEntrypointFixtures).toBe(1);
+    expect(report.daemonStartupEntrypointFixtures).toBe(1);
     expect(report.runtimePassedFixtures).toBe(5);
     expect(report.syntheticPassedFixtures).toBe(0);
     expect(report.sharedStartupWiringPassedFixtures).toBe(0);
     expect(report.sharedMemoryStartupPassedFixtures).toBe(0);
     expect(report.terminalStartupEntrypointPassedFixtures).toBe(1);
+    expect(report.daemonStartupEntrypointPassedFixtures).toBe(1);
     expect(report.failedFixtureIds).toEqual([]);
     expect(report.fixtureKinds["degraded-store-startup"]).toBe("terminal_startup_entrypoint");
+    expect(report.fixtureKinds["degraded-daemon-startup"]).toBe("daemon_startup_entrypoint");
   });
 
   it("formats a concise human-readable report", async () => {
@@ -30,8 +33,10 @@ describe("episode eval runner", () => {
 
     expect(text).toContain("Episode eval report: 5/5 runtime fixtures passed");
     expect(text).toContain("Terminal startup entrypoint fixtures: 1/1 passed");
+    expect(text).toContain("Daemon startup entrypoint fixtures: 1/1 passed");
     expect(text).toContain("github-issue-success: PASS | kind=runtime");
     expect(text).toContain("degraded-store-startup: PASS | kind=terminal_startup_entrypoint");
+    expect(text).toContain("degraded-daemon-startup: PASS | kind=daemon_startup_entrypoint");
   });
 
   it("reports both legacy synthetic and entrypoint fixture summaries", () => {
@@ -64,6 +69,19 @@ describe("episode eval runner", () => {
           explanation: "helper fallback",
         }],
       },
+      {
+        id: "daemon-helper",
+        fixtureKind: "daemon_startup_entrypoint",
+        insertedEpisodes: [],
+        expectedMode: "raw_audit_fallback",
+        actualMode: "raw_audit_fallback",
+        actualResults: [{
+          id: "daemon-startup-log",
+          matchedFields: [],
+          matchedFilters: [],
+          explanation: "daemon fallback",
+        }],
+      },
     ];
 
     const report = evaluateEpisodeFixtures(fixtures);
@@ -74,8 +92,10 @@ describe("episode eval runner", () => {
     expect(report.sharedStartupWiringFixtures).toBe(0);
     expect(report.sharedMemoryStartupFixtures).toBe(0);
     expect(report.terminalStartupEntrypointFixtures).toBe(1);
+    expect(report.daemonStartupEntrypointFixtures).toBe(1);
     expect(text).toContain("Synthetic fixtures: 1/1 passed");
     expect(text).toContain("Terminal startup entrypoint fixtures: 1/1 passed");
+    expect(text).toContain("Daemon startup entrypoint fixtures: 1/1 passed");
   });
 
   it("fails terminal entrypoint fixture when degraded probe state does not trigger", () => {
