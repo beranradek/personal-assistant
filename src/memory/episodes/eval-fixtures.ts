@@ -1,8 +1,9 @@
 import type { EpisodeEvalFixture } from "./eval.js";
 import type { EpisodeRecord } from "./types.js";
-import { runDegradedStartupMemoryServicesProbe } from "../startup-services.js";
+import { initializeStartupMemoryServices } from "../startup-services.js";
 import type { Config } from "../../core/types.js";
 import { DEFAULTS } from "../../core/config.js";
+import { runDegradedTerminalSessionProbe } from "../../terminal/session.js";
 
 const personalAssistantIssueSuccess: EpisodeRecord = {
   id: "ep-github-12",
@@ -167,47 +168,75 @@ function createEvalConfig(): Config {
 }
 
 export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFixture[]> {
-  const degradedStartupProbe = await runDegradedStartupMemoryServicesProbe({
+  const startupDeps = {
+    createEmbeddingProvider: async () => ({
+      dimensions: 768,
+      embed: async () => [],
+      embedBatch: async () => [],
+      close: async () => {},
+    }),
+    createVectorStore: () => ({
+      upsertChunk: () => {},
+      searchVector: () => [],
+      searchKeyword: () => [],
+      deleteChunksForFile: () => {},
+      getFileHash: () => null,
+      setFileHash: () => {},
+      getTrackedFilePaths: () => [],
+      deleteFileHash: () => {},
+      close: () => {},
+    }),
+    createIndexer: () => ({
+      syncFiles: async () => {},
+      markDirty: () => {},
+      isDirty: () => false,
+      syncIfDirty: async () => {},
+      abort: () => {},
+      close: () => {},
+    }),
+    createRobustMemorySearch: () => async () => [],
+    createRedactor: () => (text: string) => text,
+    initializeEpisodeMemoryServer: ({ onWarn }: { onWarn?: (err: unknown) => void }) => {
+      onWarn?.(new Error("episodes.db incompatible schema"));
+      return {
+        episodeStore: undefined,
+        memoryServer: { name: "memory" },
+        assistantAvailable: true as const,
+        fallbackTriggered: true,
+        warningTriggered: true,
+        episodicSurfaceExposed: false,
+      };
+    },
+  };
+  const degradedStartupProbe = await runDegradedTerminalSessionProbe({
     config: createEvalConfig(),
     deps: {
-      createEmbeddingProvider: async () => ({
-        dimensions: 768,
-        embed: async () => [],
-        embedBatch: async () => [],
+      initializeStartupMemoryServices: (args) =>
+        initializeStartupMemoryServices({
+          ...args,
+          deps: startupDeps,
+        }),
+      collectMemoryFiles: () => [],
+      createMemoryWatcher: () => ({ close: () => {} }),
+      readMemoryFiles: async () => "",
+      createCronToolManager: (() => ({
+        handleAction: async () => ({ success: true, message: "ok" }),
+        rearmTimer: async () => {},
+        stop: () => {},
+      })) as any,
+      createAssistantServer: (() => ({ name: "assistant" } as any)) as any,
+      buildAgentOptions: () => ({} as any),
+      createBackend: async () => ({
+        name: "test",
+        async *runTurn() {},
+        runTurnSync: async () => ({
+          response: "",
+          messages: [],
+          partial: false,
+        }),
+        clearSession: () => {},
         close: async () => {},
       }),
-      createVectorStore: () => ({
-        upsertChunk: () => {},
-        searchVector: () => [],
-        searchKeyword: () => [],
-        deleteChunksForFile: () => {},
-        getFileHash: () => null,
-        setFileHash: () => {},
-        getTrackedFilePaths: () => [],
-        deleteFileHash: () => {},
-        close: () => {},
-      }),
-      createIndexer: () => ({
-        syncFiles: async () => {},
-        markDirty: () => {},
-        isDirty: () => false,
-        syncIfDirty: async () => {},
-        abort: () => {},
-        close: () => {},
-      }),
-      createRobustMemorySearch: () => async () => [],
-      createRedactor: () => (text: string) => text,
-      initializeEpisodeMemoryServer: ({ onWarn }) => {
-        onWarn?.(new Error("episodes.db incompatible schema"));
-        return {
-          episodeStore: undefined,
-          memoryServer: { name: "memory" },
-          assistantAvailable: true,
-          fallbackTriggered: true,
-          warningTriggered: true,
-          episodicSurfaceExposed: false,
-        };
-      },
     },
   });
   return [
@@ -267,14 +296,14 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
     },
     {
       id: "degraded-store-startup",
-      fixtureKind: "shared_memory_startup",
+      fixtureKind: "terminal_startup_entrypoint",
       insertedEpisodes: [],
       expectedMode: "raw_audit_fallback",
       actualMode: degradedStartupProbe.actualMode,
       actualResults: degradedStartupProbe.actualResults,
-      mustHitIds: ["startup-log-daemon-fallback"],
+      mustHitIds: ["startup-log-terminal-fallback"],
       mustAvoidIds: [],
-      expectedTop1Id: "startup-log-daemon-fallback",
+      expectedTop1Id: "startup-log-terminal-fallback",
       expectedTopKAtMost: 1,
       availabilityExpected: true,
       availabilityActual: degradedStartupProbe.assistantAvailable,

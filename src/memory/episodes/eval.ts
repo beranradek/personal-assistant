@@ -16,6 +16,7 @@ export const EpisodeEvalFixtureKindSchema = z.enum([
   "synthetic",
   "shared_startup_wiring",
   "shared_memory_startup",
+  "terminal_startup_entrypoint",
 ]);
 
 export type EpisodeEvalFixtureKind = z.infer<typeof EpisodeEvalFixtureKindSchema>;

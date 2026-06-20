@@ -27,61 +27,134 @@ export interface TerminalSession {
   cleanup: () => Promise<void>;
 }
 
-/**
- * Initialize a terminal session: load config, ensure workspace, read memory,
- * and build agent options.
- *
- * Returns the session object containing config, agentOptions, and sessionKey.
- */
-export async function createTerminalSession(
-  configDir: string,
-): Promise<TerminalSession> {
-  const config = loadConfig(configDir);
-  await ensureWorkspace(config);
+type TerminalSessionDeps = {
+  initializeStartupMemoryServices?: typeof initializeStartupMemoryServices;
+  collectMemoryFiles?: typeof collectMemoryFiles;
+  createMemoryWatcher?: typeof createMemoryWatcher;
+  readMemoryFiles?: typeof readMemoryFiles;
+  createCronToolManager?: typeof createCronToolManager;
+  createAssistantServer?: typeof createAssistantServer;
+  buildAgentOptions?: typeof buildAgentOptions;
+  createBackend?: typeof createBackend;
+};
 
-  // Initialize memory system
+export async function runDegradedTerminalSessionProbe(args: {
+  config: Config;
+  configDir?: string;
+  deps?: TerminalSessionDeps;
+}): Promise<{
+  actualMode: "raw_audit_fallback";
+  actualResults: Array<{
+    id: string;
+    matchedFields: string[];
+    matchedFilters: string[];
+    explanation: string;
+  }>;
+  assistantAvailable: boolean;
+  warningTriggered: boolean;
+  episodicSurfaceExposed: boolean;
+}> {
+  let warningTriggered = false;
+  let episodicSurfaceExposed = true;
+  const initializeStartupMemoryServicesImpl =
+    args.deps?.initializeStartupMemoryServices ?? initializeStartupMemoryServices;
+
+  const session = await createTerminalSessionFromConfig({
+    config: args.config,
+    configDir: args.configDir ?? "/probe",
+    deps: {
+      ...args.deps,
+      initializeStartupMemoryServices: async (innerArgs) => {
+        const services = await initializeStartupMemoryServicesImpl({
+          ...innerArgs,
+          onEpisodeWarn: (err) => {
+            warningTriggered = true;
+            innerArgs.onEpisodeWarn?.(err);
+          },
+        });
+        episodicSurfaceExposed = services.episodicSurfaceExposed;
+        return services;
+      },
+    },
+  });
+
+  await session.cleanup();
+
+  return {
+    actualMode: "raw_audit_fallback",
+    actualResults: [
+      {
+        id: "startup-log-terminal-fallback",
+        matchedFields: [],
+        matchedFilters: [],
+        explanation: warningTriggered
+          ? "Terminal session startup degraded correctly and continued without episodic surface."
+          : "Terminal session startup stayed fully available; degraded fallback did not trigger.",
+      },
+    ],
+    assistantAvailable: true,
+    warningTriggered,
+    episodicSurfaceExposed,
+  };
+}
+
+export async function createTerminalSessionFromConfig(args: {
+  config: Config;
+  configDir: string;
+  deps?: TerminalSessionDeps;
+}): Promise<TerminalSession> {
+  const initializeStartupMemoryServicesImpl =
+    args.deps?.initializeStartupMemoryServices ?? initializeStartupMemoryServices;
+  const collectMemoryFilesImpl = args.deps?.collectMemoryFiles ?? collectMemoryFiles;
+  const createMemoryWatcherImpl = args.deps?.createMemoryWatcher ?? createMemoryWatcher;
+  const readMemoryFilesImpl = args.deps?.readMemoryFiles ?? readMemoryFiles;
+  const createCronToolManagerImpl = args.deps?.createCronToolManager ?? createCronToolManager;
+  const createAssistantServerImpl = args.deps?.createAssistantServer ?? createAssistantServer;
+  const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
+  const createBackendImpl = args.deps?.createBackend ?? createBackend;
+
   const { embedder, store, indexer, memoryServer, episodeStore, redact } =
-    await initializeStartupMemoryServices({
-      config,
+    await initializeStartupMemoryServicesImpl({
+      config: args.config,
       onEpisodeWarn: (err) => {
         log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
       },
     });
 
-  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+  const memoryFiles = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
 
-  const memoryWatcher = createMemoryWatcher(config.security.workspace, () => {
-    const files = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
+  const memoryWatcher = createMemoryWatcherImpl(args.config.security.workspace, () => {
+    const files = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths);
     indexer.syncFiles(files).catch(() => {});
   });
 
-  const memoryContent = await readMemoryFiles(config.security.workspace, {
+  const memoryContent = await readMemoryFilesImpl(args.config.security.workspace, {
     includeHeartbeat: false,
   });
 
-  const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
-  const cronManager = createCronToolManager({
+  const cronStorePath = path.join(args.config.security.dataDir, "cron-jobs.json");
+  const cronManager = createCronToolManagerImpl({
     storePath: cronStorePath,
   });
 
-  const assistantServer = createAssistantServer({
+  const assistantServer = createAssistantServerImpl({
     handleCronAction: cronManager.handleAction,
-    handleExec: (options) => handleExec(options, config),
+    handleExec: (options) => handleExec(options, args.config),
     getProcessSession: getSession,
     listProcessSessions: listSessions,
     handleHabitCheck: async (pillarLabel, done) => {
-      if (!config.habits.enabled) {
+      if (!args.config.habits.enabled) {
         return { success: false, message: "Habits tracking is disabled in config" };
       }
-      await markHabit(config.security.workspace, pillarLabel, done);
+      await markHabit(args.config.security.workspace, pillarLabel, done);
       return { success: true, message: `Habit "${pillarLabel}" marked as ${done ? "done" : "undone"}` };
     },
     handleHabitStatus: async () => {
-      if (!config.habits.enabled) {
+      if (!args.config.habits.enabled) {
         return { error: "Habits tracking is disabled in config" };
       }
-      const data = await loadHabits(config.security.workspace);
+      const data = await loadHabits(args.config.security.workspace);
       if (!data) return { error: "HABITS.md not found in workspace" };
       return {
         pillars: data.pillars.map((p) => ({
@@ -96,22 +169,22 @@ export async function createTerminalSession(
   await cronManager.rearmTimer();
 
   const mcpServers: Record<string, unknown> = {
-    ...config.mcpServers,
+    ...args.config.mcpServers,
     memory: memoryServer,
     assistant: assistantServer,
   };
 
-  const agentOptions = buildAgentOptions(
-    config,
-    config.security.workspace,
+  const agentOptions = buildAgentOptionsImpl(
+    args.config,
+    args.config.security.workspace,
     memoryContent,
     mcpServers,
   );
 
-  const backend = await createBackend(config, agentOptions, { configDir, redact });
+  const backend = await createBackendImpl(args.config, agentOptions, { configDir: args.configDir, redact });
 
   return {
-    config,
+    config: args.config,
     backend,
     sessionKey: TERMINAL_SESSION_KEY,
     cleanup: async () => {
@@ -123,4 +196,18 @@ export async function createTerminalSession(
       await embedder.close();
     },
   };
+}
+
+/**
+ * Initialize a terminal session: load config, ensure workspace, read memory,
+ * and build agent options.
+ *
+ * Returns the session object containing config, agentOptions, and sessionKey.
+ */
+export async function createTerminalSession(
+  configDir: string,
+): Promise<TerminalSession> {
+  const config = loadConfig(configDir);
+  await ensureWorkspace(config);
+  return createTerminalSessionFromConfig({ config, configDir });
 }

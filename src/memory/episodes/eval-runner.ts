@@ -13,11 +13,13 @@ export type EpisodeEvalReport = {
   syntheticFixtures: number;
   sharedStartupWiringFixtures: number;
   sharedMemoryStartupFixtures: number;
+  terminalStartupEntrypointFixtures: number;
   passedFixtures: number;
   runtimePassedFixtures: number;
   syntheticPassedFixtures: number;
   sharedStartupWiringPassedFixtures: number;
   sharedMemoryStartupPassedFixtures: number;
+  terminalStartupEntrypointPassedFixtures: number;
   failedFixtures: number;
   failedFixtureIds: string[];
   fixtureKinds: Record<string, EpisodeEvalFixtureKind>;
@@ -37,6 +39,8 @@ function formatFixtureKindSummary(kind: EpisodeEvalFixtureKind, passed: number, 
       return `Shared startup wiring fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
     case "shared_memory_startup":
       return `Shared memory startup fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
+    case "terminal_startup_entrypoint":
+      return `Terminal startup entrypoint fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
     case "runtime":
       return `Runtime fixtures: ${passed}/${total} passed`;
   }
@@ -58,6 +62,9 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
   const sharedMemoryStartupFixtures = fixtures.filter(
     (fixture) => resolveFixtureKind(fixture) === "shared_memory_startup",
   ).length;
+  const terminalStartupEntrypointFixtures = fixtures.filter(
+    (fixture) => resolveFixtureKind(fixture) === "terminal_startup_entrypoint",
+  ).length;
   const syntheticPassedFixtures = results.filter(
     (result) => fixtureKinds[result.fixtureId] === "synthetic" && result.failureClasses.length === 0,
   ).length;
@@ -68,6 +75,10 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
   const sharedMemoryStartupPassedFixtures = results.filter(
     (result) =>
       fixtureKinds[result.fixtureId] === "shared_memory_startup" && result.failureClasses.length === 0,
+  ).length;
+  const terminalStartupEntrypointPassedFixtures = results.filter(
+    (result) =>
+      fixtureKinds[result.fixtureId] === "terminal_startup_entrypoint" && result.failureClasses.length === 0,
   ).length;
   const runtimePassedFixtures = results.filter(
     (result) => fixtureKinds[result.fixtureId] === "runtime" && result.failureClasses.length === 0,
@@ -80,11 +91,13 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
     syntheticFixtures,
     sharedStartupWiringFixtures,
     sharedMemoryStartupFixtures,
+    terminalStartupEntrypointFixtures,
     passedFixtures: results.length - failedFixtureIds.length,
     runtimePassedFixtures,
     syntheticPassedFixtures,
     sharedStartupWiringPassedFixtures,
     sharedMemoryStartupPassedFixtures,
+    terminalStartupEntrypointPassedFixtures,
     failedFixtures: failedFixtureIds.length,
     failedFixtureIds,
     fixtureKinds,
@@ -115,6 +128,15 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
         "shared_memory_startup",
         report.sharedMemoryStartupPassedFixtures,
         report.sharedMemoryStartupFixtures,
+      ),
+    );
+  }
+  if (report.terminalStartupEntrypointFixtures > 0) {
+    lines.push(
+      formatFixtureKindSummary(
+        "terminal_startup_entrypoint",
+        report.terminalStartupEntrypointPassedFixtures,
+        report.terminalStartupEntrypointFixtures,
       ),
     );
   }
