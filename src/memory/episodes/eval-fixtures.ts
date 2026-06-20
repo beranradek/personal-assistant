@@ -307,6 +307,16 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
       expectedTopKAtMost: 1,
       availabilityExpected: true,
       availabilityActual: degradedStartupProbe.assistantAvailable,
+      probeStateExpected: {
+        fallbackTriggered: true,
+        warningTriggered: true,
+        episodicSurfaceExposed: false,
+      },
+      probeStateActual: {
+        fallbackTriggered: degradedStartupProbe.fallbackTriggered,
+        warningTriggered: degradedStartupProbe.warningTriggered,
+        episodicSurfaceExposed: degradedStartupProbe.episodicSurfaceExposed,
+      },
       maxLatencyMs: 50,
     },
     {

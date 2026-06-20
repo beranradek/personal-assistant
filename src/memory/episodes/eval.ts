@@ -37,6 +37,16 @@ export const EpisodeEvalFixtureSchema = z.object({
   expectedTopKAtMost: z.number().int().positive().max(1000).optional(),
   availabilityExpected: z.boolean().optional(),
   availabilityActual: z.boolean().optional(),
+  probeStateExpected: z.object({
+    fallbackTriggered: z.boolean().optional(),
+    warningTriggered: z.boolean().optional(),
+    episodicSurfaceExposed: z.boolean().optional(),
+  }).optional(),
+  probeStateActual: z.object({
+    fallbackTriggered: z.boolean().optional(),
+    warningTriggered: z.boolean().optional(),
+    episodicSurfaceExposed: z.boolean().optional(),
+  }).optional(),
   actualMode: EpisodeEvalExpectedModeSchema.optional(),
   actualResults: z.array(z.object({
     id: z.string().min(1),
@@ -80,6 +90,7 @@ export type EpisodeEvalResult = {
     latencyMs: number;
     explanationPresent: boolean;
     availabilityOk: boolean | null;
+    probeStateOk: boolean | null;
   };
   resultIds: string[];
   matchedFieldsById: Record<string, string[]>;
@@ -98,13 +109,14 @@ function listFailureClasses(args: {
   mustAvoidPrecision: boolean;
   topKBounded: boolean;
   availabilityOk: boolean | null;
+  probeStateOk: boolean | null;
   latencyOk: boolean;
 }): EpisodeEvalRegressionClass[] {
   const failures = new Set<EpisodeEvalRegressionClass>();
   if (!args.modeCorrect) failures.add("routing");
   if (!args.mustHitRecall || !args.top1Correct) failures.add("ranking");
   if (!args.mustAvoidPrecision || !args.topKBounded) failures.add("noise");
-  if (args.availabilityOk === false) failures.add("availability");
+  if (args.availabilityOk === false || args.probeStateOk === false) failures.add("availability");
   if (!args.latencyOk) failures.add("latency");
   return [...failures];
 }
@@ -146,6 +158,15 @@ export function evaluateEpisodeFixture(input: EpisodeEvalFixture): EpisodeEvalRe
     fixture.availabilityExpected === undefined && fixture.availabilityActual === undefined
       ? null
       : fixture.availabilityExpected === fixture.availabilityActual;
+  const probeStateOk =
+    fixture.probeStateExpected === undefined && fixture.probeStateActual === undefined
+      ? null
+      : fixture.probeStateExpected !== undefined &&
+          fixture.probeStateActual !== undefined &&
+          Object.entries(fixture.probeStateExpected).every(([key, expected]) =>
+            expected === undefined ||
+            fixture.probeStateActual?.[key as keyof typeof fixture.probeStateActual] === expected,
+          );
   const modeCorrect = actualMode === fixture.expectedMode;
 
   return {
@@ -161,6 +182,7 @@ export function evaluateEpisodeFixture(input: EpisodeEvalFixture): EpisodeEvalRe
       latencyMs,
       explanationPresent,
       availabilityOk,
+      probeStateOk,
     },
     resultIds,
     matchedFieldsById: Object.fromEntries(
@@ -174,6 +196,7 @@ export function evaluateEpisodeFixture(input: EpisodeEvalFixture): EpisodeEvalRe
       mustAvoidPrecision,
       topKBounded,
       availabilityOk,
+      probeStateOk,
       latencyOk,
     }),
   };

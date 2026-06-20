@@ -391,9 +391,27 @@ describe("terminal", () => {
 
       expect(probe.actualMode).toBe("raw_audit_fallback");
       expect(probe.assistantAvailable).toBe(true);
+      expect(probe.fallbackTriggered).toBe(true);
       expect(probe.warningTriggered).toBe(true);
       expect(probe.episodicSurfaceExposed).toBe(false);
       expect(probe.actualResults[0]?.id).toBe("startup-log-terminal-fallback");
+    });
+
+    it("reports a healthy terminal startup probe without false degraded signal", async () => {
+      const config = makeConfig();
+      setupSessionMocks(config);
+      vi.mocked(buildAgentOptions).mockReturnValue({} as any);
+
+      const probe = await runDegradedTerminalSessionProbe({
+        config,
+        configDir: "/app",
+      });
+
+      expect(probe.assistantAvailable).toBe(true);
+      expect(probe.fallbackTriggered).toBe(false);
+      expect(probe.warningTriggered).toBe(false);
+      expect(probe.episodicSurfaceExposed).toBe(true);
+      expect(probe.actualResults[0]?.explanation).toContain("did not trigger");
     });
   });
 

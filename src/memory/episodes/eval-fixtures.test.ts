@@ -9,6 +9,11 @@ describe("default episode eval fixtures", () => {
     expect(degraded).toBeDefined();
     expect(degraded?.fixtureKind).toBe("terminal_startup_entrypoint");
     expect(degraded?.actualMode).toBe("raw_audit_fallback");
+    expect(degraded?.probeStateExpected).toEqual({
+      fallbackTriggered: true,
+      warningTriggered: true,
+      episodicSurfaceExposed: false,
+    });
     expect(degraded?.actualResults?.[0]?.explanation).toContain("Terminal session startup degraded correctly");
   });
 });

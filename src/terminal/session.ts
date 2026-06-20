@@ -51,10 +51,12 @@ export async function runDegradedTerminalSessionProbe(args: {
     explanation: string;
   }>;
   assistantAvailable: boolean;
+  fallbackTriggered: boolean;
   warningTriggered: boolean;
   episodicSurfaceExposed: boolean;
 }> {
   let warningTriggered = false;
+  let fallbackTriggered = false;
   let episodicSurfaceExposed = true;
   const initializeStartupMemoryServicesImpl =
     args.deps?.initializeStartupMemoryServices ?? initializeStartupMemoryServices;
@@ -72,6 +74,7 @@ export async function runDegradedTerminalSessionProbe(args: {
             innerArgs.onEpisodeWarn?.(err);
           },
         });
+        fallbackTriggered = services.fallbackTriggered;
         episodicSurfaceExposed = services.episodicSurfaceExposed;
         return services;
       },
@@ -93,6 +96,7 @@ export async function runDegradedTerminalSessionProbe(args: {
       },
     ],
     assistantAvailable: true,
+    fallbackTriggered,
     warningTriggered,
     episodicSurfaceExposed,
   };
