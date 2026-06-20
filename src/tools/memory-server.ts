@@ -8,12 +8,7 @@ import {
   type EpisodeListFilters,
   type EpisodeRecord,
 } from "../memory/episodes/types.js";
-
-type EpisodicSearchResult = {
-  score: number;
-  matchedFields: string[];
-  episode: ReturnType<typeof sanitizeEpisodeRecord>;
-};
+import { searchEpisodes } from "../memory/episodes/retrieval.js";
 
 const EpisodeToolFiltersSchema = {
   sessionKey: z.string().optional().describe("Exact session key filter"),
@@ -122,66 +117,6 @@ function topCounts(values: Array<string | null | undefined>) {
     .map(([value, count]) => ({ value, count }));
 }
 
-function searchableFields(episode: EpisodeRecord): Array<[string, string[]]> {
-  return [
-    ["action", [episode.action]],
-    ["summary", [episode.summary]],
-    ["projectName", [episode.projectName ?? ""]],
-    ["jobName", [episode.jobName ?? ""]],
-    ["issueId", [episode.issueId ?? ""]],
-    ["pullRequestId", [episode.pullRequestId ?? ""]],
-    ["category", [episode.category ?? ""]],
-    ["source", [episode.source]],
-    ["outcome", [episode.outcome]],
-    ["tags", episode.tags],
-    ["skillsUsed", episode.skillsUsed],
-    ["toolsUsed", episode.toolsUsed],
-    ["errors", episode.errors],
-    ["blockers", episode.blockers],
-  ];
-}
-
-function scoreEpisodeMatch(
-  episode: EpisodeRecord,
-  query: string,
-  redact?: (text: string) => string,
-): EpisodicSearchResult | null {
-  const normalizedQuery = query.trim().toLowerCase();
-  if (!normalizedQuery) {
-    return { score: 0, matchedFields: [], episode: sanitizeEpisodeRecord(episode, redact) };
-  }
-
-  const matchedFields = new Set<string>();
-  let score = 0;
-
-  for (const [field, values] of searchableFields(episode)) {
-    for (const rawValue of values) {
-      const value = rawValue.toLowerCase();
-      if (value === normalizedQuery) {
-        matchedFields.add(field);
-        score += 8;
-      } else if (value.includes(normalizedQuery)) {
-        matchedFields.add(field);
-        score += 4;
-      } else {
-        const queryTerms = normalizedQuery.split(/\s+/).filter(Boolean);
-        const matchedTerms = queryTerms.filter((term) => value.includes(term));
-        if (matchedTerms.length > 0) {
-          matchedFields.add(field);
-          score += matchedTerms.length;
-        }
-      }
-    }
-  }
-
-  if (matchedFields.size === 0) return null;
-  return {
-    score,
-    matchedFields: [...matchedFields].sort(),
-    episode: sanitizeEpisodeRecord(episode, redact),
-  };
-}
-
 /**
  * Create an MCP server that exposes memory lookup tools.
  *
@@ -240,20 +175,16 @@ export function createMemoryServer(deps: {
         async (args) => {
           const filters = pickEpisodeFilters(args);
           const episodes = deps.listEpisodes!(filters);
-          const results = args.query?.trim()
-            ? episodes
-                .map((episode) => scoreEpisodeMatch(episode, args.query!, deps.redact))
-                .filter((value): value is EpisodicSearchResult => value != null)
-                .sort((left, right) => {
-                  if (right.score !== left.score) return right.score - left.score;
-                  return right.episode.startedAt.localeCompare(left.episode.startedAt);
-                })
-                .slice(0, args.maxResults ?? episodes.length)
-            : episodes.map((episode) => ({
-                score: 0,
-                matchedFields: [],
-                episode: sanitizeEpisodeRecord(episode, deps.redact),
-              })).slice(0, args.maxResults ?? episodes.length);
+          const results = searchEpisodes(episodes, {
+            query: args.query,
+            filters,
+            maxResults: args.maxResults,
+          }).map((result) => ({
+            score: result.score,
+            matchedFields: result.matchedFields,
+            matchedFilters: result.exactMatchedFilters,
+            episode: sanitizeEpisodeRecord(result.episode, deps.redact),
+          }));
           return toJsonContent(results);
         },
       ),
