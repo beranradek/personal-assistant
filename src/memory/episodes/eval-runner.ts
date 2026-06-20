@@ -1,4 +1,9 @@
-import { evaluateEpisodeFixture, type EpisodeEvalFixture, type EpisodeEvalResult } from "./eval.js";
+import {
+  evaluateEpisodeFixture,
+  type EpisodeEvalFixture,
+  type EpisodeEvalFixtureKind,
+  type EpisodeEvalResult,
+} from "./eval.js";
 import { createDefaultEpisodeEvalFixtures } from "./eval-fixtures.js";
 
 export type EpisodeEvalReport = {
@@ -6,44 +11,69 @@ export type EpisodeEvalReport = {
   totalFixtures: number;
   runtimeFixtures: number;
   syntheticFixtures: number;
+  sharedStartupHelperFixtures: number;
   passedFixtures: number;
   runtimePassedFixtures: number;
   syntheticPassedFixtures: number;
+  sharedStartupHelperPassedFixtures: number;
   failedFixtures: number;
   failedFixtureIds: string[];
-  fixtureKinds: Record<string, "runtime" | "synthetic">;
+  fixtureKinds: Record<string, EpisodeEvalFixtureKind>;
   results: EpisodeEvalResult[];
 };
 
+function resolveFixtureKind(fixture: EpisodeEvalFixture): EpisodeEvalFixtureKind {
+  if (fixture.fixtureKind) return fixture.fixtureKind;
+  return fixture.synthetic ? "synthetic" : "runtime";
+}
+
+function formatFixtureKindSummary(kind: EpisodeEvalFixtureKind, passed: number, total: number): string {
+  switch (kind) {
+    case "synthetic":
+      return `Synthetic fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
+    case "shared_startup_helper":
+      return `Shared startup helper fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
+    case "runtime":
+      return `Runtime fixtures: ${passed}/${total} passed`;
+  }
+}
+
 export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): EpisodeEvalReport {
   const results = fixtures.map((fixture) => evaluateEpisodeFixture(fixture));
-  const syntheticFixtureIds = new Set(
-    fixtures.filter((fixture) => fixture.synthetic).map((fixture) => fixture.id),
-  );
+  const fixtureKinds = Object.fromEntries(
+    fixtures.map((fixture) => [fixture.id, resolveFixtureKind(fixture)]),
+  ) as Record<string, EpisodeEvalFixtureKind>;
   const failedFixtureIds = results
     .filter((result) => result.failureClasses.length > 0)
     .map((result) => result.fixtureId);
-  const runtimeFixtures = fixtures.length - syntheticFixtureIds.size;
+  const runtimeFixtures = fixtures.filter((fixture) => resolveFixtureKind(fixture) === "runtime").length;
+  const syntheticFixtures = fixtures.filter((fixture) => resolveFixtureKind(fixture) === "synthetic").length;
+  const sharedStartupHelperFixtures = fixtures.filter(
+    (fixture) => resolveFixtureKind(fixture) === "shared_startup_helper",
+  ).length;
   const syntheticPassedFixtures = results.filter(
-    (result) => syntheticFixtureIds.has(result.fixtureId) && result.failureClasses.length === 0,
+    (result) => fixtureKinds[result.fixtureId] === "synthetic" && result.failureClasses.length === 0,
+  ).length;
+  const sharedStartupHelperPassedFixtures = results.filter(
+    (result) => fixtureKinds[result.fixtureId] === "shared_startup_helper" && result.failureClasses.length === 0,
   ).length;
   const runtimePassedFixtures = results.filter(
-    (result) => !syntheticFixtureIds.has(result.fixtureId) && result.failureClasses.length === 0,
+    (result) => fixtureKinds[result.fixtureId] === "runtime" && result.failureClasses.length === 0,
   ).length;
 
   return {
     generatedAt: new Date().toISOString(),
     totalFixtures: results.length,
     runtimeFixtures,
-    syntheticFixtures: syntheticFixtureIds.size,
+    syntheticFixtures,
+    sharedStartupHelperFixtures,
     passedFixtures: results.length - failedFixtureIds.length,
     runtimePassedFixtures,
     syntheticPassedFixtures,
+    sharedStartupHelperPassedFixtures,
     failedFixtures: failedFixtureIds.length,
     failedFixtureIds,
-    fixtureKinds: Object.fromEntries(
-      fixtures.map((fixture) => [fixture.id, fixture.synthetic ? "synthetic" : "runtime"]),
-    ),
+    fixtureKinds,
     results,
   };
 }
@@ -54,8 +84,15 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
     `Generated at: ${report.generatedAt}`,
   ];
   if (report.syntheticFixtures > 0) {
+    lines.push(formatFixtureKindSummary("synthetic", report.syntheticPassedFixtures, report.syntheticFixtures));
+  }
+  if (report.sharedStartupHelperFixtures > 0) {
     lines.push(
-      `Synthetic fixtures: ${report.syntheticPassedFixtures}/${report.syntheticFixtures} passed (not counted as runtime coverage)`,
+      formatFixtureKindSummary(
+        "shared_startup_helper",
+        report.sharedStartupHelperPassedFixtures,
+        report.sharedStartupHelperFixtures,
+      ),
     );
   }
 

@@ -11,9 +11,18 @@ export const EpisodeEvalExpectedModeSchema = z.enum([
 
 export type EpisodeEvalExpectedMode = z.infer<typeof EpisodeEvalExpectedModeSchema>;
 
+export const EpisodeEvalFixtureKindSchema = z.enum([
+  "runtime",
+  "synthetic",
+  "shared_startup_helper",
+]);
+
+export type EpisodeEvalFixtureKind = z.infer<typeof EpisodeEvalFixtureKindSchema>;
+
 export const EpisodeEvalFixtureSchema = z.object({
   id: z.string().min(1),
   synthetic: z.boolean().optional(),
+  fixtureKind: EpisodeEvalFixtureKindSchema.optional(),
   query: z.string().optional(),
   filters: EpisodeListFiltersSchema.omit({ limit: true }).optional(),
   maxResults: z.number().int().positive().max(1000).optional(),
@@ -33,6 +42,18 @@ export const EpisodeEvalFixtureSchema = z.object({
     matchedFilters: z.array(z.string()).default([]),
     explanation: z.string().nullable().optional(),
   })).optional(),
+}).superRefine((fixture, ctx) => {
+  if (
+    fixture.synthetic !== undefined &&
+    fixture.fixtureKind !== undefined &&
+    (fixture.synthetic ? "synthetic" : "runtime") !== fixture.fixtureKind
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "synthetic and fixtureKind must not conflict",
+      path: ["fixtureKind"],
+    });
+  }
 });
 
 export type EpisodeEvalFixture = z.infer<typeof EpisodeEvalFixtureSchema>;
