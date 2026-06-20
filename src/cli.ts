@@ -22,10 +22,11 @@ import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
 import { createLogger } from "./core/logger.js";
 import { runDailyReflection } from "./memory/daily-reflection.js";
+import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -56,6 +57,7 @@ Commands:
   mcp-server            Start stdio MCP server (for Codex backend integration)
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
+  episode-eval          Run the built-in episodic memory evaluation fixture corpus
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -208,6 +210,14 @@ async function runReflect(configDir: string, targetDate?: string): Promise<void>
   console.log("Done.");
 }
 
+export async function runEpisodeEval(): Promise<void> {
+  const report = await episodeEvalRunner.runDefaultEpisodeEval();
+  console.log(episodeEvalRunner.formatEpisodeEvalReport(report));
+  if (report.failedFixtures > 0) {
+    process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
@@ -242,6 +252,9 @@ async function main(): Promise<void> {
       await runReflect(configDir, targetDate);
       break;
     }
+    case "episode-eval":
+      await runEpisodeEval();
+      break;
     case "integapi": {
       const { runIntegApiCli } = await import("./integ-api/cli.js");
       const config = loadConfig(configDir);

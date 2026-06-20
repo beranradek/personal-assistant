@@ -13,6 +13,7 @@ export type EpisodeEvalExpectedMode = z.infer<typeof EpisodeEvalExpectedModeSche
 
 export const EpisodeEvalFixtureSchema = z.object({
   id: z.string().min(1),
+  synthetic: z.boolean().optional(),
   query: z.string().optional(),
   filters: EpisodeListFiltersSchema.omit({ limit: true }).optional(),
   maxResults: z.number().int().positive().max(1000).optional(),

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseCommand, parseReflectDate } from "./cli.js";
+import { parseCommand, parseReflectDate, runEpisodeEval } from "./cli.js";
+import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 
 describe("cli", () => {
   describe("parseCommand", () => {
@@ -42,6 +43,11 @@ describe("cli", () => {
       const result = parseCommand(["node", "cli.js", "reflect"]);
       expect(result).toBe("reflect");
     });
+
+    it('parses "episode-eval" subcommand', () => {
+      const result = parseCommand(["node", "cli.js", "episode-eval"]);
+      expect(result).toBe("episode-eval");
+    });
   });
 
   describe("parseReflectDate", () => {
@@ -67,5 +73,61 @@ describe("cli", () => {
       ).toThrow();
       exitSpy.mockRestore();
     });
+  });
+});
+
+describe("runEpisodeEval", () => {
+  it("prints the formatted report and keeps zero exit code on pass", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCodeBefore = process.exitCode;
+    process.exitCode = 0;
+    vi.spyOn(episodeEvalRunner, "runDefaultEpisodeEval").mockResolvedValue({
+      generatedAt: "2026-06-20T09:00:00.000Z",
+      totalFixtures: 1,
+      runtimeFixtures: 1,
+      syntheticFixtures: 0,
+      passedFixtures: 1,
+      runtimePassedFixtures: 1,
+      syntheticPassedFixtures: 0,
+      failedFixtures: 0,
+      failedFixtureIds: [],
+      results: [],
+    });
+    vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport").mockReturnValue("episode eval ok");
+    await runEpisodeEval();
+
+    expect(logSpy).toHaveBeenCalledWith("episode eval ok");
+    expect(process.exitCode).toBe(0);
+
+    logSpy.mockRestore();
+    process.exitCode = exitCodeBefore;
+    vi.restoreAllMocks();
+  });
+
+  it("sets non-zero exit code when fixtures fail", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCodeBefore = process.exitCode;
+    process.exitCode = 0;
+    vi.spyOn(episodeEvalRunner, "runDefaultEpisodeEval").mockResolvedValue({
+      generatedAt: "2026-06-20T09:00:00.000Z",
+      totalFixtures: 1,
+      runtimeFixtures: 1,
+      syntheticFixtures: 0,
+      passedFixtures: 0,
+      runtimePassedFixtures: 0,
+      syntheticPassedFixtures: 0,
+      failedFixtures: 1,
+      failedFixtureIds: ["broken"],
+      results: [],
+    });
+    vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport").mockReturnValue("episode eval failed");
+    await runEpisodeEval();
+
+    expect(logSpy).toHaveBeenCalledWith("episode eval failed");
+    expect(process.exitCode).toBe(1);
+
+    logSpy.mockRestore();
+    process.exitCode = exitCodeBefore;
+    vi.restoreAllMocks();
   });
 });
