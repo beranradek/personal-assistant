@@ -29,12 +29,7 @@ import { collectMemoryFiles } from "./memory/collect-files.js";
 import { createMemoryWatcher } from "./memory/watcher.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
 import { createBackend } from "./backends/factory.js";
-import { createEmbeddingProvider } from "./memory/embeddings.js";
-import { createVectorStore } from "./memory/vector-store.js";
-import { createIndexer } from "./memory/indexer.js";
-import { createRobustMemorySearch } from "./memory/robust-search.js";
-import { initializeEpisodeMemoryServer } from "./memory/episodes/runtime-probes.js";
-import { createMemoryServer } from "./tools/memory-server.js";
+import { initializeStartupMemoryServices } from "./memory/startup-services.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
@@ -53,7 +48,6 @@ import cron from "node-cron";
 import { runDailyReflection } from "./memory/daily-reflection.js";
 import { runWeeklyReflection } from "./memory/weekly-reflection.js";
 import { createLogger } from "./core/logger.js";
-import { createRedactor, CONSERVATIVE_PATTERNS } from "./security/content-redaction.js";
 import type { Adapter, AdapterMessage } from "./core/types.js";
 import { migrateLegacySessionsToUnified } from "./session/unified.js";
 
@@ -120,10 +114,13 @@ export async function startDaemon(configDir: string): Promise<void> {
   }
 
   // 3. Initialize memory system
-  const embedder = await createEmbeddingProvider();
-  const dbPath = path.join(config.security.dataDir, "vectors.db");
-  const store = createVectorStore(dbPath, embedder.dimensions);
-  const indexer = createIndexer(store, embedder);
+  const { embedder, store, indexer, searchMemory, redact, memoryServer, episodeStore } =
+    await initializeStartupMemoryServices({
+      config,
+      onEpisodeWarn: (err) => {
+        log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+      },
+    });
 
   // Sync memory files into the vector store in the background — do not block
   // adapter startup so that Telegram/Slack are responsive immediately while
@@ -175,34 +172,6 @@ export async function startDaemon(configDir: string): Promise<void> {
   const memoryContent = await readMemoryFiles(config.security.workspace, {
     includeHeartbeat: true,
   });
-
-  const searchMemory = createRobustMemorySearch({
-    workspaceDir: config.security.workspace,
-    extraPaths: config.memory.extraPaths,
-    store,
-    embedder,
-    config: {
-      vectorWeight: config.memory.search.hybridWeights.vector,
-      keywordWeight: config.memory.search.hybridWeights.keyword,
-      minScore: config.memory.search.minScore,
-      maxResults: config.memory.search.maxResults,
-      recencyBoost: config.memory.search.recencyBoost,
-      recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
-    },
-  });
-  const redact = createRedactor(CONSERVATIVE_PATTERNS);
-
-  // 4. Create MCP servers
-  const episodeRuntime = initializeEpisodeMemoryServer({
-    dbPath: path.join(config.security.dataDir, "episodes.db"),
-    search: searchMemory,
-    redact,
-    onWarn: (err) => {
-      log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
-    },
-    createServer: createMemoryServer,
-  });
-  const memoryServer = episodeRuntime.memoryServer;
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
   const cronManager = createCronToolManager({
@@ -493,7 +462,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Close memory watcher/timer and system
     clearInterval(memorySyncTimer);
     memoryWatcher.close();
-      episodeRuntime.episodeStore?.close();
+      episodeStore?.close();
     store.close();
     await embedder.close();
 

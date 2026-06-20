@@ -4,12 +4,7 @@ import { ensureWorkspace } from "../core/workspace.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { collectMemoryFiles } from "../memory/collect-files.js";
 import { createMemoryWatcher } from "../memory/watcher.js";
-import { createEmbeddingProvider } from "../memory/embeddings.js";
-import { createVectorStore } from "../memory/vector-store.js";
-import { createIndexer } from "../memory/indexer.js";
-import { createRobustMemorySearch } from "../memory/robust-search.js";
-import { initializeEpisodeMemoryServer } from "../memory/episodes/runtime-probes.js";
-import { createMemoryServer } from "../tools/memory-server.js";
+import { initializeStartupMemoryServices } from "../memory/startup-services.js";
 import { createAssistantServer } from "../tools/assistant-server.js";
 import { loadHabits, markHabit } from "../heartbeat/habits.js";
 import { createCronToolManager } from "../cron/tool.js";
@@ -17,7 +12,6 @@ import { handleExec } from "../exec/tool.js";
 import { getSession, listSessions } from "../exec/process-registry.js";
 import { buildAgentOptions } from "../core/agent-runner.js";
 import { createBackend } from "../backends/factory.js";
-import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
 import { createLogger } from "../core/logger.js";
 import type { AgentBackend } from "../backends/interface.js";
 import type { Config } from "../core/types.js";
@@ -46,10 +40,13 @@ export async function createTerminalSession(
   await ensureWorkspace(config);
 
   // Initialize memory system
-  const embedder = await createEmbeddingProvider();
-  const dbPath = path.join(config.security.dataDir, "vectors.db");
-  const store = createVectorStore(dbPath, embedder.dimensions);
-  const indexer = createIndexer(store, embedder);
+  const { embedder, store, indexer, memoryServer, episodeStore, redact } =
+    await initializeStartupMemoryServices({
+      config,
+      onEpisodeWarn: (err) => {
+        log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+      },
+    });
 
   const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths);
   await indexer.syncFiles(memoryFiles);
@@ -62,34 +59,6 @@ export async function createTerminalSession(
   const memoryContent = await readMemoryFiles(config.security.workspace, {
     includeHeartbeat: false,
   });
-
-  const searchMemory = createRobustMemorySearch({
-    workspaceDir: config.security.workspace,
-    extraPaths: config.memory.extraPaths,
-    store,
-    embedder,
-    config: {
-      vectorWeight: config.memory.search.hybridWeights.vector,
-      keywordWeight: config.memory.search.hybridWeights.keyword,
-      minScore: config.memory.search.minScore,
-      maxResults: config.memory.search.maxResults,
-      recencyBoost: config.memory.search.recencyBoost,
-      recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
-    },
-  });
-  const redact = createRedactor(CONSERVATIVE_PATTERNS);
-
-  // Create MCP servers (memory + assistant + user-configured)
-  const episodeRuntime = initializeEpisodeMemoryServer({
-    dbPath: path.join(config.security.dataDir, "episodes.db"),
-    search: searchMemory,
-    redact,
-    onWarn: (err) => {
-      log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
-    },
-    createServer: createMemoryServer,
-  });
-  const memoryServer = episodeRuntime.memoryServer;
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
   const cronManager = createCronToolManager({
@@ -149,7 +118,7 @@ export async function createTerminalSession(
       memoryWatcher.close();
       if (backend.close) await backend.close();
       cronManager.stop();
-      episodeRuntime.episodeStore?.close();
+      episodeStore?.close();
       store.close();
       await embedder.close();
     },
