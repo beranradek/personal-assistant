@@ -14,6 +14,7 @@ describe("episode eval runner", () => {
     expect(report.runtimePassedFixtures).toBe(5);
     expect(report.syntheticPassedFixtures).toBe(1);
     expect(report.failedFixtureIds).toEqual([]);
+    expect(report.fixtureKinds["degraded-store-startup"]).toBe("synthetic");
   });
 
   it("formats a concise human-readable report", () => {

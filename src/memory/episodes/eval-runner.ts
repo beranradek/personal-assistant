@@ -11,6 +11,7 @@ export type EpisodeEvalReport = {
   syntheticPassedFixtures: number;
   failedFixtures: number;
   failedFixtureIds: string[];
+  fixtureKinds: Record<string, "runtime" | "synthetic">;
   results: EpisodeEvalResult[];
 };
 
@@ -40,6 +41,9 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
     syntheticPassedFixtures,
     failedFixtures: failedFixtureIds.length,
     failedFixtureIds,
+    fixtureKinds: Object.fromEntries(
+      fixtures.map((fixture) => [fixture.id, fixture.synthetic ? "synthetic" : "runtime"]),
+    ),
     results,
   };
 }
@@ -66,9 +70,7 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
   for (const result of report.results) {
     const status = result.failureClasses.length === 0 ? "PASS" : "FAIL";
     const failures = result.failureClasses.length === 0 ? "-" : result.failureClasses.join(", ");
-    const fixtureKind = report.syntheticFixtures > 0 && result.fixtureId === "degraded-store-startup"
-      ? "synthetic"
-      : "runtime";
+    const fixtureKind = report.fixtureKinds[result.fixtureId] ?? "runtime";
     lines.push(
       `- ${result.fixtureId}: ${status} | kind=${fixtureKind} | mode=${result.actualMode} | failures=${failures} | top1=${result.resultIds[0] ?? "-"} | latencyMs=${result.metrics.latencyMs.toFixed(2)}`,
     );

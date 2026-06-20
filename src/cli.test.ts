@@ -91,6 +91,7 @@ describe("runEpisodeEval", () => {
       syntheticPassedFixtures: 0,
       failedFixtures: 0,
       failedFixtureIds: [],
+      fixtureKinds: {},
       results: [],
     });
     vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport").mockReturnValue("episode eval ok");
@@ -118,6 +119,7 @@ describe("runEpisodeEval", () => {
       syntheticPassedFixtures: 0,
       failedFixtures: 1,
       failedFixtureIds: ["broken"],
+      fixtureKinds: {},
       results: [],
     });
     vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport").mockReturnValue("episode eval failed");

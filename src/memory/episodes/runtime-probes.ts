@@ -24,6 +24,30 @@ export function buildEpisodeMemoryServerDeps(episodeStore?: Pick<EpisodeStore, "
   };
 }
 
+export function initializeEpisodeMemoryRuntime(args: {
+  dbPath: string;
+  openStore?: (dbPath: string) => EpisodeStore;
+  onWarn?: (err: unknown) => void;
+}): {
+  episodeStore?: EpisodeStore;
+  memoryServerDeps: {
+    listEpisodes?: (filters?: EpisodeListFilters) => ReturnType<EpisodeStore["listEpisodes"]>;
+  };
+  assistantAvailable: true;
+  fallbackTriggered: boolean;
+} {
+  const episodeStore = openEpisodeStoreSafely(args);
+  const memoryServerDeps = buildEpisodeMemoryServerDeps(episodeStore);
+  const fallbackTriggered = !("listEpisodes" in memoryServerDeps);
+
+  return {
+    episodeStore,
+    memoryServerDeps,
+    assistantAvailable: true,
+    fallbackTriggered,
+  };
+}
+
 export function runDegradedStoreStartupProbe(args?: {
   dbPath?: string;
   openStore?: (dbPath: string) => EpisodeStore;
@@ -38,12 +62,10 @@ export function runDegradedStoreStartupProbe(args?: {
   assistantAvailable: boolean;
   fallbackTriggered: boolean;
 } {
-  const episodeStore = openEpisodeStoreSafely({
+  const runtime = initializeEpisodeMemoryRuntime({
     dbPath: args?.dbPath ?? "episodes.db",
     openStore: args?.openStore,
   });
-  const memoryDeps = buildEpisodeMemoryServerDeps(episodeStore);
-  const fallbackTriggered = !("listEpisodes" in memoryDeps);
 
   return {
     actualMode: "raw_audit_fallback",
@@ -52,12 +74,12 @@ export function runDegradedStoreStartupProbe(args?: {
         id: "startup-log-daemon-fallback",
         matchedFields: [],
         matchedFilters: [],
-        explanation: fallbackTriggered
+        explanation: runtime.fallbackTriggered
           ? "Episodic store open failed; runtime degraded to non-episodic memory paths."
           : "Episodic store stayed available; degraded fallback did not trigger.",
       },
     ],
-    assistantAvailable: true,
-    fallbackTriggered,
+    assistantAvailable: runtime.assistantAvailable,
+    fallbackTriggered: runtime.fallbackTriggered,
   };
 }

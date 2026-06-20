@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildEpisodeMemoryServerDeps,
+  initializeEpisodeMemoryRuntime,
   openEpisodeStoreSafely,
   runDegradedStoreStartupProbe,
 } from "./runtime-probes.js";
@@ -23,6 +24,24 @@ describe("episodic runtime probes", () => {
 
   it("buildEpisodeMemoryServerDeps omits episodic deps when store is unavailable", () => {
     expect(buildEpisodeMemoryServerDeps()).toEqual({});
+  });
+
+  it("initializeEpisodeMemoryRuntime returns fallback state from the production startup helper", () => {
+    const onWarn = vi.fn();
+
+    const result = initializeEpisodeMemoryRuntime({
+      dbPath: "/tmp/episodes.db",
+      openStore: () => {
+        throw new Error("episodes.db incompatible schema");
+      },
+      onWarn,
+    });
+
+    expect(result.episodeStore).toBeUndefined();
+    expect(result.memoryServerDeps).toEqual({});
+    expect(result.assistantAvailable).toBe(true);
+    expect(result.fallbackTriggered).toBe(true);
+    expect(onWarn).toHaveBeenCalledOnce();
   });
 
   it("runDegradedStoreStartupProbe exercises the safe-open degraded path", () => {
