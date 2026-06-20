@@ -9,6 +9,7 @@ vi.mock("../../tools/memory-server.js", () => ({
 
 import {
   buildEpisodeMemoryServerDeps,
+  initializeEpisodeMemoryServer,
   initializeEpisodeMemoryRuntime,
   openEpisodeStoreSafely,
   runDegradedStoreStartupProbe,
@@ -50,6 +51,36 @@ describe("episodic runtime probes", () => {
     expect(result.assistantAvailable).toBe(true);
     expect(result.fallbackTriggered).toBe(true);
     expect(onWarn).toHaveBeenCalledOnce();
+  });
+
+  it("initializeEpisodeMemoryServer returns warning and wiring state directly", () => {
+    const store = {
+      listEpisodes: vi.fn(() => []),
+      close: vi.fn(),
+    } as unknown as EpisodeStore;
+    const createServer = vi.fn(() => ({ type: "sdk" }));
+
+    const result = initializeEpisodeMemoryServer({
+      dbPath: "/tmp/episodes.db",
+      search: async () => [],
+      redact: (text) => text,
+      openStore: () => store,
+      createServer,
+    });
+
+    expect(result.episodeStore).toBe(store);
+    expect(result.memoryServer).toEqual({ type: "sdk" });
+    expect(result.assistantAvailable).toBe(true);
+    expect(result.fallbackTriggered).toBe(false);
+    expect(result.warningTriggered).toBe(false);
+    expect(result.episodicSurfaceExposed).toBe(true);
+    expect(createServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        listEpisodes: expect.any(Function),
+        search: expect.any(Function),
+        redact: expect.any(Function),
+      }),
+    );
   });
 
   it("runDegradedStoreStartupProbe exercises the safe-open degraded path", () => {

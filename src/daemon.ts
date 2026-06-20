@@ -33,7 +33,7 @@ import { createEmbeddingProvider } from "./memory/embeddings.js";
 import { createVectorStore } from "./memory/vector-store.js";
 import { createIndexer } from "./memory/indexer.js";
 import { createRobustMemorySearch } from "./memory/robust-search.js";
-import { initializeEpisodeMemoryRuntime } from "./memory/episodes/runtime-probes.js";
+import { initializeEpisodeMemoryServer } from "./memory/episodes/runtime-probes.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
@@ -123,12 +123,6 @@ export async function startDaemon(configDir: string): Promise<void> {
   const embedder = await createEmbeddingProvider();
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
-  const episodeRuntime = initializeEpisodeMemoryRuntime({
-    dbPath: path.join(config.security.dataDir, "episodes.db"),
-    onWarn: (err) => {
-      log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
-    },
-  });
   const indexer = createIndexer(store, embedder);
 
   // Sync memory files into the vector store in the background — do not block
@@ -199,11 +193,16 @@ export async function startDaemon(configDir: string): Promise<void> {
   const redact = createRedactor(CONSERVATIVE_PATTERNS);
 
   // 4. Create MCP servers
-  const memoryServer = createMemoryServer({
+  const episodeRuntime = initializeEpisodeMemoryServer({
+    dbPath: path.join(config.security.dataDir, "episodes.db"),
     search: searchMemory,
     redact,
-    ...episodeRuntime.memoryServerDeps,
+    onWarn: (err) => {
+      log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
+    },
+    createServer: createMemoryServer,
   });
+  const memoryServer = episodeRuntime.memoryServer;
 
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
   const cronManager = createCronToolManager({
