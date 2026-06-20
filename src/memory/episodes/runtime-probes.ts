@@ -1,5 +1,13 @@
 import { createEpisodeStore, type EpisodeStore } from "./store.js";
 import type { EpisodeListFilters } from "./types.js";
+import { createMemoryServer } from "../../tools/memory-server.js";
+import type { SearchResult } from "../../core/types.js";
+
+type EpisodeMemoryServerProbeDeps = {
+  search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
+  redact: (text: string) => string;
+  listEpisodes?: (filters?: EpisodeListFilters) => ReturnType<EpisodeStore["listEpisodes"]>;
+};
 
 export function openEpisodeStoreSafely(args: {
   dbPath: string;
@@ -51,6 +59,7 @@ export function initializeEpisodeMemoryRuntime(args: {
 export function runDegradedStoreStartupProbe(args?: {
   dbPath?: string;
   openStore?: (dbPath: string) => EpisodeStore;
+  createServer?: (deps: EpisodeMemoryServerProbeDeps) => unknown;
 }): {
   actualMode: "raw_audit_fallback";
   actualResults: Array<{
@@ -61,11 +70,25 @@ export function runDegradedStoreStartupProbe(args?: {
   }>;
   assistantAvailable: boolean;
   fallbackTriggered: boolean;
+  warningTriggered: boolean;
+  episodicSurfaceExposed: boolean;
 } {
+  let warningTriggered = false;
   const runtime = initializeEpisodeMemoryRuntime({
     dbPath: args?.dbPath ?? "episodes.db",
     openStore: args?.openStore,
+    onWarn: () => {
+      warningTriggered = true;
+    },
   });
+  const memoryServerProbeDeps: EpisodeMemoryServerProbeDeps = {
+    search: async () => [],
+    redact: (text) => text,
+    ...runtime.memoryServerDeps,
+  };
+  const createServer = args?.createServer ?? ((deps: EpisodeMemoryServerProbeDeps) => createMemoryServer(deps));
+  createServer(memoryServerProbeDeps);
+  const episodicSurfaceExposed = "listEpisodes" in memoryServerProbeDeps;
 
   return {
     actualMode: "raw_audit_fallback",
@@ -75,11 +98,15 @@ export function runDegradedStoreStartupProbe(args?: {
         matchedFields: [],
         matchedFilters: [],
         explanation: runtime.fallbackTriggered
-          ? "Episodic store open failed; runtime degraded to non-episodic memory paths."
+          ? warningTriggered && !episodicSurfaceExposed
+            ? "Episodic store open failed; startup wiring emitted warning and memory server degraded to non-episodic paths."
+            : "Episodic store open failed; runtime degraded to non-episodic memory paths."
           : "Episodic store stayed available; degraded fallback did not trigger.",
       },
     ],
     assistantAvailable: runtime.assistantAvailable,
     fallbackTriggered: runtime.fallbackTriggered,
+    warningTriggered,
+    episodicSurfaceExposed,
   };
 }

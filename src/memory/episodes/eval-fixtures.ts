@@ -216,7 +216,7 @@ export function createDefaultEpisodeEvalFixtures(): EpisodeEvalFixture[] {
     },
     {
       id: "degraded-store-startup",
-      fixtureKind: "shared_startup_helper",
+      fixtureKind: "shared_startup_wiring",
       insertedEpisodes: [],
       expectedMode: "raw_audit_fallback",
       actualMode: degradedStartupProbe.actualMode,

@@ -17,7 +17,7 @@ describe("episode eval runner", () => {
     expect(report.syntheticPassedFixtures).toBe(0);
     expect(report.sharedStartupHelperPassedFixtures).toBe(1);
     expect(report.failedFixtureIds).toEqual([]);
-    expect(report.fixtureKinds["degraded-store-startup"]).toBe("shared_startup_helper");
+    expect(report.fixtureKinds["degraded-store-startup"]).toBe("shared_startup_wiring");
   });
 
   it("formats a concise human-readable report", () => {
@@ -25,9 +25,9 @@ describe("episode eval runner", () => {
     const text = formatEpisodeEvalReport(report);
 
     expect(text).toContain("Episode eval report: 5/5 runtime fixtures passed");
-    expect(text).toContain("Shared startup helper fixtures: 1/1 passed");
+    expect(text).toContain("Shared startup wiring fixtures: 1/1 passed");
     expect(text).toContain("github-issue-success: PASS | kind=runtime");
-    expect(text).toContain("degraded-store-startup: PASS | kind=shared_startup_helper");
+    expect(text).toContain("degraded-store-startup: PASS | kind=shared_startup_wiring");
   });
 
   it("reports both legacy synthetic and shared-startup-helper fixture summaries", () => {
@@ -49,7 +49,7 @@ describe("episode eval runner", () => {
       },
       {
         id: "startup-helper",
-        fixtureKind: "shared_startup_helper",
+        fixtureKind: "shared_startup_wiring",
         insertedEpisodes: [],
         expectedMode: "raw_audit_fallback",
         actualMode: "raw_audit_fallback",
@@ -69,6 +69,6 @@ describe("episode eval runner", () => {
     expect(report.syntheticFixtures).toBe(1);
     expect(report.sharedStartupHelperFixtures).toBe(1);
     expect(text).toContain("Synthetic fixtures: 1/1 passed");
-    expect(text).toContain("Shared startup helper fixtures: 1/1 passed");
+    expect(text).toContain("Shared startup wiring fixtures: 1/1 passed");
   });
 });

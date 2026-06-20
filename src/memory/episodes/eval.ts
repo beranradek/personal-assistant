@@ -14,7 +14,7 @@ export type EpisodeEvalExpectedMode = z.infer<typeof EpisodeEvalExpectedModeSche
 export const EpisodeEvalFixtureKindSchema = z.enum([
   "runtime",
   "synthetic",
-  "shared_startup_helper",
+  "shared_startup_wiring",
 ]);
 
 export type EpisodeEvalFixtureKind = z.infer<typeof EpisodeEvalFixtureKindSchema>;

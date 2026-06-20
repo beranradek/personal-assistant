@@ -31,8 +31,8 @@ function formatFixtureKindSummary(kind: EpisodeEvalFixtureKind, passed: number, 
   switch (kind) {
     case "synthetic":
       return `Synthetic fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
-    case "shared_startup_helper":
-      return `Shared startup helper fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
+    case "shared_startup_wiring":
+      return `Shared startup wiring fixtures: ${passed}/${total} passed (not counted as runtime coverage)`;
     case "runtime":
       return `Runtime fixtures: ${passed}/${total} passed`;
   }
@@ -49,13 +49,13 @@ export function evaluateEpisodeFixtures(fixtures: EpisodeEvalFixture[]): Episode
   const runtimeFixtures = fixtures.filter((fixture) => resolveFixtureKind(fixture) === "runtime").length;
   const syntheticFixtures = fixtures.filter((fixture) => resolveFixtureKind(fixture) === "synthetic").length;
   const sharedStartupHelperFixtures = fixtures.filter(
-    (fixture) => resolveFixtureKind(fixture) === "shared_startup_helper",
+    (fixture) => resolveFixtureKind(fixture) === "shared_startup_wiring",
   ).length;
   const syntheticPassedFixtures = results.filter(
     (result) => fixtureKinds[result.fixtureId] === "synthetic" && result.failureClasses.length === 0,
   ).length;
   const sharedStartupHelperPassedFixtures = results.filter(
-    (result) => fixtureKinds[result.fixtureId] === "shared_startup_helper" && result.failureClasses.length === 0,
+    (result) => fixtureKinds[result.fixtureId] === "shared_startup_wiring" && result.failureClasses.length === 0,
   ).length;
   const runtimePassedFixtures = results.filter(
     (result) => fixtureKinds[result.fixtureId] === "runtime" && result.failureClasses.length === 0,
@@ -89,7 +89,7 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
   if (report.sharedStartupHelperFixtures > 0) {
     lines.push(
       formatFixtureKindSummary(
-        "shared_startup_helper",
+        "shared_startup_wiring",
         report.sharedStartupHelperPassedFixtures,
         report.sharedStartupHelperFixtures,
       ),

@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+const { mockCreateMemoryServer } = vi.hoisted(() => ({
+  mockCreateMemoryServer: vi.fn(() => ({ type: "sdk" })),
+}));
+
+vi.mock("../../tools/memory-server.js", () => ({
+  createMemoryServer: mockCreateMemoryServer,
+}));
+
 import {
   buildEpisodeMemoryServerDeps,
   initializeEpisodeMemoryRuntime,
@@ -45,28 +53,59 @@ describe("episodic runtime probes", () => {
   });
 
   it("runDegradedStoreStartupProbe exercises the safe-open degraded path", () => {
+    const createServer = vi.fn();
+    const result = runDegradedStoreStartupProbe({
+      openStore: () => {
+        throw new Error("episodes.db incompatible schema");
+      },
+      createServer,
+    });
+
+    expect(result.actualMode).toBe("raw_audit_fallback");
+    expect(result.assistantAvailable).toBe(true);
+    expect(result.fallbackTriggered).toBe(true);
+    expect(result.warningTriggered).toBe(true);
+    expect(result.episodicSurfaceExposed).toBe(false);
+    expect(result.actualResults[0]?.explanation).toContain("degraded");
+    expect(createServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        search: expect.any(Function),
+        redact: expect.any(Function),
+      }),
+    );
+    expect(createServer.mock.calls[0]?.[0]).not.toHaveProperty("listEpisodes");
+  });
+
+  it("runDegradedStoreStartupProbe uses memory server wiring in the default path", () => {
+    mockCreateMemoryServer.mockClear();
+
     const result = runDegradedStoreStartupProbe({
       openStore: () => {
         throw new Error("episodes.db incompatible schema");
       },
     });
 
-    expect(result.actualMode).toBe("raw_audit_fallback");
-    expect(result.assistantAvailable).toBe(true);
-    expect(result.fallbackTriggered).toBe(true);
-    expect(result.actualResults[0]?.explanation).toContain("degraded");
+    expect(result.warningTriggered).toBe(true);
+    expect(result.episodicSurfaceExposed).toBe(false);
+    expect(mockCreateMemoryServer).toHaveBeenCalledOnce();
+    expect(mockCreateMemoryServer.mock.calls[0]?.[0]).not.toHaveProperty("listEpisodes");
   });
 
   it("runDegradedStoreStartupProbe reports non-degraded availability when store opens", () => {
     const store = {
       listEpisodes: vi.fn(() => []),
     } as unknown as EpisodeStore;
+    const createServer = vi.fn();
 
     const result = runDegradedStoreStartupProbe({
       openStore: () => store,
+      createServer,
     });
 
     expect(result.assistantAvailable).toBe(true);
     expect(result.fallbackTriggered).toBe(false);
+    expect(result.warningTriggered).toBe(false);
+    expect(result.episodicSurfaceExposed).toBe(true);
+    expect(createServer.mock.calls[0]?.[0]).toHaveProperty("listEpisodes");
   });
 });
