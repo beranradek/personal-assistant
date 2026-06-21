@@ -130,6 +130,11 @@ describe("episode eval runner", () => {
     });
 
     expect(result.metrics.probeStateOk).toBe(false);
+    expect(result.probeStateMismatches).toEqual([
+      { key: "fallbackTriggered", expected: true, actual: false },
+      { key: "warningTriggered", expected: true, actual: false },
+      { key: "episodicSurfaceExposed", expected: false, actual: true },
+    ]);
     expect(result.failureClasses).toContain("availability");
   });
 
@@ -165,6 +170,46 @@ describe("episode eval runner", () => {
     });
 
     expect(result.metrics.probeStateOk).toBe(false);
+    expect(result.probeStateMismatches).toEqual([
+      { key: "mcpServersInjected", expected: true, actual: false },
+    ]);
     expect(result.failureClasses).toContain("availability");
+  });
+
+  it("formats probe state mismatch details for failing entrypoint fixtures", () => {
+    const report = evaluateEpisodeFixtures([
+      {
+        id: "terminal-startup-healthy",
+        fixtureKind: "terminal_startup_entrypoint",
+        insertedEpisodes: [],
+        expectedMode: "raw_audit_fallback",
+        actualMode: "raw_audit_fallback",
+        actualResults: [{
+          id: "startup-log-terminal-fallback",
+          matchedFields: [],
+          matchedFilters: [],
+          explanation: "Terminal session startup stayed fully available; degraded fallback did not trigger.",
+        }],
+        availabilityExpected: true,
+        availabilityActual: true,
+        probeStateExpected: {
+          fallbackTriggered: true,
+          warningTriggered: true,
+          episodicSurfaceExposed: false,
+          mcpServersInjected: true,
+        },
+        probeStateActual: {
+          fallbackTriggered: false,
+          warningTriggered: false,
+          episodicSurfaceExposed: true,
+          mcpServersInjected: true,
+        },
+        mustHitIds: ["startup-log-terminal-fallback"],
+        expectedTop1Id: "startup-log-terminal-fallback",
+      },
+    ]);
+
+    const text = formatEpisodeEvalReport(report);
+    expect(text).toContain("probeMismatches=fallbackTriggered:false!=true,warningTriggered:false!=true,episodicSurfaceExposed:true!=false");
   });
 });

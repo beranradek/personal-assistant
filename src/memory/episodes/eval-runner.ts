@@ -175,8 +175,14 @@ export function formatEpisodeEvalReport(report: EpisodeEvalReport): string {
     const status = result.failureClasses.length === 0 ? "PASS" : "FAIL";
     const failures = result.failureClasses.length === 0 ? "-" : result.failureClasses.join(", ");
     const fixtureKind = report.fixtureKinds[result.fixtureId] ?? "runtime";
+    const probeMismatchSummary =
+      result.probeStateMismatches.length === 0
+        ? ""
+        : ` | probeMismatches=${result.probeStateMismatches
+            .map((mismatch) => `${mismatch.key}:${String(mismatch.actual)}!=${String(mismatch.expected)}`)
+            .join(",")}`;
     lines.push(
-      `- ${result.fixtureId}: ${status} | kind=${fixtureKind} | mode=${result.actualMode} | failures=${failures} | top1=${result.resultIds[0] ?? "-"} | latencyMs=${result.metrics.latencyMs.toFixed(2)}`,
+      `- ${result.fixtureId}: ${status} | kind=${fixtureKind} | mode=${result.actualMode} | failures=${failures} | top1=${result.resultIds[0] ?? "-"} | latencyMs=${result.metrics.latencyMs.toFixed(2)}${probeMismatchSummary}`,
     );
   }
 

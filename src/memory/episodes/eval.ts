@@ -98,6 +98,11 @@ export type EpisodeEvalResult = {
   resultIds: string[];
   matchedFieldsById: Record<string, string[]>;
   exactMatchedFilters: string[];
+  probeStateMismatches: Array<{
+    key: string;
+    expected: boolean;
+    actual: boolean | undefined;
+  }>;
   failureClasses: EpisodeEvalRegressionClass[];
 };
 
@@ -161,15 +166,26 @@ export function evaluateEpisodeFixture(input: EpisodeEvalFixture): EpisodeEvalRe
     fixture.availabilityExpected === undefined && fixture.availabilityActual === undefined
       ? null
       : fixture.availabilityExpected === fixture.availabilityActual;
+  const probeStateMismatches =
+    fixture.probeStateExpected === undefined || fixture.probeStateActual === undefined
+      ? []
+      : Object.entries(fixture.probeStateExpected).flatMap(([key, expected]) =>
+          expected === undefined
+            ? []
+            : fixture.probeStateActual?.[key as keyof typeof fixture.probeStateActual] === expected
+              ? []
+              : [{
+                  key,
+                  expected,
+                  actual: fixture.probeStateActual?.[key as keyof typeof fixture.probeStateActual],
+                }],
+        );
   const probeStateOk =
     fixture.probeStateExpected === undefined && fixture.probeStateActual === undefined
       ? null
       : fixture.probeStateExpected !== undefined &&
           fixture.probeStateActual !== undefined &&
-          Object.entries(fixture.probeStateExpected).every(([key, expected]) =>
-            expected === undefined ||
-            fixture.probeStateActual?.[key as keyof typeof fixture.probeStateActual] === expected,
-          );
+          probeStateMismatches.length === 0;
   const modeCorrect = actualMode === fixture.expectedMode;
 
   return {
@@ -192,6 +208,7 @@ export function evaluateEpisodeFixture(input: EpisodeEvalFixture): EpisodeEvalRe
       results.map((result) => [result.id, result.matchedFields]),
     ),
     exactMatchedFilters: results[0]?.matchedFilters ?? [],
+    probeStateMismatches,
     failureClasses: listFailureClasses({
       modeCorrect,
       mustHitRecall,
