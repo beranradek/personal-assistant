@@ -168,8 +168,8 @@ function createEvalConfig(): Config {
   };
 }
 
-export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFixture[]> {
-  const startupDeps = {
+function createEvalStartupDeps() {
+  return {
     createEmbeddingProvider: async () => ({
       dimensions: 768,
       embed: async () => [],
@@ -209,79 +209,70 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
       };
     },
   };
+}
+
+function createEvalBackendStub() {
+  return {
+    name: "test",
+    async *runTurn() {},
+    runTurnSync: async () => ({
+      response: "",
+      messages: [],
+      partial: false,
+    }),
+    clearSession: () => {},
+    close: async () => {},
+  };
+}
+
+function createProbeBaseDeps(startupDeps: ReturnType<typeof createEvalStartupDeps>) {
+  return {
+    initializeStartupMemoryServices: (args: { config: Config; onEpisodeWarn?: (err: unknown) => void }) =>
+      initializeStartupMemoryServices({
+        ...args,
+        deps: startupDeps,
+      }),
+    collectMemoryFiles: () => [],
+    createMemoryWatcher: () => ({ close: () => {} }),
+    readMemoryFiles: async () => "",
+    createCronToolManager: (() => ({
+      handleAction: async () => ({ success: true, message: "ok" }),
+      rearmTimer: async () => {},
+      stop: () => {},
+    })) as any,
+    createAssistantServer: (() => ({ name: "assistant" } as any)) as any,
+    buildAgentOptions: () => ({} as any),
+    createBackend: async () => createEvalBackendStub(),
+  };
+}
+
+function createDaemonProbeDeps(startupDeps: ReturnType<typeof createEvalStartupDeps>) {
+  return {
+    ...createProbeBaseDeps(startupDeps),
+    createMessageQueue: (() => ({
+      enqueue: () => ({ accepted: true }),
+      processNext: async () => {},
+      size: () => 0,
+      processLoop: () => {},
+      stop: () => {},
+    })) as any,
+    createRouter: (() => ({
+      register: () => {},
+      unregister: () => {},
+      route: () => undefined,
+    })) as any,
+  };
+}
+
+export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFixture[]> {
+  const startupDeps = createEvalStartupDeps();
   const degradedStartupProbe = await runDegradedTerminalSessionProbe({
     config: createEvalConfig(),
-    deps: {
-      initializeStartupMemoryServices: (args) =>
-        initializeStartupMemoryServices({
-          ...args,
-          deps: startupDeps,
-        }),
-      collectMemoryFiles: () => [],
-      createMemoryWatcher: () => ({ close: () => {} }),
-      readMemoryFiles: async () => "",
-      createCronToolManager: (() => ({
-        handleAction: async () => ({ success: true, message: "ok" }),
-        rearmTimer: async () => {},
-        stop: () => {},
-      })) as any,
-      createAssistantServer: (() => ({ name: "assistant" } as any)) as any,
-      buildAgentOptions: () => ({} as any),
-      createBackend: async () => ({
-        name: "test",
-        async *runTurn() {},
-        runTurnSync: async () => ({
-          response: "",
-          messages: [],
-          partial: false,
-        }),
-        clearSession: () => {},
-        close: async () => {},
-      }),
-    },
+    deps: createProbeBaseDeps(startupDeps),
   });
   const degradedDaemonProbe = await runDegradedDaemonStartupProbe({
     config: createEvalConfig(),
-    deps: {
-      initializeStartupMemoryServices: (args) =>
-        initializeStartupMemoryServices({
-          ...args,
-          deps: startupDeps,
-        }),
-      collectMemoryFiles: () => [],
-      createMemoryWatcher: () => ({ close: () => {} }),
-      readMemoryFiles: async () => "",
-      createCronToolManager: (() => ({
-        handleAction: async () => ({ success: true, message: "ok" }),
-        rearmTimer: async () => {},
-        stop: () => {},
-      })) as any,
-      createAssistantServer: (() => ({ name: "assistant" } as any)) as any,
-      createMessageQueue: (() => ({
-        enqueue: () => ({ accepted: true }),
-        processNext: async () => {},
-        size: () => 0,
-        processLoop: () => {},
-        stop: () => {},
-      })) as any,
-      createRouter: (() => ({
-        register: () => {},
-        unregister: () => {},
-        route: () => undefined,
-      })) as any,
-      buildAgentOptions: () => ({} as any),
-      createBackend: async () => ({
-        name: "test",
-        async *runTurn() {},
-        runTurnSync: async () => ({
-          response: "",
-          messages: [],
-          partial: false,
-        }),
-        clearSession: () => {},
-        close: async () => {},
-      }),
-    },
+    deps: createDaemonProbeDeps(startupDeps),
   });
   return [
     {
