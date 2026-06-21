@@ -57,7 +57,7 @@ Commands:
   mcp-server            Start stdio MCP server (for Codex backend integration)
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
-  episode-eval          Run the built-in episodic memory evaluation fixture corpus [--json]
+  episode-eval          Run the built-in episodic memory evaluation fixture corpus [--json] [--output <path>]
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -209,6 +209,47 @@ export function parseEpisodeEvalJson(argv: string[]): boolean {
   return args.slice(commandIndex + 1).includes("--json");
 }
 
+export function parseEpisodeEvalOutputPath(argv: string[]): string | undefined {
+  const args = argv.slice(2);
+  const commandIndex = args.indexOf("episode-eval");
+  if (commandIndex === -1) {
+    return undefined;
+  }
+
+  const commandArgs = args.slice(commandIndex + 1);
+  for (let i = 0; i < commandArgs.length; i++) {
+    if (commandArgs[i] === "--output") {
+      return commandArgs[i + 1];
+    }
+  }
+
+  return undefined;
+}
+
+function resolveEpisodeEvalOutputPath(argv: string[]): string | undefined {
+  const args = argv.slice(2);
+  const commandIndex = args.indexOf("episode-eval");
+  if (commandIndex === -1) {
+    return undefined;
+  }
+
+  const commandArgs = args.slice(commandIndex + 1);
+  for (let i = 0; i < commandArgs.length; i++) {
+    if (commandArgs[i] !== "--output") {
+      continue;
+    }
+
+    const outputPath = commandArgs[i + 1];
+    if (!outputPath || outputPath.startsWith("--")) {
+      console.error('Invalid episode-eval usage: "--output" requires a file path.');
+      process.exit(1);
+    }
+    return outputPath;
+  }
+
+  return undefined;
+}
+
 async function runReflect(configDir: string, targetDate?: string): Promise<void> {
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
@@ -221,7 +262,12 @@ async function runReflect(configDir: string, targetDate?: string): Promise<void>
 }
 
 export async function runEpisodeEval(argv: string[] = process.argv): Promise<void> {
+  const outputPath = resolveEpisodeEvalOutputPath(argv);
   const report = await episodeEvalRunner.runDefaultEpisodeEval();
+  if (outputPath) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, JSON.stringify(report, null, 2) + "\n");
+  }
   if (parseEpisodeEvalJson(argv)) {
     console.log(JSON.stringify(report, null, 2));
   } else {
