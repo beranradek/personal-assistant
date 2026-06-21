@@ -18,10 +18,14 @@ describe("default episode eval fixtures", () => {
     expect(degraded?.actualMode).toBe("raw_audit_fallback");
     expect(degraded?.probeStateExpected).toEqual(expectedProbeState);
     expect(degraded?.probeStateExpected).not.toHaveProperty("cronTimerArmed");
+    expect(degraded?.probeStateActual).toEqual(expectedProbeState);
+    expect(degraded?.probeStateActual).not.toHaveProperty("cronTimerArmed");
     expect(degraded?.actualResults?.[0]?.explanation).toContain("Terminal session startup degraded correctly");
     expect(degradedDaemon?.fixtureKind).toBe("daemon_startup_entrypoint");
     expect(degradedDaemon?.probeStateExpected).toEqual(expectedProbeState);
     expect(degradedDaemon?.probeStateExpected).not.toHaveProperty("cronTimerArmed");
+    expect(degradedDaemon?.probeStateActual).toEqual(expectedProbeState);
+    expect(degradedDaemon?.probeStateActual).not.toHaveProperty("cronTimerArmed");
     expect(degradedDaemon?.actualResults?.[0]?.explanation).toContain("Daemon startup degraded correctly");
   });
 });
