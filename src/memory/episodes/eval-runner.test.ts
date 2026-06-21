@@ -117,14 +117,51 @@ describe("episode eval runner", () => {
         fallbackTriggered: true,
         warningTriggered: true,
         episodicSurfaceExposed: false,
+        mcpServersInjected: true,
       },
       probeStateActual: {
         fallbackTriggered: false,
         warningTriggered: false,
         episodicSurfaceExposed: true,
+        mcpServersInjected: true,
       },
       mustHitIds: ["startup-log-terminal-fallback"],
       expectedTop1Id: "startup-log-terminal-fallback",
+    });
+
+    expect(result.metrics.probeStateOk).toBe(false);
+    expect(result.failureClasses).toContain("availability");
+  });
+
+  it("fails daemon entrypoint fixture when MCP servers were not injected", () => {
+    const result = evaluateEpisodeFixture({
+      id: "daemon-startup-missing-mcp",
+      fixtureKind: "daemon_startup_entrypoint",
+      insertedEpisodes: [],
+      expectedMode: "raw_audit_fallback",
+      actualMode: "raw_audit_fallback",
+      actualResults: [{
+        id: "startup-log-daemon-entrypoint-fallback",
+        matchedFields: [],
+        matchedFilters: [],
+        explanation: "Daemon startup degraded correctly and continued without episodic surface.",
+      }],
+      availabilityExpected: true,
+      availabilityActual: true,
+      probeStateExpected: {
+        fallbackTriggered: true,
+        warningTriggered: true,
+        episodicSurfaceExposed: false,
+        mcpServersInjected: true,
+      },
+      probeStateActual: {
+        fallbackTriggered: true,
+        warningTriggered: true,
+        episodicSurfaceExposed: false,
+        mcpServersInjected: false,
+      },
+      mustHitIds: ["startup-log-daemon-entrypoint-fallback"],
+      expectedTop1Id: "startup-log-daemon-entrypoint-fallback",
     });
 
     expect(result.metrics.probeStateOk).toBe(false);
