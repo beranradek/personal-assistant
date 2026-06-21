@@ -37,6 +37,7 @@ describe("episode eval runner", () => {
     expect(text).toContain("github-issue-success: PASS | kind=runtime");
     expect(text).toContain("degraded-store-startup: PASS | kind=terminal_startup_entrypoint");
     expect(text).toContain("degraded-daemon-startup: PASS | kind=daemon_startup_entrypoint");
+    expect(text).not.toContain("probeMismatches=");
   });
 
   it("reports both legacy synthetic and entrypoint fixture summaries", () => {
