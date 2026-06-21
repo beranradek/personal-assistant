@@ -247,11 +247,20 @@ export async function runDegradedDaemonStartupProbe(args: {
   fallbackTriggered: boolean;
   warningTriggered: boolean;
   episodicSurfaceExposed: boolean;
+  mcpServersInjected: boolean;
 }> {
+  let mcpServersInjected = false;
+  const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
   const runtime = await createDaemonCoreFromConfig({
     config: args.config,
     configDir: args.configDir ?? "/probe",
-    deps: args.deps,
+    deps: {
+      ...args.deps,
+      buildAgentOptions: ((config, workspace, memoryContent, mcpServers) => {
+        mcpServersInjected = Boolean(mcpServers.memory) && Boolean(mcpServers.assistant);
+        return buildAgentOptionsImpl(config, workspace, memoryContent, mcpServers);
+      }) as typeof buildAgentOptions,
+    },
   });
 
   runtime.queue.processLoop(runtime.backend, args.config, runtime.router);
@@ -283,6 +292,7 @@ export async function runDegradedDaemonStartupProbe(args: {
     fallbackTriggered: runtime.fallbackTriggered,
     warningTriggered: runtime.warningTriggered,
     episodicSurfaceExposed: runtime.episodicSurfaceExposed,
+    mcpServersInjected,
   };
 }
 

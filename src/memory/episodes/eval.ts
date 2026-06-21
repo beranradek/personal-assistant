@@ -42,11 +42,13 @@ export const EpisodeEvalFixtureSchema = z.object({
     fallbackTriggered: z.boolean().optional(),
     warningTriggered: z.boolean().optional(),
     episodicSurfaceExposed: z.boolean().optional(),
+    mcpServersInjected: z.boolean().optional(),
   }).optional(),
   probeStateActual: z.object({
     fallbackTriggered: z.boolean().optional(),
     warningTriggered: z.boolean().optional(),
     episodicSurfaceExposed: z.boolean().optional(),
+    mcpServersInjected: z.boolean().optional(),
   }).optional(),
   actualMode: EpisodeEvalExpectedModeSchema.optional(),
   actualResults: z.array(z.object({

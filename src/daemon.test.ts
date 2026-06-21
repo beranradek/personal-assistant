@@ -484,10 +484,11 @@ describe("daemon", () => {
 
     expect(probe.actualMode).toBe("raw_audit_fallback");
     expect(probe.assistantAvailable).toBe(true);
-    expect(probe.fallbackTriggered).toBe(true);
-    expect(probe.warningTriggered).toBe(true);
-    expect(probe.episodicSurfaceExposed).toBe(false);
-    expect(probe.actualResults[0]?.id).toBe("startup-log-daemon-entrypoint-fallback");
+      expect(probe.fallbackTriggered).toBe(true);
+      expect(probe.warningTriggered).toBe(true);
+      expect(probe.episodicSurfaceExposed).toBe(false);
+      expect(probe.mcpServersInjected).toBe(true);
+      expect(probe.actualResults[0]?.id).toBe("startup-log-daemon-entrypoint-fallback");
   });
 
   it("reports a healthy daemon startup probe without false degraded signal", async () => {
@@ -500,10 +501,11 @@ describe("daemon", () => {
     });
 
     expect(probe.assistantAvailable).toBe(true);
-    expect(probe.fallbackTriggered).toBe(false);
-    expect(probe.warningTriggered).toBe(false);
-    expect(probe.episodicSurfaceExposed).toBe(true);
-    expect(probe.actualResults[0]?.explanation).toContain("did not trigger");
+      expect(probe.fallbackTriggered).toBe(false);
+      expect(probe.warningTriggered).toBe(false);
+      expect(probe.episodicSurfaceExposed).toBe(true);
+      expect(probe.mcpServersInjected).toBe(true);
+      expect(probe.actualResults[0]?.explanation).toContain("did not trigger");
   });
 
   // -----------------------------------------------------------------------

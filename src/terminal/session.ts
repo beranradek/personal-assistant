@@ -54,18 +54,25 @@ export async function runDegradedTerminalSessionProbe(args: {
   fallbackTriggered: boolean;
   warningTriggered: boolean;
   episodicSurfaceExposed: boolean;
+  mcpServersInjected: boolean;
 }> {
   let warningTriggered = false;
   let fallbackTriggered = false;
   let episodicSurfaceExposed = true;
+  let mcpServersInjected = false;
   const initializeStartupMemoryServicesImpl =
     args.deps?.initializeStartupMemoryServices ?? initializeStartupMemoryServices;
+  const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
 
   const session = await createTerminalSessionFromConfig({
     config: args.config,
     configDir: args.configDir ?? "/probe",
     deps: {
       ...args.deps,
+      buildAgentOptions: ((config, workspace, memoryContent, mcpServers) => {
+        mcpServersInjected = Boolean(mcpServers.memory) && Boolean(mcpServers.assistant);
+        return buildAgentOptionsImpl(config, workspace, memoryContent, mcpServers);
+      }) as typeof buildAgentOptions,
       initializeStartupMemoryServices: async (innerArgs) => {
         const services = await initializeStartupMemoryServicesImpl({
           ...innerArgs,
@@ -99,6 +106,7 @@ export async function runDegradedTerminalSessionProbe(args: {
     fallbackTriggered,
     warningTriggered,
     episodicSurfaceExposed,
+    mcpServersInjected,
   };
 }
 

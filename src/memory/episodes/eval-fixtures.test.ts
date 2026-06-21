@@ -10,6 +10,7 @@ describe("default episode eval fixtures", () => {
       fallbackTriggered: true,
       warningTriggered: true,
       episodicSurfaceExposed: false,
+      mcpServersInjected: true,
     };
 
     expect(degraded).toBeDefined();

@@ -172,6 +172,7 @@ const EXPECTED_DEGRADED_PROBE_STATE = {
   fallbackTriggered: true,
   warningTriggered: true,
   episodicSurfaceExposed: false,
+  mcpServersInjected: true,
 } as const;
 
 function createDegradedEntrypointFixture(args: {
@@ -189,6 +190,7 @@ function createDegradedEntrypointFixture(args: {
     fallbackTriggered: boolean;
     warningTriggered: boolean;
     episodicSurfaceExposed: boolean;
+    mcpServersInjected: boolean;
   };
   expectedTop1Id: string;
 }): EpisodeEvalFixture {
@@ -210,6 +212,7 @@ function createDegradedEntrypointFixture(args: {
       fallbackTriggered: args.probe.fallbackTriggered,
       warningTriggered: args.probe.warningTriggered,
       episodicSurfaceExposed: args.probe.episodicSurfaceExposed,
+      mcpServersInjected: args.probe.mcpServersInjected,
     },
     maxLatencyMs: 50,
   };

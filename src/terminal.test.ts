@@ -394,6 +394,7 @@ describe("terminal", () => {
       expect(probe.fallbackTriggered).toBe(true);
       expect(probe.warningTriggered).toBe(true);
       expect(probe.episodicSurfaceExposed).toBe(false);
+      expect(probe.mcpServersInjected).toBe(true);
       expect(probe.actualResults[0]?.id).toBe("startup-log-terminal-fallback");
     });
 
@@ -411,6 +412,7 @@ describe("terminal", () => {
       expect(probe.fallbackTriggered).toBe(false);
       expect(probe.warningTriggered).toBe(false);
       expect(probe.episodicSurfaceExposed).toBe(true);
+      expect(probe.mcpServersInjected).toBe(true);
       expect(probe.actualResults[0]?.explanation).toContain("did not trigger");
     });
   });
