@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { parseCommand, parseReflectDate, runEpisodeEval } from "./cli.js";
+import { parseCommand, parseEpisodeEvalJson, parseReflectDate, runEpisodeEval } from "./cli.js";
 import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 
 describe("cli", () => {
@@ -74,6 +74,20 @@ describe("cli", () => {
       exitSpy.mockRestore();
     });
   });
+
+  describe("parseEpisodeEvalJson", () => {
+    it("returns false when --json flag is absent", () => {
+      expect(parseEpisodeEvalJson(["node", "cli.js", "episode-eval"])).toBe(false);
+    });
+
+    it("returns true when --json is provided after episode-eval", () => {
+      expect(parseEpisodeEvalJson(["node", "cli.js", "episode-eval", "--json"])).toBe(true);
+    });
+
+    it("ignores --json when episode-eval command is not selected", () => {
+      expect(parseEpisodeEvalJson(["node", "cli.js", "reflect", "--json"])).toBe(false);
+    });
+  });
 });
 
 describe("runEpisodeEval", () => {
@@ -113,6 +127,45 @@ describe("runEpisodeEval", () => {
     vi.restoreAllMocks();
   });
 
+  it("prints JSON report when --json flag is used", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCodeBefore = process.exitCode;
+    process.exitCode = 0;
+    const report = {
+      generatedAt: "2026-06-21T17:00:00.000Z",
+      totalFixtures: 1,
+      runtimeFixtures: 1,
+      syntheticFixtures: 0,
+      sharedStartupWiringFixtures: 0,
+      sharedMemoryStartupFixtures: 0,
+      terminalStartupEntrypointFixtures: 0,
+      daemonStartupEntrypointFixtures: 0,
+      passedFixtures: 1,
+      runtimePassedFixtures: 1,
+      syntheticPassedFixtures: 0,
+      sharedStartupWiringPassedFixtures: 0,
+      sharedMemoryStartupPassedFixtures: 0,
+      terminalStartupEntrypointPassedFixtures: 0,
+      daemonStartupEntrypointPassedFixtures: 0,
+      failedFixtures: 0,
+      failedFixtureIds: [],
+      fixtureKinds: {},
+      results: [],
+    } satisfies Awaited<ReturnType<typeof episodeEvalRunner.runDefaultEpisodeEval>>;
+    vi.spyOn(episodeEvalRunner, "runDefaultEpisodeEval").mockResolvedValue(report);
+    const formatSpy = vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport");
+
+    await runEpisodeEval(["node", "cli.js", "episode-eval", "--json"]);
+
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify(report, null, 2));
+    expect(formatSpy).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(0);
+
+    logSpy.mockRestore();
+    process.exitCode = exitCodeBefore;
+    vi.restoreAllMocks();
+  });
+
   it("sets non-zero exit code when fixtures fail", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const exitCodeBefore = process.exitCode;
@@ -142,6 +195,45 @@ describe("runEpisodeEval", () => {
     await runEpisodeEval();
 
     expect(logSpy).toHaveBeenCalledWith("episode eval failed");
+    expect(process.exitCode).toBe(1);
+
+    logSpy.mockRestore();
+    process.exitCode = exitCodeBefore;
+    vi.restoreAllMocks();
+  });
+
+  it("keeps failure exit code semantics for JSON output", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCodeBefore = process.exitCode;
+    process.exitCode = 0;
+    const report = {
+      generatedAt: "2026-06-21T17:00:00.000Z",
+      totalFixtures: 1,
+      runtimeFixtures: 1,
+      syntheticFixtures: 0,
+      sharedStartupWiringFixtures: 0,
+      sharedMemoryStartupFixtures: 0,
+      terminalStartupEntrypointFixtures: 0,
+      daemonStartupEntrypointFixtures: 0,
+      passedFixtures: 0,
+      runtimePassedFixtures: 0,
+      syntheticPassedFixtures: 0,
+      sharedStartupWiringPassedFixtures: 0,
+      sharedMemoryStartupPassedFixtures: 0,
+      terminalStartupEntrypointPassedFixtures: 0,
+      daemonStartupEntrypointPassedFixtures: 0,
+      failedFixtures: 1,
+      failedFixtureIds: ["broken"],
+      fixtureKinds: {},
+      results: [],
+    } satisfies Awaited<ReturnType<typeof episodeEvalRunner.runDefaultEpisodeEval>>;
+    vi.spyOn(episodeEvalRunner, "runDefaultEpisodeEval").mockResolvedValue(report);
+    const formatSpy = vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport");
+
+    await runEpisodeEval(["node", "cli.js", "episode-eval", "--json"]);
+
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify(report, null, 2));
+    expect(formatSpy).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
 
     logSpy.mockRestore();

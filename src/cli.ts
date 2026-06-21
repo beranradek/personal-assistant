@@ -57,7 +57,7 @@ Commands:
   mcp-server            Start stdio MCP server (for Codex backend integration)
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
-  episode-eval          Run the built-in episodic memory evaluation fixture corpus
+  episode-eval          Run the built-in episodic memory evaluation fixture corpus [--json]
 
 Options:
   --config <path>       Path to settings.json (default: ~/.personal-assistant/settings.json)
@@ -199,6 +199,16 @@ export function parseReflectDate(argv: string[]): string | undefined {
   return undefined;
 }
 
+export function parseEpisodeEvalJson(argv: string[]): boolean {
+  const args = argv.slice(2);
+  const commandIndex = args.indexOf("episode-eval");
+  if (commandIndex === -1) {
+    return false;
+  }
+
+  return args.slice(commandIndex + 1).includes("--json");
+}
+
 async function runReflect(configDir: string, targetDate?: string): Promise<void> {
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
@@ -210,9 +220,13 @@ async function runReflect(configDir: string, targetDate?: string): Promise<void>
   console.log("Done.");
 }
 
-export async function runEpisodeEval(): Promise<void> {
+export async function runEpisodeEval(argv: string[] = process.argv): Promise<void> {
   const report = await episodeEvalRunner.runDefaultEpisodeEval();
-  console.log(episodeEvalRunner.formatEpisodeEvalReport(report));
+  if (parseEpisodeEvalJson(argv)) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(episodeEvalRunner.formatEpisodeEvalReport(report));
+  }
   if (report.failedFixtures > 0) {
     process.exitCode = 1;
   }
