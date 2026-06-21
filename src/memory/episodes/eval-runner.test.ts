@@ -213,4 +213,26 @@ describe("episode eval runner", () => {
     const text = formatEpisodeEvalReport(report);
     expect(text).toContain("probeMismatches=fallbackTriggered:false!=true,warningTriggered:false!=true,episodicSurfaceExposed:true!=false");
   });
+
+  it("does not render probe mismatch details for non-probe failures", () => {
+    const report = evaluateEpisodeFixtures([
+      {
+        id: "runtime-top1-miss",
+        insertedEpisodes: [],
+        expectedMode: "semantic_episodic",
+        actualMode: "semantic_episodic",
+        actualResults: [{
+          id: "wrong-top1",
+          matchedFields: ["summary"],
+          matchedFilters: [],
+          explanation: "semantic match",
+        }],
+        expectedTop1Id: "expected-top1",
+      },
+    ]);
+
+    const text = formatEpisodeEvalReport(report);
+    expect(text).not.toContain("probeMismatches=");
+    expect(text).toContain("failures=ranking");
+  });
 });
