@@ -168,6 +168,53 @@ function createEvalConfig(): Config {
   };
 }
 
+const EXPECTED_DEGRADED_PROBE_STATE = {
+  fallbackTriggered: true,
+  warningTriggered: true,
+  episodicSurfaceExposed: false,
+} as const;
+
+function createDegradedEntrypointFixture(args: {
+  id: string;
+  fixtureKind: "terminal_startup_entrypoint" | "daemon_startup_entrypoint";
+  probe: {
+    actualMode: "raw_audit_fallback";
+    actualResults: Array<{
+      id: string;
+      matchedFields: string[];
+      matchedFilters: string[];
+      explanation: string;
+    }>;
+    assistantAvailable: boolean;
+    fallbackTriggered: boolean;
+    warningTriggered: boolean;
+    episodicSurfaceExposed: boolean;
+  };
+  expectedTop1Id: string;
+}): EpisodeEvalFixture {
+  return {
+    id: args.id,
+    fixtureKind: args.fixtureKind,
+    insertedEpisodes: [],
+    expectedMode: "raw_audit_fallback",
+    actualMode: args.probe.actualMode,
+    actualResults: args.probe.actualResults,
+    mustHitIds: [args.expectedTop1Id],
+    mustAvoidIds: [],
+    expectedTop1Id: args.expectedTop1Id,
+    expectedTopKAtMost: 1,
+    availabilityExpected: true,
+    availabilityActual: args.probe.assistantAvailable,
+    probeStateExpected: EXPECTED_DEGRADED_PROBE_STATE,
+    probeStateActual: {
+      fallbackTriggered: args.probe.fallbackTriggered,
+      warningTriggered: args.probe.warningTriggered,
+      episodicSurfaceExposed: args.probe.episodicSurfaceExposed,
+    },
+    maxLatencyMs: 50,
+  };
+}
+
 function createEvalStartupDeps() {
   return {
     createEmbeddingProvider: async () => ({
@@ -330,29 +377,12 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
       maxLatencyMs: 50,
     },
     {
-      id: "degraded-store-startup",
-      fixtureKind: "terminal_startup_entrypoint",
-      insertedEpisodes: [],
-      expectedMode: "raw_audit_fallback",
-      actualMode: degradedStartupProbe.actualMode,
-      actualResults: degradedStartupProbe.actualResults,
-      mustHitIds: ["startup-log-terminal-fallback"],
-      mustAvoidIds: [],
-      expectedTop1Id: "startup-log-terminal-fallback",
-      expectedTopKAtMost: 1,
-      availabilityExpected: true,
-      availabilityActual: degradedStartupProbe.assistantAvailable,
-      probeStateExpected: {
-        fallbackTriggered: true,
-        warningTriggered: true,
-        episodicSurfaceExposed: false,
-      },
-      probeStateActual: {
-        fallbackTriggered: degradedStartupProbe.fallbackTriggered,
-        warningTriggered: degradedStartupProbe.warningTriggered,
-        episodicSurfaceExposed: degradedStartupProbe.episodicSurfaceExposed,
-      },
-      maxLatencyMs: 50,
+      ...createDegradedEntrypointFixture({
+        id: "degraded-store-startup",
+        fixtureKind: "terminal_startup_entrypoint",
+        probe: degradedStartupProbe,
+        expectedTop1Id: "startup-log-terminal-fallback",
+      }),
     },
     {
       id: "near-match-retrieval",
@@ -370,29 +400,12 @@ export async function createDefaultEpisodeEvalFixtures(): Promise<EpisodeEvalFix
       maxLatencyMs: 50,
     },
     {
-      id: "degraded-daemon-startup",
-      fixtureKind: "daemon_startup_entrypoint",
-      insertedEpisodes: [],
-      expectedMode: "raw_audit_fallback",
-      actualMode: degradedDaemonProbe.actualMode,
-      actualResults: degradedDaemonProbe.actualResults,
-      mustHitIds: ["startup-log-daemon-entrypoint-fallback"],
-      mustAvoidIds: [],
-      expectedTop1Id: "startup-log-daemon-entrypoint-fallback",
-      expectedTopKAtMost: 1,
-      availabilityExpected: true,
-      availabilityActual: degradedDaemonProbe.assistantAvailable,
-      probeStateExpected: {
-        fallbackTriggered: true,
-        warningTriggered: true,
-        episodicSurfaceExposed: false,
-      },
-      probeStateActual: {
-        fallbackTriggered: degradedDaemonProbe.fallbackTriggered,
-        warningTriggered: degradedDaemonProbe.warningTriggered,
-        episodicSurfaceExposed: degradedDaemonProbe.episodicSurfaceExposed,
-      },
-      maxLatencyMs: 50,
+      ...createDegradedEntrypointFixture({
+        id: "degraded-daemon-startup",
+        fixtureKind: "daemon_startup_entrypoint",
+        probe: degradedDaemonProbe,
+        expectedTop1Id: "startup-log-daemon-entrypoint-fallback",
+      }),
     },
   ];
 }
