@@ -12,6 +12,8 @@
     "build": "tsc && rm -rf dist/templates && cp -r src/templates dist/templates",
     "test": "vitest",
     "test:coverage": "vitest --coverage",
+    "episode-eval": "node dist/cli.js episode-eval",
+    "episode-eval:json": "node dist/cli.js episode-eval --json",
     "postinstall": "node scripts/prune-gpu-prebuilds.mjs"
   },
   "engines": {
