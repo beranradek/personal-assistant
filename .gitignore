@@ -139,3 +139,6 @@ vite.config.ts.timestamp-*
 
 # IDE
 .autocode/
+
+# Local ad-hoc artifacts
+tmp/
