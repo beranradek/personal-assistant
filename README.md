@@ -278,10 +278,12 @@ npm run build         # TypeScript compilation + template copy
 npm run episode-eval  # Run episodic eval and print human-readable report
 npm run episode-eval:json # Run episodic eval and print JSON report for CI/gates
 npm run episode-eval:artifact # Run episodic eval and write ./tmp/episode-eval-report.json
+npm run episode-eval:summary # Render markdown summary from ./tmp/episode-eval-report.json
 npm run episode-eval:gate # Build, emit JSON artifact, and fail on eval regressions
 ```
 
 `episode-eval`, `episode-eval:json`, and `episode-eval:artifact` read `dist/cli.js`, so run `npm run build` first on a clean checkout.
+`episode-eval:summary` expects an existing report artifact. By default it reads `./tmp/episode-eval-report.json`, but it also respects `EPISODE_EVAL_OUTPUT_PATH=/path/report.json` so it can follow custom `episode-eval:gate` output paths.
 `episode-eval:gate` runs the build for you and supports overriding the artifact path with `EPISODE_EVAL_OUTPUT_PATH=/path/report.json`.
 GitHub Actions workflow `.github/workflows/episode-eval.yml` runs this gate on `push`, `pull_request`, and `workflow_dispatch` and uploads `tmp/episode-eval-report.json` as an artifact.
 That artifact is the same JSON report emitted by `episode-eval:gate`, so it is the primary CI payload to inspect when the gate fails. The workflow also renders a short markdown summary into the GitHub Actions job summary for faster triage.
