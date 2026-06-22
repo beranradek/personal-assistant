@@ -355,6 +355,47 @@ describe("runEpisodeEval", () => {
     vi.restoreAllMocks();
   });
 
+  it("still writes the JSON artifact before setting failure exit code", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitCodeBefore = process.exitCode;
+    process.exitCode = 0;
+    const report = {
+      generatedAt: "2026-06-22T14:00:00.000Z",
+      totalFixtures: 1,
+      runtimeFixtures: 1,
+      syntheticFixtures: 0,
+      sharedStartupWiringFixtures: 0,
+      sharedMemoryStartupFixtures: 0,
+      terminalStartupEntrypointFixtures: 0,
+      daemonStartupEntrypointFixtures: 0,
+      passedFixtures: 0,
+      runtimePassedFixtures: 0,
+      syntheticPassedFixtures: 0,
+      sharedStartupWiringPassedFixtures: 0,
+      sharedMemoryStartupPassedFixtures: 0,
+      terminalStartupEntrypointPassedFixtures: 0,
+      daemonStartupEntrypointPassedFixtures: 0,
+      failedFixtures: 1,
+      failedFixtureIds: ["broken"],
+      fixtureKinds: {},
+      results: [],
+    } satisfies Awaited<ReturnType<typeof episodeEvalRunner.runDefaultEpisodeEval>>;
+    const outputPath = path.join(tempDir, "failed-episode-eval.json");
+    vi.spyOn(episodeEvalRunner, "runDefaultEpisodeEval").mockResolvedValue(report);
+    const formatSpy = vi.spyOn(episodeEvalRunner, "formatEpisodeEvalReport");
+
+    await runEpisodeEval(["node", "cli.js", "episode-eval", "--json", "--output", outputPath]);
+
+    expect(logSpy).toHaveBeenCalledWith(JSON.stringify(report, null, 2));
+    expect(formatSpy).not.toHaveBeenCalled();
+    await expect(fs.readFile(outputPath, "utf8")).resolves.toBe(`${JSON.stringify(report, null, 2)}\n`);
+    expect(process.exitCode).toBe(1);
+
+    logSpy.mockRestore();
+    process.exitCode = exitCodeBefore;
+    vi.restoreAllMocks();
+  });
+
   it("exits with error when --output has no value", async () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("process.exit"); });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

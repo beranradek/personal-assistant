@@ -1,0 +1,44 @@
+name: Episode Eval
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: episode-eval-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  episode-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: npm
+          cache-dependency-path: package-lock.json
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run episodic eval gate
+        run: npm run episode-eval:gate
+
+      - name: Upload episodic eval artifact
+        if: ${{ always() && hashFiles('tmp/episode-eval-report.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: episode-eval-report
+          path: tmp/episode-eval-report.json

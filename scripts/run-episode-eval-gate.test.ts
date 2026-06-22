@@ -20,7 +20,7 @@ describe("run-episode-eval-gate script", () => {
       exec,
     });
 
-    expect(exec).toHaveBeenNthCalledWith(1, "pnpm", ["build"], {
+    expect(exec).toHaveBeenNthCalledWith(1, "npm", ["run", "build"], {
       stdio: "inherit",
     });
     expect(exec).toHaveBeenNthCalledWith(
@@ -45,7 +45,7 @@ describe("run-episode-eval-gate script", () => {
     ).toThrow("build failed");
 
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenNthCalledWith(1, "pnpm", ["build"], {
+    expect(exec).toHaveBeenNthCalledWith(1, "npm", ["run", "build"], {
       stdio: "inherit",
     });
   });
@@ -65,7 +65,7 @@ describe("run-episode-eval-gate script", () => {
     ).toThrow("eval failed");
 
     expect(exec).toHaveBeenCalledTimes(2);
-    expect(exec).toHaveBeenNthCalledWith(1, "pnpm", ["build"], {
+    expect(exec).toHaveBeenNthCalledWith(1, "npm", ["run", "build"], {
       stdio: "inherit",
     });
     expect(exec).toHaveBeenNthCalledWith(

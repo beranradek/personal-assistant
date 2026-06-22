@@ -11,7 +11,7 @@ export function runEpisodeEvalGate({
 } = {}) {
   const outputPath = resolveEpisodeEvalOutputPath(env);
 
-  exec("pnpm", ["build"], {
+  exec("npm", ["run", "build"], {
     stdio: "inherit",
   });
 
