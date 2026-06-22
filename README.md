@@ -281,7 +281,8 @@ npm run episode-eval:artifact # Run episodic eval and write ./tmp/episode-eval-r
 npm run episode-eval:gate # Build, emit JSON artifact, and fail on eval regressions
 ```
 
-`episode-eval` scripts read `dist/cli.js`, so run `npm run build` first on a clean checkout.
+`episode-eval`, `episode-eval:json`, and `episode-eval:artifact` read `dist/cli.js`, so run `npm run build` first on a clean checkout.
+`episode-eval:gate` runs the build for you and supports overriding the artifact path with `EPISODE_EVAL_OUTPUT_PATH=/path/report.json`.
 
 ## License
 
