@@ -6,6 +6,75 @@ export function resolveEpisodeEvalReportPath(argv = process.argv, env = process.
   return argv[2] || env.EPISODE_EVAL_OUTPUT_PATH || "./tmp/episode-eval-report.json";
 }
 
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertEpisodeEvalReportShape(report) {
+  if (!isRecord(report)) {
+    throw new Error("top-level value must be an object");
+  }
+
+  const requiredNumberFields = [
+    "runtimeFixtures",
+    "runtimePassedFixtures",
+    "terminalStartupEntrypointFixtures",
+    "terminalStartupEntrypointPassedFixtures",
+    "daemonStartupEntrypointFixtures",
+    "daemonStartupEntrypointPassedFixtures",
+    "sharedMemoryStartupFixtures",
+    "sharedMemoryStartupPassedFixtures",
+    "sharedStartupWiringFixtures",
+    "sharedStartupWiringPassedFixtures",
+    "syntheticFixtures",
+    "syntheticPassedFixtures",
+    "failedFixtures",
+  ];
+
+  if (typeof report.generatedAt !== "string" || report.generatedAt.length === 0) {
+    throw new Error("generatedAt must be a non-empty string");
+  }
+
+  for (const field of requiredNumberFields) {
+    if (typeof report[field] !== "number") {
+      throw new Error(`${field} must be a number`);
+    }
+  }
+
+  if (!Array.isArray(report.failedFixtureIds)) {
+    throw new Error("failedFixtureIds must be an array");
+  }
+
+  if (!isRecord(report.fixtureKinds)) {
+    throw new Error("fixtureKinds must be an object");
+  }
+
+  if (!Array.isArray(report.results)) {
+    throw new Error("results must be an array");
+  }
+
+  for (const result of report.results) {
+    if (!isRecord(result)) {
+      throw new Error("results entries must be objects");
+    }
+    if (typeof result.fixtureId !== "string" || result.fixtureId.length === 0) {
+      throw new Error("result.fixtureId must be a non-empty string");
+    }
+    if (!Array.isArray(result.failureClasses)) {
+      throw new Error("result.failureClasses must be an array");
+    }
+    if (!Array.isArray(result.resultIds)) {
+      throw new Error("result.resultIds must be an array");
+    }
+    if (!isRecord(result.metrics) || typeof result.metrics.latencyMs !== "number") {
+      throw new Error("result.metrics.latencyMs must be a number");
+    }
+    if (!Array.isArray(result.probeStateMismatches)) {
+      throw new Error("result.probeStateMismatches must be an array");
+    }
+  }
+}
+
 function formatFixtureBucket(label, passed, total, note = "") {
   if (total <= 0) {
     return null;
@@ -113,6 +182,7 @@ export async function renderEpisodeEvalSummary(reportPath) {
   }
 
   try {
+    assertEpisodeEvalReportShape(report);
     return formatEpisodeEvalSummary(report);
   } catch (error) {
     throw new Error(`Episode eval report at ${resolvedPath} has an invalid summary shape`, { cause: error });

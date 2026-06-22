@@ -221,6 +221,45 @@ describe("render-episode-eval-summary script", () => {
     );
   });
 
+  it("fails with a clear error when a nested result shape is invalid", async () => {
+    const reportPath = path.join(tempDir, "wrong-result-shape-report.json");
+    await fs.writeFile(
+      reportPath,
+      JSON.stringify({
+        generatedAt: "2026-06-22T17:00:00.000Z",
+        runtimeFixtures: 1,
+        runtimePassedFixtures: 1,
+        terminalStartupEntrypointFixtures: 0,
+        terminalStartupEntrypointPassedFixtures: 0,
+        daemonStartupEntrypointFixtures: 0,
+        daemonStartupEntrypointPassedFixtures: 0,
+        sharedMemoryStartupFixtures: 0,
+        sharedMemoryStartupPassedFixtures: 0,
+        sharedStartupWiringFixtures: 0,
+        sharedStartupWiringPassedFixtures: 0,
+        syntheticFixtures: 0,
+        syntheticPassedFixtures: 0,
+        failedFixtures: 0,
+        failedFixtureIds: [],
+        fixtureKinds: {},
+        results: [
+          {
+            fixtureId: "fixture-1",
+            failureClasses: [],
+            resultIds: [],
+            metrics: {},
+            probeStateMismatches: [],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    await expect(renderEpisodeEvalSummary(reportPath)).rejects.toThrow(
+      `Episode eval report at ${reportPath} has an invalid summary shape`,
+    );
+  });
+
   it("fails with a clear read error when the report path is unreadable as a file", async () => {
     await expect(renderEpisodeEvalSummary(tempDir)).rejects.toThrow(
       `Episode eval report at ${tempDir} could not be read (EISDIR)`,
