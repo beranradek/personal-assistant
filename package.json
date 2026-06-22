@@ -15,6 +15,7 @@
     "episode-eval": "node dist/cli.js episode-eval",
     "episode-eval:json": "node dist/cli.js episode-eval --json",
     "episode-eval:artifact": "node dist/cli.js episode-eval --output ./tmp/episode-eval-report.json",
+    "episode-eval:gate": "pnpm build && node dist/cli.js episode-eval --json --output ./tmp/episode-eval-report.json",
     "postinstall": "node scripts/prune-gpu-prebuilds.mjs"
   },
   "engines": {

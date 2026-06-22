@@ -278,6 +278,7 @@ npm run build         # TypeScript compilation + template copy
 npm run episode-eval  # Run episodic eval and print human-readable report
 npm run episode-eval:json # Run episodic eval and print JSON report for CI/gates
 npm run episode-eval:artifact # Run episodic eval and write ./tmp/episode-eval-report.json
+npm run episode-eval:gate # Build, emit JSON artifact, and fail on eval regressions
 ```
 
 `episode-eval` scripts read `dist/cli.js`, so run `npm run build` first on a clean checkout.
