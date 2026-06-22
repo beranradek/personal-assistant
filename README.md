@@ -284,7 +284,7 @@ npm run episode-eval:gate # Build, emit JSON artifact, and fail on eval regressi
 `episode-eval`, `episode-eval:json`, and `episode-eval:artifact` read `dist/cli.js`, so run `npm run build` first on a clean checkout.
 `episode-eval:gate` runs the build for you and supports overriding the artifact path with `EPISODE_EVAL_OUTPUT_PATH=/path/report.json`.
 GitHub Actions workflow `.github/workflows/episode-eval.yml` runs this gate on `push`, `pull_request`, and `workflow_dispatch` and uploads `tmp/episode-eval-report.json` as an artifact.
-That artifact is the same JSON report emitted by `episode-eval:gate`, so it is the primary CI payload to inspect when the gate fails.
+That artifact is the same JSON report emitted by `episode-eval:gate`, so it is the primary CI payload to inspect when the gate fails. The workflow also renders a short markdown summary into the GitHub Actions job summary for faster triage.
 
 ## License
 

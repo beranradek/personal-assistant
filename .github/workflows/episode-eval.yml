@@ -36,6 +36,10 @@ jobs:
       - name: Run episodic eval gate
         run: npm run episode-eval:gate
 
+      - name: Publish episodic eval summary
+        if: ${{ always() && hashFiles('tmp/episode-eval-report.json') != '' }}
+        run: node scripts/render-episode-eval-summary.mjs tmp/episode-eval-report.json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload episodic eval artifact
         if: ${{ always() && hashFiles('tmp/episode-eval-report.json') != '' }}
         uses: actions/upload-artifact@v4
