@@ -196,4 +196,67 @@ describe("render-episode-eval-summary script", () => {
     expect(stdout).toContain("## Episode Eval PASSED");
     expect(stdout).toContain("- Generated at: `2026-06-22T16:00:00.000Z`");
   });
+
+  it("fails with a clear error when the report file is missing", async () => {
+    await expect(renderEpisodeEvalSummary(path.join(tempDir, "missing-report.json"))).rejects.toThrow(
+      "Episode eval report not found",
+    );
+  });
+
+  it("fails with a clear error when the report file is malformed", async () => {
+    const reportPath = path.join(tempDir, "broken-report.json");
+    await fs.writeFile(reportPath, "{ not json", "utf8");
+
+    await expect(renderEpisodeEvalSummary(reportPath)).rejects.toThrow(
+      `Episode eval report at ${reportPath} is not valid JSON`,
+    );
+  });
+
+  it("fails with a clear error when the report JSON shape is invalid", async () => {
+    const reportPath = path.join(tempDir, "wrong-shape-report.json");
+    await fs.writeFile(reportPath, JSON.stringify({ generatedAt: "2026-06-22T17:00:00.000Z" }), "utf8");
+
+    await expect(renderEpisodeEvalSummary(reportPath)).rejects.toThrow(
+      `Episode eval report at ${reportPath} has an invalid summary shape`,
+    );
+  });
+
+  it("fails with a clear read error when the report path is unreadable as a file", async () => {
+    await expect(renderEpisodeEvalSummary(tempDir)).rejects.toThrow(
+      `Episode eval report at ${tempDir} could not be read (EISDIR)`,
+    );
+  });
+
+  it("returns exit code 1 with a clear message for missing report in the real script entrypoint", async () => {
+    await expect(
+      execFileAsync("node", ["scripts/render-episode-eval-summary.mjs"], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          EPISODE_EVAL_OUTPUT_PATH: path.join(tempDir, "missing-report.json"),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("Episode eval report not found"),
+    });
+  });
+
+  it("returns exit code 1 with a clear message for invalid summary shape in the real script entrypoint", async () => {
+    const reportPath = path.join(tempDir, "wrong-shape-report.json");
+    await fs.writeFile(reportPath, JSON.stringify({ generatedAt: "2026-06-22T17:00:00.000Z" }), "utf8");
+
+    await expect(
+      execFileAsync("node", ["scripts/render-episode-eval-summary.mjs"], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          EPISODE_EVAL_OUTPUT_PATH: reportPath,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("has an invalid summary shape"),
+    });
+  });
 });

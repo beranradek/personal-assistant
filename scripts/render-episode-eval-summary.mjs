@@ -92,12 +92,41 @@ export function formatEpisodeEvalSummary(report) {
 
 export async function renderEpisodeEvalSummary(reportPath) {
   const resolvedPath = path.resolve(reportPath);
-  const raw = await fs.readFile(resolvedPath, "utf8");
-  return formatEpisodeEvalSummary(JSON.parse(raw));
+  let raw;
+  try {
+    raw = await fs.readFile(resolvedPath, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") {
+      throw new Error(`Episode eval report not found at ${resolvedPath}`, { cause: error });
+    }
+    throw new Error(`Episode eval report at ${resolvedPath} could not be read (${String(code ?? "unknown error")})`, {
+      cause: error,
+    });
+  }
+
+  let report;
+  try {
+    report = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Episode eval report at ${resolvedPath} is not valid JSON`, { cause: error });
+  }
+
+  try {
+    return formatEpisodeEvalSummary(report);
+  } catch (error) {
+    throw new Error(`Episode eval report at ${resolvedPath} has an invalid summary shape`, { cause: error });
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const reportPath = resolveEpisodeEvalReportPath(process.argv, process.env);
-  const summary = await renderEpisodeEvalSummary(reportPath);
-  process.stdout.write(summary);
+  try {
+    const reportPath = resolveEpisodeEvalReportPath(process.argv, process.env);
+    const summary = await renderEpisodeEvalSummary(reportPath);
+    process.stdout.write(summary);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  }
 }
