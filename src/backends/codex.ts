@@ -420,6 +420,7 @@ export async function createCodexBackend(
       );
 
       let responseText = "";
+      let turnErrorYielded = false;
 
       try {
         // Get or create thread
@@ -498,6 +499,7 @@ export async function createCodexBackend(
               const tf = te as TurnFailedEvent;
               const tfMsg = tf.error?.message ?? "Turn failed";
               yield { type: "error", error: redact ? redact(tfMsg) : tfMsg };
+              turnErrorYielded = true;
               break;
             }
 
@@ -506,6 +508,7 @@ export async function createCodexBackend(
               const err = te as ThreadErrorEvent;
               const errMsg = err.message ?? "Codex error";
               yield { type: "error", error: redact ? redact(errMsg) : errMsg };
+              turnErrorYielded = true;
               break;
             }
 
@@ -524,8 +527,15 @@ export async function createCodexBackend(
         }
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        log.error({ err, sessionKey }, "Codex turn failed");
-        yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
+        if (turnErrorYielded) {
+          // A meaningful error (turn.failed / error event) was already surfaced to
+          // the user. The SDK throws here only because the process exited non-zero
+          // after the turn — log it but don't overwrite the real error message.
+          log.warn({ err, sessionKey }, "Codex process exited non-zero after turn error (already surfaced)");
+        } else {
+          log.error({ err, sessionKey }, "Codex turn failed");
+          yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
+        }
         return;
       }
 
