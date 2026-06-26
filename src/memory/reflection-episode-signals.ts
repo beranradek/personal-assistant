@@ -104,6 +104,7 @@ export function buildEpisodeSignalsSummary(args: {
   const outcomeCounts = takeTopCounts(args.episodes.map((episode) => episode.outcome), 10);
   const sourceSignals = takeTopCounts(args.episodes.map((episode) => episode.source), args.maxTopItems);
   const categorySignals = takeTopCounts(args.episodes.map((episode) => episode.category), args.maxTopItems);
+  const whySignals = takeTopCounts(args.episodes.map((episode) => episode.why), args.maxTopItems);
   const projectSignals = takeTopCounts(args.episodes.map((episode) => episode.projectName), args.maxTopItems);
   const jobSignals = takeTopCounts(args.episodes.map((episode) => episode.jobName), args.maxTopItems);
   const toolSignals = collectEpisodeToolSignals(args.episodes, args.maxTopItems);
@@ -120,6 +121,9 @@ export function buildEpisodeSignalsSummary(args: {
   }
   if (categorySignals.length > 0) {
     lines.push(`- categories: ${categorySignals.join(", ")}`);
+  }
+  if (whySignals.length > 0) {
+    lines.push(`- why themes: ${whySignals.join(", ")}`);
   }
   if (projectSignals.length > 0) {
     lines.push(`- projects: ${projectSignals.join(", ")}`);

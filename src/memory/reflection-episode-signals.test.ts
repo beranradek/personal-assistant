@@ -167,14 +167,15 @@ describe("buildEpisodeSignalsSummary", () => {
       label: "mixed-window",
       episodes: [
         makeEpisode("1", { source: "github", category: "coding" }),
-        makeEpisode("2", { source: "github", category: "coding" }),
-        makeEpisode("3", { source: "heartbeat", category: "admin" }),
+        makeEpisode("2", { source: "github", category: "coding", why: "Ship episodic reflection slice" }),
+        makeEpisode("3", { source: "heartbeat", category: "admin", why: "Ship episodic reflection slice" }),
       ],
       maxTopItems: 2,
     });
 
     expect(summary).toContain("- sources: github (2), heartbeat (1)");
     expect(summary).toContain("- categories: coding (2), admin (1)");
+    expect(summary).toContain("- why themes: Ship episodic reflection slice (2)");
   });
 });
 
