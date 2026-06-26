@@ -157,6 +157,31 @@ describe("createCodexBackend", () => {
     expect(mcpServers).toHaveProperty("chrome-devtools");
   });
 
+  it("uses shared HTTP MCP server URL when httpMcpPort is provided", async () => {
+    await createCodexBackend(makeConfig(), { httpMcpPort: 47392 });
+
+    const config = capturedCodexOptions.value?.config as Record<string, unknown>;
+    const mcpServers = config.mcp_servers as Record<string, Record<string, unknown>>;
+
+    expect(mcpServers["personal-assistant"]).toEqual({
+      url: "http://127.0.0.1:47392",
+    });
+  });
+
+  it("falls back to stdio MCP server when httpMcpPort is not provided", async () => {
+    await createCodexBackend(makeConfig(), { configDir: "/app" });
+
+    const config = capturedCodexOptions.value?.config as Record<string, unknown>;
+    const mcpServers = config.mcp_servers as Record<string, Record<string, unknown>>;
+
+    expect(mcpServers["personal-assistant"]).toEqual({
+      command: "pa",
+      args: ["mcp-server", "--config", "/app"],
+      startup_timeout_sec: 120,
+      tool_timeout_sec: 120,
+    });
+  });
+
 
   it("has runTurn, runTurnSync, clearSession methods", async () => {
     const backend = await createCodexBackend(makeConfig());

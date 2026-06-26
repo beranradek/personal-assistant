@@ -51,6 +51,8 @@ import { createLogger } from "./core/logger.js";
 import type { Adapter, AdapterMessage, Config } from "./core/types.js";
 import { migrateLegacySessionsToUnified } from "./session/unified.js";
 import type { AgentBackend } from "./backends/interface.js";
+import { startHttpMcpServer, type HttpMcpServerHandle } from "./tools/http-mcp-server.js";
+import type { StdioMcpServerDeps } from "./tools/stdio-mcp-server.js";
 
 const log = createLogger("daemon");
 
@@ -81,6 +83,7 @@ type DaemonCoreRuntime = {
   warningTriggered: boolean;
   fallbackTriggered: boolean;
   episodicSurfaceExposed: boolean;
+  httpMcpServer?: HttpMcpServerHandle;
 };
 
 async function createDaemonCoreFromConfig(args: {
@@ -200,7 +203,43 @@ async function createDaemonCoreFromConfig(args: {
     mcpServers,
   );
 
-  const backend = await createBackendImpl(args.config, agentOptions, { configDir: args.configDir, redact });
+  // Start a shared HTTP MCP server when using the Codex backend so that the
+  // main agent and all its subagents connect to it via URL instead of each
+  // spawning their own `pa mcp-server` stdio process (which leaks orphans that
+  // accumulate the 314 MB embedding model in memory).
+  let httpMcpServer: HttpMcpServerHandle | undefined;
+  if (args.config.agent.backend === "codex") {
+    const mcpDeps: StdioMcpServerDeps = {
+      search: searchMemory,
+      handleCronAction: cronManager.handleAction,
+      handleExec: (options) => handleExec(options, args.config),
+      getProcessSession: getSession,
+      listProcessSessions: listSessions,
+    };
+    try {
+      httpMcpServer = await startHttpMcpServer(mcpDeps, args.config.codex.httpMcpPort);
+      log.info({ port: args.config.codex.httpMcpPort }, "Shared HTTP MCP server started");
+    } catch (err) {
+      log.warn(
+        { err, port: args.config.codex.httpMcpPort },
+        "shared HTTP MCP server unavailable; falling back to stdio MCP per Codex turn",
+      );
+    }
+  }
+
+  let backend: AgentBackend;
+  try {
+    backend = await createBackendImpl(args.config, agentOptions, {
+      configDir: args.configDir,
+      redact,
+      httpMcpPort: httpMcpServer?.port,
+    });
+  } catch (err) {
+    if (httpMcpServer) {
+      await httpMcpServer.close().catch(() => undefined);
+    }
+    throw err;
+  }
   log.info({ backend: backend.name }, "Agent backend initialized");
 
   if (args.config.agent.backend === "codex") {
@@ -228,6 +267,7 @@ async function createDaemonCoreFromConfig(args: {
     warningTriggered,
     fallbackTriggered,
     episodicSurfaceExposed,
+    httpMcpServer,
   };
 }
 
@@ -367,6 +407,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     memoryWatcher,
     memorySyncTimer,
     backend,
+    httpMcpServer,
   } = await createDaemonCoreFromConfig({ config, configDir });
 
   // 7. Start adapters (only if enabled)
@@ -572,6 +613,11 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Close backend
     if (backend.close) {
       await backend.close();
+    }
+
+    // Close shared HTTP MCP server (Codex backend only)
+    if (httpMcpServer) {
+      await httpMcpServer.close();
     }
 
     // Stop integ-api child process

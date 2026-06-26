@@ -140,6 +140,8 @@ export const CodexConfigSchema = z.object({
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh"]).nullable().default(null),
   skipGitRepoCheck: z.boolean().default(true),
   configOverrides: z.record(z.string(), z.unknown()).default({}),
+  /** Port for the shared HTTP MCP server started by the daemon (Codex backend only). */
+  httpMcpPort: z.number().int().positive().default(47392),
 });
 
 export const SessionConfigSchema = z.object({

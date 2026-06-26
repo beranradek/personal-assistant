@@ -159,6 +159,7 @@ describe("config", () => {
       expect(config.codex.baseUrl).toBeNull();
       expect(config.codex.reasoningEffort).toBeNull();
       expect(config.codex.configOverrides).toEqual({});
+      expect(config.codex.httpMcpPort).toBe(47392);
     });
 
     it("merges reflection episodeSignals overrides over defaults", () => {

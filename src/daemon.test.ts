@@ -50,6 +50,10 @@ vi.mock("./tools/assistant-server.js", () => ({
   createAssistantServer: vi.fn(),
 }));
 
+vi.mock("./tools/http-mcp-server.js", () => ({
+  startHttpMcpServer: vi.fn(),
+}));
+
 vi.mock("./gateway/queue.js", () => ({
   createMessageQueue: vi.fn(),
 }));
@@ -155,6 +159,7 @@ import { createEpisodeStore } from "./memory/episodes/store.js";
 import { createIndexer } from "./memory/indexer.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
+import { startHttpMcpServer } from "./tools/http-mcp-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
@@ -234,6 +239,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       reasoningEffort: null,
       skipGitRepoCheck: true,
       configOverrides: {},
+      httpMcpPort: 47392,
     },
     reflection: {
       enabled: false,
@@ -348,6 +354,10 @@ function setupMocks(config: Config) {
   const mockRouter = makeMockRouter();
   const mockCronManager = makeMockCronManager();
   const mockBackend = makeMockBackend();
+  const mockHttpMcpServer = {
+    port: config.codex.httpMcpPort,
+    close: vi.fn().mockResolvedValue(undefined),
+  };
 
   vi.mocked(loadConfig).mockReturnValue(config);
   vi.mocked(ensureWorkspace).mockResolvedValue(undefined);
@@ -374,6 +384,7 @@ function setupMocks(config: Config) {
   });
   vi.mocked(createMemoryServer).mockReturnValue({} as any);
   vi.mocked(createAssistantServer).mockReturnValue({} as any);
+  vi.mocked(startHttpMcpServer).mockResolvedValue(mockHttpMcpServer);
   vi.mocked(createMessageQueue).mockReturnValue(mockQueue as any);
   vi.mocked(createRouter).mockReturnValue(mockRouter);
   vi.mocked(createGithubWebhookAdapter).mockReturnValue(makeMockAdapter("github") as any);
@@ -391,6 +402,7 @@ function setupMocks(config: Config) {
     mockRouter,
     mockCronManager,
     mockBackend,
+    mockHttpMcpServer,
   };
 }
 
@@ -444,6 +456,80 @@ describe("daemon", () => {
     expect(createMemoryServer).toHaveBeenCalled();
     expect(createAssistantServer).toHaveBeenCalled();
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
+  });
+
+  it("starts shared HTTP MCP server for Codex backend and passes its port to the backend", async () => {
+    const config = makeConfig({
+      agent: { backend: "codex", model: null, maxTurns: 200 },
+    });
+    const { mockQueue, mockBackend } = setupMocks(config);
+
+    await startDaemon("/app");
+
+    expect(startHttpMcpServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        search: expect.any(Function),
+        handleCronAction: expect.any(Function),
+        handleExec: expect.any(Function),
+        getProcessSession: expect.any(Function),
+        listProcessSessions: expect.any(Function),
+      }),
+      config.codex.httpMcpPort,
+    );
+    expect(createBackend).toHaveBeenCalledWith(
+      config,
+      expect.any(Object),
+      expect.objectContaining({
+        configDir: expect.any(String),
+        redact: expect.any(Function),
+        httpMcpPort: config.codex.httpMcpPort,
+      }),
+    );
+    expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
+  });
+
+  it("falls back to stdio MCP when shared HTTP MCP server startup fails", async () => {
+    const config = makeConfig({
+      agent: { backend: "codex", model: null, maxTurns: 200 },
+    });
+    const { mockQueue, mockBackend } = setupMocks(config);
+    vi.mocked(startHttpMcpServer).mockRejectedValue(new Error("listen EADDRINUSE: address already in use 127.0.0.1:47392"));
+
+    await startDaemon("/app");
+
+    expect(createBackend).toHaveBeenCalledWith(
+      config,
+      expect.any(Object),
+      expect.objectContaining({
+        configDir: expect.any(String),
+        redact: expect.any(Function),
+        httpMcpPort: undefined,
+      }),
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.any(Error),
+        port: config.codex.httpMcpPort,
+      }),
+      "shared HTTP MCP server unavailable; falling back to stdio MCP per Codex turn",
+    );
+    expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
+  });
+
+  it("closes shared HTTP MCP server if backend creation fails after startup", async () => {
+    const config = makeConfig({
+      agent: { backend: "codex", model: null, maxTurns: 200 },
+    });
+    const { mockHttpMcpServer } = setupMocks(config);
+    vi.mocked(createBackend).mockRejectedValueOnce(new Error("codex bootstrap failed"));
+
+    await expect(startDaemon("/app")).rejects.toThrow("codex bootstrap failed");
+
+    expect(startHttpMcpServer).toHaveBeenCalledWith(
+      expect.any(Object),
+      config.codex.httpMcpPort,
+    );
+    expect(mockHttpMcpServer.close).toHaveBeenCalledTimes(1);
   });
 
   it("continues startup when episodic store open fails", async () => {
@@ -599,6 +685,7 @@ describe("daemon", () => {
   // -----------------------------------------------------------------------
   it("registers SIGTERM handler that triggers graceful shutdown", async () => {
     const config = makeConfig({
+      agent: { backend: "codex", model: null, maxTurns: 200 },
       adapters: {
         telegram: {
           enabled: true,
@@ -624,7 +711,7 @@ describe("daemon", () => {
     });
 
     const mockTelegramAdapter = makeMockAdapter("telegram");
-    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend } = setupMocks(config);
+    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend, mockHttpMcpServer } = setupMocks(config);
     vi.mocked(createTelegramAdapter).mockReturnValue(mockTelegramAdapter);
 
     const mockHeartbeatStop = vi.fn();
@@ -648,6 +735,7 @@ describe("daemon", () => {
     expect(mockHeartbeatStop).toHaveBeenCalled();
     expect(mockCronManager.stop).toHaveBeenCalled();
     expect(mockBackend.close).toHaveBeenCalled();
+    expect(mockHttpMcpServer.close).toHaveBeenCalled();
     expect(mockStore.close).toHaveBeenCalled();
     expect(mockEmbedder.close).toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(0);
@@ -659,8 +747,10 @@ describe("daemon", () => {
   // 6. SIGINT triggers graceful shutdown
   // -----------------------------------------------------------------------
   it("registers SIGINT handler that triggers graceful shutdown", async () => {
-    const config = makeConfig();
-    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend } = setupMocks(config);
+    const config = makeConfig({
+      agent: { backend: "codex", model: null, maxTurns: 200 },
+    });
+    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend, mockHttpMcpServer } = setupMocks(config);
 
     const mockHeartbeatStop = vi.fn();
     vi.mocked(createHeartbeatScheduler).mockReturnValue({ stop: mockHeartbeatStop });
@@ -679,6 +769,7 @@ describe("daemon", () => {
     // Verify graceful shutdown
     expect(mockQueue.stop).toHaveBeenCalled();
     expect(mockBackend.close).toHaveBeenCalled();
+    expect(mockHttpMcpServer.close).toHaveBeenCalled();
     expect(mockStore.close).toHaveBeenCalled();
     expect(mockEmbedder.close).toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(0);

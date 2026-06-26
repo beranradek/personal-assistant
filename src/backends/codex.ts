@@ -236,6 +236,12 @@ export interface CodexBackendOptions {
   configDir?: string;
   /** Optional content redactor applied to persisted sessions and audit logs. */
   redact?: (text: string) => string;
+  /**
+   * Port of the shared HTTP MCP server started by the daemon.
+   * When set, Codex is configured to connect via HTTP instead of spawning a
+   * new `pa mcp-server` stdio process per turn (which causes orphan accumulation).
+   */
+  httpMcpPort?: number;
 }
 
 /**
@@ -263,31 +269,46 @@ export async function createCodexBackend(
     codexConfig.developer_instructions = baseInstructions;
   }
 
-  // I3 fix: Pass --config to the MCP server subprocess if a config dir is known
-  const mcpArgs = ["mcp-server"];
-  if (options?.configDir) {
-    mcpArgs.push("--config", options.configDir);
-  }
-
   // Enable multi_agent feature flag (allows spawn_agent with default/explorer/worker roles,
   // plus custom roles defined in ~/.codex/config.toml [agents.*] sections)
   const userFeatures = (config.codex.configOverrides?.features ?? {}) as Record<string, unknown>;
   codexConfig.features = { multi_agent: true, ...userFeatures };
 
-  // Inject PA's stdio MCP server
+  // Inject PA's MCP server.
+  //
+  // When the daemon has started a shared HTTP MCP server (httpMcpPort is set), point Codex
+  // at it via URL. All Codex instances — the main agent and every subagent — share that one
+  // server, so no `pa mcp-server` stdio child processes are spawned per turn.
+  //
+  // Without httpMcpPort (e.g. terminal mode), fall back to spawning stdio per turn.
   //
   // Note: `config.mcpServers` historically configures MCP servers for the Claude backend.
   // Codex expects MCP servers under `codex.configOverrides.mcp_servers` (or ~/.codex/config.toml).
   // To reduce duplication in settings, we also inject `config.mcpServers` here by default.
   const claudeConfiguredMcpServers = (config.mcpServers ?? {}) as Record<string, unknown>;
   const userMcpServers = (config.codex.configOverrides?.mcp_servers ?? {}) as Record<string, unknown>;
-  codexConfig.mcp_servers = {
-    "personal-assistant": {
+
+  let personalAssistantMcpEntry: Record<string, unknown>;
+  if (options?.httpMcpPort) {
+    personalAssistantMcpEntry = {
+      url: `http://127.0.0.1:${options.httpMcpPort}`,
+    };
+  } else {
+    // Stdio fallback: used in terminal mode or when HTTP server is not available.
+    const mcpArgs = ["mcp-server"];
+    if (options?.configDir) {
+      mcpArgs.push("--config", options.configDir);
+    }
+    personalAssistantMcpEntry = {
       command: "pa",
       args: mcpArgs,
       startup_timeout_sec: 120,
       tool_timeout_sec: 120,
-    },
+    };
+  }
+
+  codexConfig.mcp_servers = {
+    "personal-assistant": personalAssistantMcpEntry,
     ...claudeConfiguredMcpServers,
     ...userMcpServers,
   };

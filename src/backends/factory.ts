@@ -19,6 +19,8 @@ export interface CreateBackendOptions {
   configDir?: string;
   /** Optional content redactor applied to persisted sessions and audit logs. */
   redact?: (text: string) => string;
+  /** Port of the shared HTTP MCP server (Codex backend only). See CodexBackendOptions. */
+  httpMcpPort?: number;
 }
 
 export async function createBackend(
@@ -36,7 +38,7 @@ export async function createBackend(
       }
       return createClaudeBackend(agentOptions, config, options?.redact);
     case "codex":
-      return createCodexBackend(config, { configDir: options?.configDir, redact: options?.redact });
+      return createCodexBackend(config, { configDir: options?.configDir, redact: options?.redact, httpMcpPort: options?.httpMcpPort });
     default:
       throw new Error(`Unknown agent backend: ${backendType}`);
   }

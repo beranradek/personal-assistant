@@ -157,6 +157,7 @@ export const DEFAULTS: Config = {
     reasoningEffort: null,
     skipGitRepoCheck: true,
     configOverrides: {},
+    httpMcpPort: 47392,
   },
 };
 
