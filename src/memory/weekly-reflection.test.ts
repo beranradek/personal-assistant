@@ -361,6 +361,235 @@ describe("runWeeklyReflection", () => {
     expect(written).toContain("PostgreSQL");
   });
 
+  it("appends bounded episode-derived signals when enabled", async () => {
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+
+    const now = new Date();
+    const lastWeek = new Date(now);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    const lastWeekDate = lastWeek.toISOString().slice(0, 10);
+    await fs.writeFile(
+      path.join(tmpDir, "memory", `reflection-${lastWeekDate}.md`),
+      "---\ndate: " + lastWeekDate + "\n---\n\n## Decisions\n\n- Used PostgreSQL\n",
+    );
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const { start, end } = getWeekDateRange(getLastWeekIdentifier());
+    const listEpisodesMock = vi.fn(() => [
+      {
+        id: "ep-1",
+        startedAt: `${lastWeekDate}T08:00:00.000Z`,
+        endedAt: `${lastWeekDate}T08:05:00.000Z`,
+        source: "github",
+        sessionKey: "github--1",
+        sessionId: "github--1",
+        initiator: "user",
+        action: "Fix issue",
+        normalizedAction: "fix issue",
+        summary: "Fixed issue",
+        why: null,
+        projectName: "personal-assistant",
+        jobName: "003-personal-assistant-episodic-memory",
+        issueId: "1",
+        pullRequestId: null,
+        detailedMemoryFile: null,
+        category: "coding",
+        skillsUsed: [],
+        toolsUsed: ["functions.exec_command"],
+        tags: [],
+        outcome: "failure",
+        successScore: 0.2,
+        blockers: ["schema drift"],
+        errors: [],
+        evidenceIncomplete: [],
+        trajectory: [],
+        semanticEmbeddingText: "fixed issue",
+      },
+    ]);
+    const createEpisodeStoreMock = vi.fn(() => ({
+      listEpisodes: listEpisodesMock,
+      close: vi.fn(),
+    }));
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: string, opts?: RequestInit) => {
+      capturedBody.push(JSON.parse(opts?.body as string));
+      return {
+        ok: true,
+        json: async () => ({
+          content: [{ type: "text", text: "## Key Decisions\n\n- Used PostgreSQL for the project\n" }],
+        }),
+      } as Response;
+    });
+
+    await runWeeklyReflection(config, tmpDir, {
+      createEpisodeStore: createEpisodeStoreMock as any,
+    });
+
+    expect(createEpisodeStoreMock).toHaveBeenCalledWith("/tmp/test-data/episodes.db");
+    expect(listEpisodesMock).toHaveBeenCalledWith({
+      startedAtTo: `${end}T23:59:59.999Z`,
+      endedAtFrom: `${start}T00:00:00.000Z`,
+      limit: 5,
+    });
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain(`Structured episodic signals for ${getLastWeekIdentifier()} (${start} to ${end})`);
+    expect(capturedBody[0].messages[0].content).toContain("schema drift");
+  });
+
+  it("continues weekly reflection when episode signal loading fails", async () => {
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+
+    const now = new Date();
+    const lastWeek = new Date(now);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    const lastWeekDate = lastWeek.toISOString().slice(0, 10);
+    await fs.writeFile(
+      path.join(tmpDir, "memory", `reflection-${lastWeekDate}.md`),
+      "---\ndate: " + lastWeekDate + "\n---\n\n## Decisions\n\n- Something\n",
+    );
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: string, opts?: RequestInit) => {
+      capturedBody.push(JSON.parse(opts?.body as string));
+      return {
+        ok: true,
+        json: async () => ({
+          content: [{ type: "text", text: "## Weekly Summary\n\n- still works\n" }],
+        }),
+      } as Response;
+    });
+
+    await runWeeklyReflection(config, tmpDir, {
+      createEpisodeStore: (() => {
+        throw new Error("episodes.db incompatible schema");
+      }) as any,
+    });
+
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain("## Decisions");
+    expect(capturedBody[0].messages[0].content).not.toContain("Structured episodic signals");
+  });
+
+  it("keeps episode-derived prompt content when store close fails after a successful load", async () => {
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+
+    const now = new Date();
+    const lastWeek = new Date(now);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    const lastWeekDate = lastWeek.toISOString().slice(0, 10);
+    await fs.writeFile(
+      path.join(tmpDir, "memory", `reflection-${lastWeekDate}.md`),
+      "---\ndate: " + lastWeekDate + "\n---\n\n## Decisions\n\n- Something\n",
+    );
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: string, opts?: RequestInit) => {
+      capturedBody.push(JSON.parse(opts?.body as string));
+      return {
+        ok: true,
+        json: async () => ({
+          content: [{ type: "text", text: "## Weekly Summary\n\n- still works\n" }],
+        }),
+      } as Response;
+    });
+
+    await runWeeklyReflection(config, tmpDir, {
+      createEpisodeStore: (() => ({
+        listEpisodes: () => [{
+          id: "ep-1",
+          startedAt: `${lastWeekDate}T08:00:00.000Z`,
+          endedAt: `${lastWeekDate}T08:05:00.000Z`,
+          source: "github",
+          sessionKey: "github--1",
+          sessionId: "github--1",
+          initiator: "user",
+          action: "Fix issue",
+          normalizedAction: "fix issue",
+          summary: "Fixed issue",
+          why: null,
+          projectName: "personal-assistant",
+          jobName: "003-personal-assistant-episodic-memory",
+          issueId: "1",
+          pullRequestId: null,
+          detailedMemoryFile: null,
+          category: "coding",
+          skillsUsed: [],
+          toolsUsed: ["functions.exec_command"],
+          tags: [],
+          outcome: "failure",
+          successScore: 0.2,
+          blockers: ["schema drift"],
+          errors: [],
+          evidenceIncomplete: [],
+          trajectory: [],
+          semanticEmbeddingText: "fixed issue",
+        }],
+        close: () => {
+          throw new Error("close failed");
+        },
+      })) as any,
+    });
+
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain(`Structured episodic signals for ${getLastWeekIdentifier()}`);
+    expect(capturedBody[0].messages[0].content).toContain("schema drift");
+  });
+
+  it("continues weekly reflection without episodic summary when both list and close fail", async () => {
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+
+    const now = new Date();
+    const lastWeek = new Date(now);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    const lastWeekDate = lastWeek.toISOString().slice(0, 10);
+    await fs.writeFile(
+      path.join(tmpDir, "memory", `reflection-${lastWeekDate}.md`),
+      "---\ndate: " + lastWeekDate + "\n---\n\n## Decisions\n\n- Something\n",
+    );
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: string, opts?: RequestInit) => {
+      capturedBody.push(JSON.parse(opts?.body as string));
+      return {
+        ok: true,
+        json: async () => ({
+          content: [{ type: "text", text: "## Weekly Summary\n\n- still works\n" }],
+        }),
+      } as Response;
+    });
+
+    await runWeeklyReflection(config, tmpDir, {
+      createEpisodeStore: (() => ({
+        listEpisodes: () => {
+          throw new Error("episodes.db read failure");
+        },
+        close: () => {
+          throw new Error("close failed");
+        },
+      })) as any,
+    });
+
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain("## Decisions");
+    expect(capturedBody[0].messages[0].content).not.toContain("Structured episodic signals");
+  });
+
   it("skips writing when LLM returns sentinel '(nothing to extract)'", async () => {
     const config = makeConfig();
 

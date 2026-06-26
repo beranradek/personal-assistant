@@ -323,6 +323,22 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
           values.push(value);
         }
       }
+      if (parsed.startedAtFrom !== undefined) {
+        clauses.push("started_at >= ?");
+        values.push(parsed.startedAtFrom);
+      }
+      if (parsed.startedAtTo !== undefined) {
+        clauses.push("started_at <= ?");
+        values.push(parsed.startedAtTo);
+      }
+      if (parsed.endedAtFrom !== undefined) {
+        clauses.push("ended_at >= ?");
+        values.push(parsed.endedAtFrom);
+      }
+      if (parsed.endedAtTo !== undefined) {
+        clauses.push("ended_at <= ?");
+        values.push(parsed.endedAtTo);
+      }
       if (parsed.skillUsed !== undefined) {
         clauses.push(
           "EXISTS (SELECT 1 FROM episode_skills s WHERE s.episode_id = episodes.id AND s.skill = ?)",

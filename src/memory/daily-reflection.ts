@@ -21,6 +21,11 @@ import { fileURLToPath } from "node:url";
 import { readAuditEntries } from "./daily-log.js";
 import { createLogger } from "../core/logger.js";
 import type { AuditEntry, Config } from "../core/types.js";
+import {
+  buildEpisodeSignalsSummary,
+  loadEpisodeSignalsSummary,
+  type ReflectionEpisodeSignalsDeps,
+} from "./reflection-episode-signals.js";
 
 const log = createLogger("daily-reflection");
 
@@ -153,6 +158,7 @@ export async function runDailyReflection(
   config: Config,
   workspaceDir: string,
   targetDate?: string,
+  deps?: ReflectionEpisodeSignalsDeps,
 ): Promise<void> {
   if (!config.reflection.enabled) {
     log.debug("Daily reflection disabled — skipping");
@@ -192,6 +198,16 @@ export async function runDailyReflection(
 
   // Format entries for the LLM
   const conversationText = formatInteractionsForLLM(toProcess);
+  const episodeSignalsSummary = await loadEpisodeSignalsSummary({
+    config,
+    label: date,
+    startDate: date,
+    endDate: date,
+    deps,
+  });
+  const reflectionInput = episodeSignalsSummary
+    ? `${conversationText}\n\n---\n\n${episodeSignalsSummary}`
+    : conversationText;
 
   // Load the reflection curation prompt template
   let systemPrompt: string;
@@ -207,7 +223,7 @@ export async function runDailyReflection(
   try {
     llmResponse = await callAnthropicForReflection(
       systemPrompt,
-      conversationText,
+      reflectionInput,
       config.session.summarizationModel,
     );
   } catch (err) {

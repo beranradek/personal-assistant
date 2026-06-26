@@ -209,6 +209,15 @@ export const ReflectionConfigSchema = z.object({
   enabled: z.boolean().default(true),
   schedule: z.string().default("0 7 * * *"),
   maxDailyLogEntries: z.number().int().positive().default(500),
+  episodeSignals: z.object({
+    enabled: z.boolean().default(false),
+    maxRecentEpisodes: z.number().int().positive().max(5000).default(200),
+    maxTopItems: z.number().int().positive().max(20).default(3),
+  }).default(() => ({
+    enabled: false,
+    maxRecentEpisodes: 200,
+    maxTopItems: 3,
+  })),
   weeklyEnabled: z.boolean().default(true),
   /** Cron expression for weekly synthesis. Default: Monday 7:05 AM (after daily reflection). */
   weeklySchedule: z.string().default("5 7 * * 1"),

@@ -23,6 +23,10 @@ import { fileURLToPath } from "node:url";
 import { callAnthropicForReflection } from "./daily-reflection.js";
 import { createLogger } from "../core/logger.js";
 import type { Config } from "../core/types.js";
+import {
+  loadEpisodeSignalsSummary,
+  type ReflectionEpisodeSignalsDeps,
+} from "./reflection-episode-signals.js";
 
 const log = createLogger("weekly-reflection");
 
@@ -206,6 +210,7 @@ export async function cleanupOldDailyReflections(
 export async function runWeeklyReflection(
   config: Config,
   workspaceDir: string,
+  deps?: ReflectionEpisodeSignalsDeps,
 ): Promise<void> {
   if (!config.reflection.enabled || !config.reflection.weeklyEnabled) {
     log.debug("Weekly reflection disabled — skipping");
@@ -232,7 +237,7 @@ export async function runWeeklyReflection(
     if (dailyFiles.length === 0) {
       log.info({ weekId, start, end }, "No daily reflections found for last week — skipping synthesis");
     } else {
-      await synthesiseWeek(config, workspaceDir, weekId, dailyFiles, outputPath);
+      await synthesiseWeek(config, workspaceDir, weekId, dailyFiles, outputPath, deps);
     }
   }
 
@@ -250,6 +255,7 @@ async function synthesiseWeek(
   weekId: string,
   dailyFiles: string[],
   outputPath: string,
+  deps?: ReflectionEpisodeSignalsDeps,
 ): Promise<void> {
 
   // Read and concatenate daily reflection files
@@ -274,7 +280,17 @@ async function synthesiseWeek(
     return;
   }
 
-  const combinedText = parts.join("\n\n---\n\n");
+  const { start, end } = getWeekDateRange(weekId);
+  const episodeSignalsSummary = await loadEpisodeSignalsSummary({
+    config,
+    label: `${weekId} (${start} to ${end})`,
+    startDate: start,
+    endDate: end,
+    deps,
+  });
+  const combinedText = episodeSignalsSummary
+    ? `${parts.join("\n\n---\n\n")}\n\n---\n\n${episodeSignalsSummary}`
+    : parts.join("\n\n---\n\n");
 
   // Load the weekly synthesis prompt template
   let systemPrompt: string;
@@ -303,8 +319,6 @@ async function synthesiseWeek(
     log.info({ weekId }, "LLM found nothing to extract for weekly synthesis — skipping");
     return;
   }
-
-  const { start, end } = getWeekDateRange(weekId);
 
   const fileContent = [
     "---",

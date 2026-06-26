@@ -156,6 +156,39 @@ describe("episodic retrieval helpers", () => {
       }),
     ).toBe("semantic_episodic");
   });
+
+  it("keeps date-range-only filters on the semantic routing path", () => {
+    expect(
+      inferEpisodeRetrievalMode({
+        query: "deploy failure",
+        filters: {
+          startedAtFrom: "2026-06-20T05:00:00.000Z",
+          endedAtTo: "2026-06-20T05:08:00.000Z",
+        },
+      }),
+    ).toBe("semantic_episodic");
+  });
+
+  it("searchEpisodes applies date-range filters before ranking", () => {
+    const results = searchEpisodes(baseEpisodes, {
+      query: "deploy",
+      filters: {
+        startedAtFrom: "2026-06-20T05:00:00.000Z",
+        startedAtTo: "2026-06-20T05:59:59.999Z",
+        endedAtFrom: "2026-06-20T05:00:00.000Z",
+        endedAtTo: "2026-06-20T05:59:59.999Z",
+      },
+      maxResults: 5,
+    });
+
+    expect(results.map((result) => result.episode.id)).toEqual(["ep-deploy-failure"]);
+    expect(results[0]?.exactMatchedFilters).toEqual([
+      "startedAtFrom",
+      "startedAtTo",
+      "endedAtFrom",
+      "endedAtTo",
+    ]);
+  });
 });
 
 describe("evaluateEpisodeFixture", () => {

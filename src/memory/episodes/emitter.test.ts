@@ -161,6 +161,104 @@ describe("maybeAutoWriteEpisode", () => {
     expect(inserted.action).toBe("Ship slice 4A");
     expect(inserted.summary).toBe("Slice 4A shipped behind a flag.");
     expect(inserted.toolsUsed).toEqual(["functions.exec_command"]);
+    expect(store.close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps inserted result when store close fails after a successful write", async () => {
+    const config = makeConfig();
+    const store = makeStore({
+      close: vi.fn(() => {
+        throw new Error("close failed");
+      }),
+    });
+    const readAuditEntries = vi.fn(async () => [
+      makeEntry({
+        timestamp: "2026-06-19T17:59:00.000Z",
+        type: "tool_call",
+        toolName: "functions.exec_command",
+        toolInput: { cmd: "pnpm test" },
+        toolResult: { exitCode: 0 },
+        userMessage: undefined,
+        assistantResponse: undefined,
+      }),
+      makeEntry(),
+    ]);
+    const warn = vi.fn();
+
+    const result = await maybeAutoWriteEpisode(config, makeEntry(), {
+      readAuditEntries,
+      createEpisodeStore: () => store,
+      log: { debug: vi.fn(), warn },
+    });
+
+    expect(result.status).toBe("inserted");
+    expect(store.insertEpisode).toHaveBeenCalledOnce();
+    expect(store.close).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      {
+        err: expect.any(Error),
+        sessionKey: "terminal--default",
+        source: "terminal",
+      },
+      "episodic auto-write store cleanup failed",
+    );
+  });
+
+  it("preserves insert failure when both insert and close throw", async () => {
+    const config = makeConfig();
+    const store = makeStore({
+      insertEpisode: vi.fn(() => {
+        throw new Error("insert failed");
+      }),
+      close: vi.fn(() => {
+        throw new Error("close failed");
+      }),
+    });
+    const readAuditEntries = vi.fn(async () => [
+      makeEntry({
+        timestamp: "2026-06-19T17:59:00.000Z",
+        type: "tool_call",
+        toolName: "functions.exec_command",
+        toolInput: { cmd: "pnpm test" },
+        toolResult: { exitCode: 0 },
+        userMessage: undefined,
+        assistantResponse: undefined,
+      }),
+      makeEntry(),
+    ]);
+    const warn = vi.fn();
+
+    const result = await maybeAutoWriteEpisode(config, makeEntry(), {
+      readAuditEntries,
+      createEpisodeStore: () => store,
+      log: { debug: vi.fn(), warn },
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      reason: "episodic auto-write failed",
+      error: "insert failed",
+    });
+    expect(store.insertEpisode).toHaveBeenCalledOnce();
+    expect(store.close).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
+      {
+        err: expect.any(Error),
+        sessionKey: "terminal--default",
+        source: "terminal",
+      },
+      "episodic auto-write store cleanup failed",
+    );
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      {
+        err: expect.any(Error),
+        sessionKey: "terminal--default",
+        source: "terminal",
+      },
+      "episodic auto-write failed",
+    );
   });
 
   it("skips duplicate episode ids", async () => {

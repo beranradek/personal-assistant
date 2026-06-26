@@ -167,6 +167,29 @@ describe("EpisodeStore", () => {
     expect(store.listEpisodes({ skillUsed: "heartbeat-runbook" }).map((episode) => episode.id)).toEqual(["match-1"]);
   });
 
+  it("supports date-range filtering for startedAt and endedAt", () => {
+    store = createEpisodeStore(":memory:");
+    store.insertEpisode(makeEpisode("overnight", {
+      startedAt: "2026-06-17T23:55:00.000Z",
+      endedAt: "2026-06-18T00:05:00.000Z",
+    }));
+    store.insertEpisode(makeEpisode("same-day", {
+      startedAt: "2026-06-18T12:00:00.000Z",
+      endedAt: "2026-06-18T12:10:00.000Z",
+    }));
+    store.insertEpisode(makeEpisode("future", {
+      startedAt: "2026-06-19T09:00:00.000Z",
+      endedAt: "2026-06-19T09:05:00.000Z",
+    }));
+
+    const results = store.listEpisodes({
+      startedAtTo: "2026-06-18T23:59:59.999Z",
+      endedAtFrom: "2026-06-18T00:00:00.000Z",
+    });
+
+    expect(results.map((episode) => episode.id)).toEqual(["same-day", "overnight"]);
+  });
+
   it("applies the limit parameter after sorting", () => {
     store = createEpisodeStore(":memory:");
     store.insertEpisode(makeEpisode("ep-1", { startedAt: "2026-06-18T09:00:00.000Z" }));

@@ -13,6 +13,10 @@ const EPISODE_FILTER_KEYS = [
   "sessionKey",
   "source",
   "outcome",
+  "startedAtFrom",
+  "startedAtTo",
+  "endedAtFrom",
+  "endedAtTo",
   "projectName",
   "jobName",
   "issueId",
@@ -52,6 +56,10 @@ function matchesFilters(episode: EpisodeRecord, filters?: EpisodeListFilters): b
   if (filters.sessionKey && episode.sessionKey !== filters.sessionKey) return false;
   if (filters.source && episode.source !== filters.source) return false;
   if (filters.outcome && episode.outcome !== filters.outcome) return false;
+  if (filters.startedAtFrom && episode.startedAt < filters.startedAtFrom) return false;
+  if (filters.startedAtTo && episode.startedAt > filters.startedAtTo) return false;
+  if (filters.endedAtFrom && episode.endedAt < filters.endedAtFrom) return false;
+  if (filters.endedAtTo && episode.endedAt > filters.endedAtTo) return false;
   if (filters.projectName && episode.projectName !== filters.projectName) return false;
   if (filters.jobName && episode.jobName !== filters.jobName) return false;
   if (filters.issueId && episode.issueId !== filters.issueId) return false;

@@ -144,6 +144,9 @@ describe("config", () => {
       expect(config.memory.episodicMemory.autoWrite.dryRun).toBe(false);
       expect(config.memory.episodicMemory.autoWrite.sources).toEqual(["github"]);
       expect(config.memory.episodicMemory.autoWrite.requireTaskContext).toBe(true);
+      expect(config.reflection.episodeSignals.enabled).toBe(false);
+      expect(config.reflection.episodeSignals.maxRecentEpisodes).toBe(200);
+      expect(config.reflection.episodeSignals.maxTopItems).toBe(3);
       expect(config.mcpServers).toEqual({});
       // Codex backend defaults
       expect(config.agent.backend).toBe("claude");
@@ -156,6 +159,26 @@ describe("config", () => {
       expect(config.codex.baseUrl).toBeNull();
       expect(config.codex.reasoningEffort).toBeNull();
       expect(config.codex.configOverrides).toEqual({});
+    });
+
+    it("merges reflection episodeSignals overrides over defaults", () => {
+      const partial = {
+        reflection: {
+          episodeSignals: {
+            enabled: true,
+            maxRecentEpisodes: 25,
+          },
+        },
+      };
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(partial));
+
+      const config = loadConfig(tmpDir);
+
+      expect(config.reflection.enabled).toBe(DEFAULTS.reflection.enabled);
+      expect(config.reflection.weeklyEnabled).toBe(DEFAULTS.reflection.weeklyEnabled);
+      expect(config.reflection.episodeSignals.enabled).toBe(true);
+      expect(config.reflection.episodeSignals.maxRecentEpisodes).toBe(25);
+      expect(config.reflection.episodeSignals.maxTopItems).toBe(DEFAULTS.reflection.episodeSignals.maxTopItems);
     });
   });
 

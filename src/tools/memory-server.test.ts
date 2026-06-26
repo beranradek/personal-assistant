@@ -329,6 +329,32 @@ describe("createMemoryServer", () => {
     ]);
   });
 
+  it("episode_recent passes date-range filters through to listEpisodes", async () => {
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes });
+
+    const handler = mockTool.mock.calls[1][3] as (
+      args: EpisodeListFilters,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    await handler({
+      startedAtFrom: "2026-06-18T00:00:00.000Z",
+      startedAtTo: "2026-06-18T23:59:59.999Z",
+      endedAtFrom: "2026-06-18T00:00:00.000Z",
+      endedAtTo: "2026-06-18T23:59:59.999Z",
+      limit: 5,
+    }, {});
+
+    expect(listEpisodes).toHaveBeenCalledWith({
+      startedAtFrom: "2026-06-18T00:00:00.000Z",
+      startedAtTo: "2026-06-18T23:59:59.999Z",
+      endedAtFrom: "2026-06-18T00:00:00.000Z",
+      endedAtTo: "2026-06-18T23:59:59.999Z",
+      limit: 5,
+    });
+  });
+
   it("episode_recent omits raw trajectory data and redacts exposed strings", async () => {
     const listEpisodes = mockListEpisodes(() => [secretEpisode]);
     createMemoryServer({
@@ -389,6 +415,31 @@ describe("createMemoryServer", () => {
     );
   });
 
+  it("episode_search forwards date-range filters alongside the text query", async () => {
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes });
+
+    const handler = mockTool.mock.calls[2][3] as (
+      args: EpisodeListFilters & { query?: string; maxResults?: number },
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    await handler(
+      {
+        query: "retrieval",
+        startedAtFrom: "2026-06-18T00:00:00.000Z",
+        endedAtFrom: "2026-06-18T00:00:00.000Z",
+        maxResults: 3,
+      },
+      {},
+    );
+
+    expect(listEpisodes).toHaveBeenCalledWith({
+      startedAtFrom: "2026-06-18T00:00:00.000Z",
+      endedAtFrom: "2026-06-18T00:00:00.000Z",
+    });
+  });
+
   it("episode_stats summarizes counts, top dimensions, and latest timestamp", async () => {
     const listEpisodes = mockListEpisodes(() => sampleEpisodes);
     createMemoryServer({ search: mockSearch(), listEpisodes });
@@ -425,6 +476,30 @@ describe("createMemoryServer", () => {
       topProjects: [
         { value: "personal-assistant", count: 2 },
       ],
+    });
+  });
+
+  it("episode_stats forwards date-range filters to listEpisodes", async () => {
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes });
+
+    const handler = mockTool.mock.calls[3][3] as (
+      args: EpisodeListFilters,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    await handler({
+      startedAtFrom: "2026-06-18T00:00:00.000Z",
+      startedAtTo: "2026-06-18T23:59:59.999Z",
+      endedAtFrom: "2026-06-18T00:00:00.000Z",
+      endedAtTo: "2026-06-18T23:59:59.999Z",
+    }, {});
+
+    expect(listEpisodes).toHaveBeenCalledWith({
+      startedAtFrom: "2026-06-18T00:00:00.000Z",
+      startedAtTo: "2026-06-18T23:59:59.999Z",
+      endedAtFrom: "2026-06-18T00:00:00.000Z",
+      endedAtTo: "2026-06-18T23:59:59.999Z",
     });
   });
 });

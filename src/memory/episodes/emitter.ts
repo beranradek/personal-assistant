@@ -211,7 +211,14 @@ export async function maybeAutoWriteEpisode(
       logTerminalState(mergedDeps.log, finalEntry, result);
       return result;
     } finally {
-      store.close();
+      try {
+        store.close();
+      } catch (err) {
+        mergedDeps.log.warn(
+          { err, sessionKey: finalEntry.sessionKey, source: finalEntry.source },
+          "episodic auto-write store cleanup failed",
+        );
+      }
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);

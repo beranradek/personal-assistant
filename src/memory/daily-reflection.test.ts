@@ -20,6 +20,8 @@ import {
 import { appendAuditEntry } from "./daily-log.js";
 import type { AuditEntry, Config } from "../core/types.js";
 import { ConfigSchema } from "../core/types.js";
+import type { EpisodeRecord } from "./episodes/types.js";
+import { buildEpisodeSignalsSummary } from "./reflection-episode-signals.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -186,6 +188,114 @@ describe("parseCategories", () => {
   it("returns empty array when response has no recognized sections", () => {
     const cats = parseCategories("(nothing to extract)");
     expect(cats).toEqual([]);
+  });
+});
+
+describe("buildEpisodeSignalsSummary", () => {
+  it("returns a bounded structured summary for episodes matching the target date", () => {
+    const episodes: EpisodeRecord[] = [
+      {
+        id: "ep-1",
+        startedAt: "2025-06-14T09:00:00.000Z",
+        endedAt: "2025-06-14T09:05:00.000Z",
+        source: "github",
+        sessionKey: "github--1",
+        sessionId: "github--1",
+        initiator: "user",
+        action: "Fix issue",
+        normalizedAction: "fix issue",
+        summary: "Fixed issue",
+        why: null,
+        projectName: "personal-assistant",
+        jobName: "003-personal-assistant-episodic-memory",
+        issueId: "1",
+        pullRequestId: null,
+        detailedMemoryFile: null,
+        category: "coding",
+        skillsUsed: [],
+        toolsUsed: ["functions.exec_command", "functions.exec_command"],
+        tags: [],
+        outcome: "success",
+        successScore: 1,
+        blockers: ["schema drift"],
+        errors: [],
+        evidenceIncomplete: [],
+        trajectory: [],
+        semanticEmbeddingText: "fixed issue",
+      },
+      {
+        id: "ep-2",
+        startedAt: "2025-06-14T10:00:00.000Z",
+        endedAt: "2025-06-14T10:06:00.000Z",
+        source: "github",
+        sessionKey: "github--2",
+        sessionId: "github--2",
+        initiator: "user",
+        action: "Investigate failure",
+        normalizedAction: "investigate failure",
+        summary: "Investigated failure",
+        why: null,
+        projectName: "personal-assistant",
+        jobName: "003-personal-assistant-episodic-memory",
+        issueId: "2",
+        pullRequestId: null,
+        detailedMemoryFile: null,
+        category: "coding",
+        skillsUsed: [],
+        toolsUsed: ["functions.exec_command"],
+        tags: [],
+        outcome: "failure",
+        successScore: 0.2,
+        blockers: [],
+        errors: ["schema drift"],
+        evidenceIncomplete: [],
+        trajectory: [],
+        semanticEmbeddingText: "investigated failure",
+      },
+      {
+        id: "ep-3",
+        startedAt: "2025-06-13T09:00:00.000Z",
+        endedAt: "2025-06-13T09:05:00.000Z",
+        source: "github",
+        sessionKey: "github--3",
+        sessionId: "github--3",
+        initiator: "user",
+        action: "Older work",
+        normalizedAction: "older work",
+        summary: "Older work",
+        why: null,
+        projectName: "other-project",
+        jobName: "other-job",
+        issueId: "3",
+        pullRequestId: null,
+        detailedMemoryFile: null,
+        category: "coding",
+        skillsUsed: [],
+        toolsUsed: ["other.tool"],
+        tags: [],
+        outcome: "success",
+        successScore: 1,
+        blockers: ["old blocker"],
+        errors: [],
+        evidenceIncomplete: [],
+        trajectory: [],
+        semanticEmbeddingText: "older work",
+      },
+    ];
+
+    const summary = buildEpisodeSignalsSummary({
+      label: "2025-06-14",
+      episodes: episodes.slice(0, 2),
+      maxTopItems: 2,
+    });
+
+    expect(summary).toContain("Structured episodic signals for 2025-06-14");
+    expect(summary).toContain("- episodes: 2");
+    expect(summary).toContain("- outcomes: failure (1), success (1)");
+    expect(summary).toContain("- projects: personal-assistant (2)");
+    expect(summary).toContain("- jobs: 003-personal-assistant-episodic-memory (2)");
+    expect(summary).toContain("- tools: functions.exec_command (3)");
+    expect(summary).toContain("- blockers/errors: schema drift (2)");
   });
 });
 
@@ -493,5 +603,330 @@ describe("runDailyReflection", () => {
     // Yesterday's reflection file should NOT exist
     const yesterdayPath = path.join(tmpDir, "memory", `reflection-${yesterday()}.md`);
     await expect(fs.access(yesterdayPath)).rejects.toThrow();
+  });
+
+  it("appends bounded episode-derived signals when enabled", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+      userMessage: "What kept failing?",
+      assistantResponse: "Need a summary.",
+    });
+    await appendAuditEntry(tmpDir, entry);
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const listEpisodesMock = vi.fn(() => [
+        {
+          id: "ep-1",
+          startedAt: `${specificDate}T08:00:00.000Z`,
+          endedAt: `${specificDate}T08:05:00.000Z`,
+          source: "github",
+          sessionKey: "github--1",
+          sessionId: "github--1",
+          initiator: "user",
+          action: "Fix issue",
+          normalizedAction: "fix issue",
+          summary: "Fixed issue",
+          why: null,
+          projectName: "personal-assistant",
+          jobName: "003-personal-assistant-episodic-memory",
+          issueId: "1",
+          pullRequestId: null,
+          detailedMemoryFile: null,
+          category: "coding",
+          skillsUsed: [],
+          toolsUsed: ["functions.exec_command"],
+          tags: [],
+          outcome: "failure",
+          successScore: 0.2,
+          blockers: ["schema drift"],
+          errors: [],
+          evidenceIncomplete: [],
+          trajectory: [],
+          semanticEmbeddingText: "fixed issue",
+        },
+      ]);
+    const createEpisodeStoreMock = vi.fn(() => ({
+      listEpisodes: listEpisodesMock,
+      close: vi.fn(),
+    }));
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, opts: RequestInit) => {
+        capturedBody.push(JSON.parse(opts.body as string));
+        return {
+          ok: true,
+          json: async () => ({ content: [{ type: "text", text: "## Facts\n- test" }] }),
+        };
+      }),
+    );
+
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+    await runDailyReflection(config, tmpDir, specificDate, {
+      createEpisodeStore: createEpisodeStoreMock as any,
+    });
+
+    expect(createEpisodeStoreMock).toHaveBeenCalledWith("/tmp/test-data/episodes.db");
+    expect(listEpisodesMock).toHaveBeenCalledWith({
+      startedAtTo: "2025-11-20T23:59:59.999Z",
+      endedAtFrom: "2025-11-20T00:00:00.000Z",
+      limit: 5,
+    });
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain("Structured episodic signals for 2025-11-20");
+    expect(capturedBody[0].messages[0].content).toContain("schema drift");
+  });
+
+  it("passes date-aware overlap filters before applying the recent-episode bound", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+      userMessage: "Summarize target-date work",
+      assistantResponse: "Need the right episode context",
+    });
+    await appendAuditEntry(tmpDir, entry);
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const listEpisodesMock = vi.fn((filters?: Record<string, unknown>) => {
+      if (
+        filters?.["startedAtTo"] === "2025-11-20T23:59:59.999Z" &&
+        filters?.["endedAtFrom"] === "2025-11-20T00:00:00.000Z" &&
+        filters?.["limit"] === 1
+      ) {
+        return [
+          {
+            id: "target-date-episode",
+            startedAt: "2025-11-19T23:55:00.000Z",
+            endedAt: "2025-11-20T00:10:00.000Z",
+            source: "github",
+            sessionKey: "github--target",
+            sessionId: "github--target",
+            initiator: "user",
+            action: "Carry midnight fix over the line",
+            normalizedAction: "carry midnight fix over the line",
+            summary: "Finished the target-date fix after midnight.",
+            why: null,
+            projectName: "personal-assistant",
+            jobName: "003-personal-assistant-episodic-memory",
+            issueId: "99",
+            pullRequestId: null,
+            detailedMemoryFile: null,
+            category: "coding",
+            skillsUsed: [],
+            toolsUsed: ["functions.exec_command"],
+            tags: [],
+            outcome: "success",
+            successScore: 1,
+            blockers: [],
+            errors: ["late-night regression"],
+            evidenceIncomplete: [],
+            trajectory: [],
+            semanticEmbeddingText: "midnight fix",
+          },
+        ];
+      }
+      return [];
+    });
+    const createEpisodeStoreMock = vi.fn(() => ({
+      listEpisodes: listEpisodesMock,
+      close: vi.fn(),
+    }));
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, opts: RequestInit) => {
+        capturedBody.push(JSON.parse(opts.body as string));
+        return {
+          ok: true,
+          json: async () => ({ content: [{ type: "text", text: "## Facts\n- target date preserved" }] }),
+        };
+      }),
+    );
+
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 1, maxTopItems: 2 },
+    });
+    await runDailyReflection(config, tmpDir, specificDate, {
+      createEpisodeStore: createEpisodeStoreMock as any,
+    });
+
+    expect(listEpisodesMock).toHaveBeenCalledOnce();
+    expect(capturedBody[0].messages[0].content).toContain("Structured episodic signals for 2025-11-20");
+    expect(capturedBody[0].messages[0].content).toContain("late-night regression");
+    expect(capturedBody[0].messages[0].content).toContain("- outcomes: success (1)");
+  });
+
+  it("does not touch the episodic store when episode signals are disabled", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+    });
+    await appendAuditEntry(tmpDir, entry);
+
+    const createEpisodeStoreMock = vi.fn();
+    mockFetchWithResponse("## Facts\n- No episodic context");
+
+    await runDailyReflection(makeConfig(), tmpDir, specificDate, {
+      createEpisodeStore: createEpisodeStoreMock as any,
+    });
+
+    expect(createEpisodeStoreMock).not.toHaveBeenCalled();
+  });
+
+  it("continues daily reflection when episode signal loading fails", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+      userMessage: "Summarize the day",
+      assistantResponse: "Working on it",
+    });
+    await appendAuditEntry(tmpDir, entry);
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const createEpisodeStoreMock = vi.fn(() => {
+      throw new Error("episodes.db incompatible schema");
+    });
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, opts: RequestInit) => {
+        capturedBody.push(JSON.parse(opts.body as string));
+        return {
+          ok: true,
+          json: async () => ({ content: [{ type: "text", text: "## Facts\n- still works" }] }),
+        };
+      }),
+    );
+
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+    await runDailyReflection(config, tmpDir, specificDate, {
+      createEpisodeStore: createEpisodeStoreMock as any,
+    });
+
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain("User: Summarize the day");
+    expect(capturedBody[0].messages[0].content).not.toContain("Structured episodic signals");
+    const reflectionPath = path.join(tmpDir, "memory", `reflection-${specificDate}.md`);
+    await expect(fs.access(reflectionPath)).resolves.toBeUndefined();
+  });
+
+  it("keeps episode-derived prompt content when store close fails after a successful load", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+      userMessage: "Summarize the day",
+      assistantResponse: "Working on it",
+    });
+    await appendAuditEntry(tmpDir, entry);
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, opts: RequestInit) => {
+        capturedBody.push(JSON.parse(opts.body as string));
+        return {
+          ok: true,
+          json: async () => ({ content: [{ type: "text", text: "## Facts\n- still works" }] }),
+        };
+      }),
+    );
+
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+    await runDailyReflection(config, tmpDir, specificDate, {
+      createEpisodeStore: (() => ({
+        listEpisodes: () => [{
+          id: "ep-1",
+          startedAt: `${specificDate}T08:00:00.000Z`,
+          endedAt: `${specificDate}T08:05:00.000Z`,
+          source: "github",
+          sessionKey: "github--1",
+          sessionId: "github--1",
+          initiator: "user",
+          action: "Fix issue",
+          normalizedAction: "fix issue",
+          summary: "Fixed issue",
+          why: null,
+          projectName: "personal-assistant",
+          jobName: "003-personal-assistant-episodic-memory",
+          issueId: "1",
+          pullRequestId: null,
+          detailedMemoryFile: null,
+          category: "coding",
+          skillsUsed: [],
+          toolsUsed: ["functions.exec_command"],
+          tags: [],
+          outcome: "failure",
+          successScore: 0.2,
+          blockers: ["schema drift"],
+          errors: [],
+          evidenceIncomplete: [],
+          trajectory: [],
+          semanticEmbeddingText: "fixed issue",
+        }],
+        close: () => {
+          throw new Error("close failed");
+        },
+      })) as any,
+    });
+
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain("Structured episodic signals for 2025-11-20");
+    expect(capturedBody[0].messages[0].content).toContain("schema drift");
+  });
+
+  it("continues daily reflection without episodic summary when both list and close fail", async () => {
+    const specificDate = "2025-11-20";
+    const entry: AuditEntry = makeInteraction({
+      timestamp: `${specificDate}T10:00:00.000Z`,
+      userMessage: "Summarize the day",
+      assistantResponse: "Working on it",
+    });
+    await appendAuditEntry(tmpDir, entry);
+    await fs.mkdir("/tmp/test-data", { recursive: true });
+    await fs.writeFile("/tmp/test-data/episodes.db", "");
+
+    const capturedBody: { messages: Array<{ content: string }> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (_url: string, opts: RequestInit) => {
+        capturedBody.push(JSON.parse(opts.body as string));
+        return {
+          ok: true,
+          json: async () => ({ content: [{ type: "text", text: "## Facts\n- still works" }] }),
+        };
+      }),
+    );
+
+    const config = makeConfig({
+      episodeSignals: { enabled: true, maxRecentEpisodes: 5, maxTopItems: 2 },
+    });
+    await runDailyReflection(config, tmpDir, specificDate, {
+      createEpisodeStore: (() => ({
+        listEpisodes: () => {
+          throw new Error("episodes.db read failure");
+        },
+        close: () => {
+          throw new Error("close failed");
+        },
+      })) as any,
+    });
+
+    expect(capturedBody).toHaveLength(1);
+    expect(capturedBody[0].messages[0].content).toContain("User: Summarize the day");
+    expect(capturedBody[0].messages[0].content).not.toContain("Structured episodic signals");
   });
 });

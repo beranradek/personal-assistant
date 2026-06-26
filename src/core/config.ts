@@ -116,6 +116,11 @@ export const DEFAULTS: Config = {
     enabled: true,
     schedule: "0 7 * * *",
     maxDailyLogEntries: 500,
+    episodeSignals: {
+      enabled: false,
+      maxRecentEpisodes: 200,
+      maxTopItems: 3,
+    },
     weeklyEnabled: true,
     weeklySchedule: "5 7 * * 1",
     dailyRetentionDays: 21,
