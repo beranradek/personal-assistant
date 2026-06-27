@@ -63,9 +63,32 @@ type EpisodeStepRow = {
   data_json: string | null;
 };
 
+function migrateV1toV2(db: Database.Database): void {
+  db.exec("ALTER TABLE episodes ADD COLUMN model TEXT");
+  db.exec("ALTER TABLE episodes ADD COLUMN input_tokens INTEGER");
+  db.exec("ALTER TABLE episodes ADD COLUMN output_tokens INTEGER");
+  db.exec("ALTER TABLE episodes ADD COLUMN location TEXT");
+  db.exec(CREATE_EPISODE_OPEN_QUESTIONS_TABLE_SQL);
+  db.exec(`
+    INSERT INTO episode_open_questions (episode_id, question, position)
+    SELECT episode_id, evidence, position FROM episode_evidence_incomplete
+  `);
+  db.exec("DROP TABLE episode_evidence_incomplete");
+  db.exec(CREATE_EPISODE_RELATED_TABLE_SQL);
+}
+
 function initializeSchema(db: Database.Database): void {
   const currentVersion = Number(db.pragma("user_version", { simple: true }) ?? 0);
   if (currentVersion === EPISODE_SCHEMA_VERSION) return;
+
+  if (currentVersion === 1) {
+    db.transaction(() => {
+      migrateV1toV2(db);
+      db.pragma(`user_version = ${EPISODE_SCHEMA_VERSION}`);
+    })();
+    return;
+  }
+
   if (currentVersion > 0) {
     throw new Error(
       `episodes.db schema version ${currentVersion} is not supported (expected ${EPISODE_SCHEMA_VERSION}). Delete the file to start fresh.`,
