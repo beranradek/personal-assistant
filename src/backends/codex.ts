@@ -669,7 +669,12 @@ export async function createCodexBackend(
         return { response: responseText, messages: turnMessages, partial: false };
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        log.error({ err, sessionKey }, "Codex turn failed (sync)");
+        const isSignalExit = /exited with signal SIG/.test(errorMessage);
+        if (isSignalExit) {
+          log.warn({ err, sessionKey }, "Codex turn interrupted by signal (shutdown)");
+        } else {
+          log.error({ err, sessionKey }, "Codex turn failed (sync)");
+        }
         const safeMessage = redact ? redact(errorMessage) : errorMessage;
         throw new Error(`Codex agent turn failed: ${safeMessage}`);
       }

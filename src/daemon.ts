@@ -80,6 +80,7 @@ type DaemonCoreRuntime = {
   indexer: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["indexer"];
   memoryWatcher: ReturnType<typeof createMemoryWatcher>;
   memorySyncTimer: ReturnType<typeof setInterval>;
+  getCurrentSyncPromise: () => Promise<void> | null;
   warningTriggered: boolean;
   fallbackTriggered: boolean;
   episodicSurfaceExposed: boolean;
@@ -126,21 +127,28 @@ async function createDaemonCoreFromConfig(args: {
   });
 
   let syncInProgress = false;
+  let currentSyncPromise: Promise<void> | null = null;
+  const getCurrentSyncPromise = () => currentSyncPromise;
   const syncMemoryFiles = async (reason: string) => {
     if (syncInProgress) return;
     syncInProgress = true;
-    try {
-      const files = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
-        indexDailyLogs: args.config.memory.indexDailyLogs,
-        dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
-      });
-      log.info({ fileCount: files.length, reason }, "Reindexing memory files");
-      await indexer.syncFiles(files);
-    } catch (err) {
-      log.error({ err, reason }, "Reindex failed");
-    } finally {
-      syncInProgress = false;
-    }
+    const run = async () => {
+      try {
+        const files = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
+          indexDailyLogs: args.config.memory.indexDailyLogs,
+          dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
+        });
+        log.info({ fileCount: files.length, reason }, "Reindexing memory files");
+        await indexer.syncFiles(files);
+      } catch (err) {
+        log.error({ err, reason }, "Reindex failed");
+      } finally {
+        syncInProgress = false;
+        currentSyncPromise = null;
+      }
+    };
+    currentSyncPromise = run();
+    await currentSyncPromise;
   };
 
   const memoryWatcher = createMemoryWatcherImpl(args.config.security.workspace, () => {
@@ -264,6 +272,7 @@ async function createDaemonCoreFromConfig(args: {
     indexer,
     memoryWatcher,
     memorySyncTimer,
+    getCurrentSyncPromise,
     warningTriggered,
     fallbackTriggered,
     episodicSurfaceExposed,
@@ -406,6 +415,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     episodeStore,
     memoryWatcher,
     memorySyncTimer,
+    getCurrentSyncPromise,
     backend,
     httpMcpServer,
   } = await createDaemonCoreFromConfig({ config, configDir });
@@ -638,10 +648,15 @@ export async function startDaemon(configDir: string): Promise<void> {
 
     // Abort any in-flight indexing before disposing the embedder
     indexer.abort();
-
-    // Close memory watcher/timer and system
     clearInterval(memorySyncTimer);
     memoryWatcher.close();
+
+    // Wait for any in-flight syncFiles to drain so the embedder context
+    // is not disposed while an embedBatch call is still running.
+    const syncPromise = getCurrentSyncPromise();
+    if (syncPromise) {
+      await syncPromise.catch(() => undefined);
+    }
       episodeStore?.close();
     store.close();
     await embedder.close();
