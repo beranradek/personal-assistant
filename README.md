@@ -91,7 +91,8 @@ systemctl --user daemon-reload
 systemctl --user enable --now pa-daemon
 ```
 
-Logs can be observed via `journalctl --user -u pa-daemon -n 100 --no-pager`
+Logs can be observed via `journalctl --user -u pa-daemon -n 100 --no-pager`, or precisely:
+`journalctl --user -u pa-daemon --since "24 hours ago" --no-pager -o cat | grep -E "ERROR|FATAL|Unhandled|uncaughtException|UnhandledPromiseRejection" -A 15 -B 3` 
 
 ### Terminal Mode
 
