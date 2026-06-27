@@ -147,7 +147,7 @@ async function createDaemonCoreFromConfig(args: {
     syncMemoryFiles("watcher");
   });
 
-  const MEMORY_RESYNC_INTERVAL_MS = 60_000;
+  const MEMORY_RESYNC_INTERVAL_MS = 10 * 60_000;
   const memorySyncTimer = setInterval(() => {
     syncMemoryFiles("periodic");
   }, MEMORY_RESYNC_INTERVAL_MS);

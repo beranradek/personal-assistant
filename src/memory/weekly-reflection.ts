@@ -301,6 +301,11 @@ async function synthesiseWeek(
     return;
   }
 
+  if (!process.env["ANTHROPIC_API_KEY"]) {
+    log.info({ weekId }, "ANTHROPIC_API_KEY not set — weekly reflection skipped (Codex backend)");
+    return;
+  }
+
   // Call Anthropic API
   let llmResponse: string;
   try {

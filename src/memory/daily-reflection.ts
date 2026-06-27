@@ -218,6 +218,11 @@ export async function runDailyReflection(
     return;
   }
 
+  if (!process.env["ANTHROPIC_API_KEY"]) {
+    log.info({ date }, "ANTHROPIC_API_KEY not set — daily reflection skipped (Codex backend)");
+    return;
+  }
+
   // Call Anthropic API
   let llmResponse: string;
   try {
