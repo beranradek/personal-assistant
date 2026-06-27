@@ -103,23 +103,34 @@ function makeDeps(): StdioMcpServerDeps {
   };
 }
 
-function httpPost(
+function httpRequest(
   port: number,
-  sessionId?: string,
+  options: {
+    method?: string;
+    sessionId?: string;
+    body?: string;
+  } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const headers: http.OutgoingHttpHeaders = { "Content-Type": "application/json" };
-    if (sessionId) headers["mcp-session-id"] = sessionId;
+    if (options.sessionId) headers["mcp-session-id"] = options.sessionId;
     const req = http.request(
-      { hostname: "127.0.0.1", port, path: "/", method: "POST", headers },
+      { hostname: "127.0.0.1", port, path: "/", method: options.method ?? "POST", headers },
       (res) => {
         res.resume();
         resolve({ status: res.statusCode ?? 0, headers: res.headers });
       },
     );
     req.on("error", reject);
-    req.end("{}");
+    req.end(options.body ?? "{}");
   });
+}
+
+function httpPost(
+  port: number,
+  sessionId?: string,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+  return httpRequest(port, { method: "POST", sessionId, body: "{}" });
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +193,16 @@ describe("startHttpMcpServer", () => {
     expect(mockServers).toHaveLength(0);
   });
 
+  it("rejects GET requests when the mcp-session-id header is unknown", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    const res = await httpRequest(handle.port, { method: "GET", sessionId: "unknown-session-id", body: "" });
+
+    expect(res.status).toBe(404);
+    expect(mockTransports).toHaveLength(0);
+    expect(mockServers).toHaveLength(0);
+  });
+
   it("two requests without session-id each get their own session", async () => {
     handle = await startHttpMcpServer(makeDeps(), 0);
 
@@ -228,6 +249,21 @@ describe("startHttpMcpServer", () => {
     const res = await httpPost(handle.port, sid);
     expect(res.status).toBe(404);
     expect(mockTransports).toHaveLength(1);
+  });
+
+  it("rejects DELETE requests for a stale session-id after transport onclose", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    await httpPost(handle.port);
+    const sid = mockTransports[0].sessionId;
+
+    mockTransports[0].onclose?.();
+    await Promise.resolve();
+
+    const res = await httpRequest(handle.port, { method: "DELETE", sessionId: sid, body: "" });
+    expect(res.status).toBe(404);
+    expect(mockTransports).toHaveLength(1);
+    expect(mockServers).toHaveLength(1);
   });
 
   it("waits for session teardown already started via onclose before close() resolves", async () => {
