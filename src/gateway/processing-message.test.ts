@@ -353,6 +353,25 @@ describe("ProcessingMessageAccumulator", () => {
     expect(adapter.updateProcessingMessage).not.toHaveBeenCalled();
   });
 
+  it("does not call updateProcessingMessage when content has not changed", async () => {
+    const adapter = makeAdapter();
+    const acc = createProcessingAccumulator(adapter, "123", undefined, 5000);
+    acc.start();
+
+    acc.handleEvent({ type: "tool_start", toolName: "Bash" });
+    acc.handleEvent({ type: "tool_progress", toolName: "Bash", elapsedSeconds: 2 });
+
+    // First flush sends the message
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(adapter.createProcessingMessage).toHaveBeenCalledTimes(1);
+
+    // Second flush: no new buffer content, same elapsed seconds → identical text
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(adapter.updateProcessingMessage).not.toHaveBeenCalled();
+
+    await acc.stop();
+  });
+
   it("handles adapter errors gracefully during flush", async () => {
     const adapter = makeAdapter();
     adapter.createProcessingMessage.mockRejectedValueOnce(

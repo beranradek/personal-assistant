@@ -147,6 +147,7 @@ export function createProcessingAccumulator(
   let currentToolName: string | null = null;
   let flushing = false;
   let sawTool = false;
+  let lastSentText = "";
 
   function truncateContent(content: string): string {
     if (content.length <= MAX_CONTENT_LENGTH) return content;
@@ -177,6 +178,8 @@ export function createProcessingAccumulator(
       displayContent = truncateContent(displayContent);
       if (redact) displayContent = redact(displayContent);
 
+      if (displayContent === lastSentText) return;
+
       if (!messageId) {
         messageId = await adapter.createProcessingMessage(
           sourceId,
@@ -193,6 +196,7 @@ export function createProcessingAccumulator(
         );
         log.debug({ messageId, sourceId }, "updated processing message");
       }
+      lastSentText = displayContent;
     } catch (err) {
       log.error(
         { err, sourceId, messageId },
