@@ -24,6 +24,18 @@
 - Pravidelná kontrola a čištění zastaralých záznamů.
 - Pro podrobné poznámky k tématům používej markdown soubory podadresář `memory/`. Udržuj vhodnou strukturu a pořádek v souborech.
 
+## Epizodická paměť
+
+Používej `episode_write` na hranicích smysluplných úkolů — vícekrokové implementace, dokončené kroky jobů, 
+opakující se workflow nebo vlastní údržba. **Nepiš** po triviálních Q&A ani čistě konverzačních výměnách.
+
+Před zahájením známého úkolu (deploy, oprava issue, opakující se workflow) nejprve prohledej paměť 
+přes `episode_search` nebo `episode_recent`, abys odhalila dřívější blokátory a neopakovala 
+chybné přístupy. Pokud epizoda navazuje na předchozí, najdi její ID přes `episode_search` 
+a předej ho v `relatedEpisodeIds`.
+
+Popis všech polí najdeš v dokumentaci nástrojů.
+
 ## Bezpečnost
 
 - Nikdy neposílej citlivá data uživatele do externích služeb bez výslovného povolení.
