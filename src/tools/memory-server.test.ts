@@ -94,7 +94,7 @@ const sampleEpisodes: EpisodeRecord[] = [
     successScore: 1,
     blockers: [],
     errors: [],
-    evidenceIncomplete: [],
+    openQuestions: [],
     trajectory: [],
     semanticEmbeddingText: "action: Implement MCP episodic retrieval",
   },
@@ -123,7 +123,7 @@ const sampleEpisodes: EpisodeRecord[] = [
     successScore: 0.6,
     blockers: [],
     errors: ["review finding"],
-    evidenceIncomplete: [],
+    openQuestions: [],
     trajectory: [],
     semanticEmbeddingText: "action: Continue with active job",
   },
@@ -137,7 +137,7 @@ const secretEpisode: EpisodeRecord = {
   why: "secret why",
   blockers: ["secret blocker"],
   errors: ["secret error"],
-  evidenceIncomplete: ["secret evidence"],
+  openQuestions: ["secret evidence"],
   trajectory: [
     {
       at: "2026-06-18T14:01:00.000Z",
@@ -199,6 +199,24 @@ describe("createMemoryServer", () => {
       "episode_search",
       "episode_stats",
     ]);
+  });
+
+  it("registers episode_write tool when insertEpisode dependency is provided", () => {
+    createMemoryServer({
+      search: mockSearch(),
+      listEpisodes: mockListEpisodes(),
+      insertEpisode: vi.fn(),
+    });
+
+    const toolNames = mockTool.mock.calls.map((call) => call[0]);
+    expect(toolNames).toContain("episode_write");
+  });
+
+  it("does not register episode_write when insertEpisode is absent", () => {
+    createMemoryServer({ search: mockSearch(), listEpisodes: mockListEpisodes() });
+
+    const toolNames = mockTool.mock.calls.map((call) => call[0]);
+    expect(toolNames).not.toContain("episode_write");
   });
 
   // --- Tool input schema ---
@@ -379,7 +397,7 @@ describe("createMemoryServer", () => {
         why: "[redacted] why",
         blockers: ["[redacted] blocker"],
         errors: ["[redacted] error"],
-        evidenceIncomplete: ["[redacted] evidence"],
+        openQuestions: ["[redacted] evidence"],
       }),
     ]);
     expect(parsed[0]).not.toHaveProperty("normalizedAction");
@@ -501,5 +519,121 @@ describe("createMemoryServer", () => {
       endedAtFrom: "2026-06-18T00:00:00.000Z",
       endedAtTo: "2026-06-18T23:59:59.999Z",
     });
+  });
+
+  // ─── episode_write ────────────────────────────────────────────────────
+
+  it("episode_write calls insertEpisode with a well-formed episode record", async () => {
+    const insertEpisode = vi.fn();
+    createMemoryServer({ search: mockSearch(), listEpisodes: mockListEpisodes(), insertEpisode });
+
+    // episode_write is the 5th tool registered (index 4)
+    const handler = mockTool.mock.calls[4][3] as (
+      args: Record<string, unknown>,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    const result = await handler(
+      {
+        action: "Fix auth bug in login flow",
+        summary: "Found and fixed null-pointer in token validation. Tests pass.",
+        outcome: "success",
+        why: "Production errors in Sentry",
+        initiator: "user",
+        source: "github",
+        sessionKey: "github--owner/repo#42",
+        projectName: "myapp",
+        issueId: "owner/repo#42",
+        category: "debugging",
+        location: "src/auth/token.ts:84",
+        toolsUsed: ["Read", "Edit"],
+        tags: ["auth", "bug"],
+        trajectory: ["Identified null check missing at line 84", "Added guard and test"],
+      },
+      {},
+    );
+
+    expect(insertEpisode).toHaveBeenCalledOnce();
+    const episode = insertEpisode.mock.calls[0][0] as EpisodeRecord;
+    expect(episode).toMatchObject({
+      action: "Fix auth bug in login flow",
+      normalizedAction: "fix auth bug in login flow",
+      summary: "Found and fixed null-pointer in token validation. Tests pass.",
+      outcome: "success",
+      successScore: 1,
+      source: "github",
+      sessionKey: "github--owner/repo#42",
+      initiator: "user",
+      projectName: "myapp",
+      issueId: "owner/repo#42",
+      category: "debugging",
+      toolsUsed: ["Read", "Edit"],
+      tags: ["auth", "bug"],
+    });
+    expect(episode.id).toHaveLength(32);
+    expect(episode.trajectory).toHaveLength(2);
+    expect(episode.trajectory[0]).toMatchObject({ kind: "decision", label: "Identified null check missing at line 84" });
+
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toEqual({ status: "inserted", id: episode.id });
+  });
+
+  it("episode_write applies defaults for optional source and initiator fields", async () => {
+    const insertEpisode = vi.fn();
+    createMemoryServer({ search: mockSearch(), listEpisodes: mockListEpisodes(), insertEpisode });
+
+    const handler = mockTool.mock.calls[4][3] as (
+      args: Record<string, unknown>,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    await handler(
+      { action: "Run daily cleanup", summary: "Done.", outcome: "success" },
+      {},
+    );
+
+    const episode = insertEpisode.mock.calls[0][0] as EpisodeRecord;
+    expect(episode.source).toBe("system");
+    expect(episode.initiator).toBe("system");
+    expect(episode.sessionKey).toBe("system--default");
+    expect(episode.successScore).toBe(1);
+    expect(episode.blockers).toEqual([]);
+    expect(episode.errors).toEqual([]);
+    expect(episode.trajectory).toEqual([]);
+  });
+
+  // ─── episode_search semantic ──────────────────────────────────────────
+
+  it("episode_search with semantic:true calls searchEpisodesVector and returns results with semantic matchedFields", async () => {
+    const searchEpisodesVector = vi.fn(async () => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes: mockListEpisodes(), searchEpisodesVector });
+
+    const handler = mockTool.mock.calls[2][3] as (
+      args: Record<string, unknown>,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    const result = await handler({ query: "deploy staging", semantic: true, maxResults: 5 }, {});
+
+    expect(searchEpisodesVector).toHaveBeenCalledWith("deploy staging", 5);
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toHaveLength(sampleEpisodes.length);
+    expect(parsed[0]).toMatchObject({ matchedFields: ["semantic"], episode: { id: "ep-2" } });
+  });
+
+  it("episode_search without semantic uses keyword path and does not call searchEpisodesVector", async () => {
+    const searchEpisodesVector = vi.fn(async () => []);
+    const listEpisodes = mockListEpisodes(() => sampleEpisodes);
+    createMemoryServer({ search: mockSearch(), listEpisodes, searchEpisodesVector });
+
+    const handler = mockTool.mock.calls[2][3] as (
+      args: Record<string, unknown>,
+      extra: unknown,
+    ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+
+    await handler({ query: "retrieval" }, {});
+
+    expect(searchEpisodesVector).not.toHaveBeenCalled();
+    expect(listEpisodes).toHaveBeenCalled();
   });
 });

@@ -9,6 +9,10 @@
 ## Dostupné nástroje
 
 - **memory_search** - Vyhledávání relevantního kontextu v indexovaných souborech tvého pracovního adresáře
+- **episode_write** - Zaznamenat dokončenou úlohu nebo epizodu do epizodické paměti
+- **episode_search** - Hledat v paměti předchozích úloh podle textu, projektu, problému, výsledku atd.
+- **episode_recent** - Zobrazit nedávné epizody filtrované dle zdroje, projektu, výsledku atd.
+- **episode_stats** - Statistiky epizod podle výsledku, zdroje a projektu
 - **cron** - Plánování jednorázových nebo opakovaných upomínek a úkolů
 - **exec** - Spouštění dlouho běžících terminálových příkazů - procesů na pozadí (těch povolených v konfiguraci)
 - **process** - Kontrola stavu procesů běžících na pozadí

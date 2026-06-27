@@ -1,4 +1,4 @@
-export const EPISODE_SCHEMA_VERSION = 1;
+export const EPISODE_SCHEMA_VERSION = 2;
 
 export const CREATE_EPISODES_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS episodes (
@@ -21,6 +21,10 @@ export const CREATE_EPISODES_TABLE_SQL = `
     category TEXT,
     outcome TEXT NOT NULL,
     success_score REAL,
+    model TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    location TEXT,
     semantic_embedding_text TEXT NOT NULL
   )
 `;
@@ -89,10 +93,20 @@ export const CREATE_EPISODE_ERRORS_TABLE_SQL = `
   );
 `;
 
-export const CREATE_EPISODE_EVIDENCE_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS episode_evidence_incomplete (
+export const CREATE_EPISODE_OPEN_QUESTIONS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS episode_open_questions (
     episode_id TEXT NOT NULL,
-    evidence TEXT NOT NULL,
+    question TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (episode_id, position),
+    FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+  );
+`;
+
+export const CREATE_EPISODE_RELATED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS episode_related (
+    episode_id TEXT NOT NULL,
+    related_episode_id TEXT NOT NULL,
     position INTEGER NOT NULL,
     PRIMARY KEY (episode_id, position),
     FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE

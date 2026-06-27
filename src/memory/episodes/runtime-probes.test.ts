@@ -56,6 +56,7 @@ describe("episodic runtime probes", () => {
   it("initializeEpisodeMemoryServer returns warning and wiring state directly", () => {
     const store = {
       listEpisodes: vi.fn(() => []),
+      insertEpisode: vi.fn(),
       close: vi.fn(),
     } as unknown as EpisodeStore;
     const createServer = vi.fn(() => ({ type: "sdk" }));
@@ -77,6 +78,7 @@ describe("episodic runtime probes", () => {
     expect(createServer).toHaveBeenCalledWith(
       expect.objectContaining({
         listEpisodes: expect.any(Function),
+        insertEpisode: expect.any(Function),
         search: expect.any(Function),
         redact: expect.any(Function),
       }),
@@ -105,6 +107,7 @@ describe("episodic runtime probes", () => {
       }),
     );
     expect(createServer.mock.calls[0]?.[0]).not.toHaveProperty("listEpisodes");
+    expect(createServer.mock.calls[0]?.[0]).not.toHaveProperty("insertEpisode");
   });
 
   it("runDegradedStoreStartupProbe uses memory server wiring in the default path", () => {
@@ -125,6 +128,8 @@ describe("episodic runtime probes", () => {
   it("runDegradedStoreStartupProbe reports non-degraded availability when store opens", () => {
     const store = {
       listEpisodes: vi.fn(() => []),
+      insertEpisode: vi.fn(),
+      close: vi.fn(),
     } as unknown as EpisodeStore;
     const createServer = vi.fn();
 
@@ -138,5 +143,6 @@ describe("episodic runtime probes", () => {
     expect(result.warningTriggered).toBe(false);
     expect(result.episodicSurfaceExposed).toBe(true);
     expect(createServer.mock.calls[0]?.[0]).toHaveProperty("listEpisodes");
+    expect(createServer.mock.calls[0]?.[0]).toHaveProperty("insertEpisode");
   });
 });

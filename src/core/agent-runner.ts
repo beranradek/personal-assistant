@@ -35,7 +35,6 @@ import {
   flushPreCompactionContext,
 } from "../session/compactor.js";
 import { TtlMap, DAY_MS } from "./ttl-map.js";
-import { maybeAutoWriteEpisode } from "../memory/episodes/emitter.js";
 
 // ---------------------------------------------------------------------------
 // SDK session ID cache
@@ -472,7 +471,6 @@ export async function runAgentTurn(
     ...(taskContext ? { taskContext } : {}),
   } as const;
   await appendAuditEntry(config.security.workspace, auditEntry, redact);
-  await maybeAutoWriteEpisode(config, auditEntry);
 
   return { response: responseText, messages: turnMessages, partial };
 }
@@ -713,7 +711,6 @@ export async function* streamAgentTurn(
     ...(taskContext ? { taskContext } : {}),
   } as const;
   await appendAuditEntry(config.security.workspace, auditEntry, redact);
-  await maybeAutoWriteEpisode(config, auditEntry);
 
   // Yield final result event
   yield { type: "result", response: responseText, messages: turnMessages, partial };

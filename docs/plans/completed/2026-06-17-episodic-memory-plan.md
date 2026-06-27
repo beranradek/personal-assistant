@@ -1690,3 +1690,109 @@ This should be treated as an explicit phase-0 design decision, not left implicit
   - [E-mem: Multi-agent based Episodic Context Reconstruction for LLM Agent Memory](https://arxiv.org/abs/2601.21714)
   - [AdMem: Advanced Memory for Task-solving Agents](https://arxiv.org/abs/2606.06787)
   - [Is Agent Memory a Database? Rethinking Data Foundations for Long-Term AI Agent Memory](https://arxiv.org/abs/2605.26252)
+
+## Additional requirements:
+
+I assume that "episodes" written automatically by the program (programmatically) after every completed
+turn will be bad implementation - hardly useful and very partial without context of the whole completed or failed task (just bunch of very partial chaotic data
+leading to unmeaningful stories - episodes - just Question and Answer turns). Assistant typically solves the job / tasks in more turns,
+after my review and additional notes and requirements, or within multiple heartbeat turns, so I would assume that he
+must have some episode_write tool in his MCP server also available, and he must be instructed to use it whenever useful well-encapsulated
+task/job was completed (both successfully, or with failure, or partially but without additional progress possible) so the assistent can
+write the absolved trajectory and the steps and lessons learned and outcomes achieved himself as a high-level self-learned task/job path
+that will be useful in the feature to lead his behavior in more stable way next time he solves the similar problem or needs to reflect on
+what was done the last time / last time on the project / last time on the job. Makes this sense?
+
+Add — episode_write MCP tool in memory-server.ts:
+
+Agent provides:
+- action (required) — one-line task description
+- summary (required) — what actually happened, narrative
+- outcome (required) — success | partial_success | failure | aborted
+- why (optional) — motivation or reason for the task
+- projectName, jobName, issueId, pullRequestId, category (optional identity)
+- blockers, errors (optional arrays)
+- toolsUsed, skillsUsed, tags (optional arrays)
+- trajectory (optional) — key decision steps as short labelled strings, not every turn
+
+System fills automatically:
+- id — deterministic hash of action + summary + outcome + timestamp
+- startedAt / endedAt — current new Date().toISOString() (agent doesn't know exact start time)
+- sessionKey — optional param, defaults to "agent-authored" when not provided
+- source — optional param, defaults to "terminal"
+- normalizedAction, semanticEmbeddingText, successScore — derived from agent inputs
+- initiator — always "user" for agent-written episodes (they're responding to user direction)
+
+The insertEpisode dep gets wired into createMemoryServer in the same pattern as listEpisodes — added to StartupMemoryServices and passed      
+through initializeEpisodeMemoryServer.
+
+Add — AGENTS.md instructions:
+
+A new "Episodic Memory" section telling the agent:
+- Write an episode when a multi-turn task/job reaches a clear boundary (done, failed, or stalled with no path forward)
+- Don't write one after every turn or after trivial single-exchange Q&A
+- What to put in each field (especially trajectory = key decisions/pivots, not every tool call)
+- Write failure episodes too — they're as valuable as successes
+
+## Competitors comparison
+
+| Capability                          | MemMachine         | E-mem             | Hermes                 | Ours                         |
+| ----------------------------------- | ------------------ | ----------------- | ---------------------- | ---------------------------- |
+| Task outcome model                  | ✗                  | ✗                 | partial (`end_reason`) | ✓ `outcome` + `successScore` |
+| Typed identity (project/issue/PR)   | ✗ (key-value only) | ✗                 | ✗                      | ✓                            |
+| Failure analysis (blockers, errors) | ✗                  | ✗                 | ✗                      | ✓                            |
+| Tools/skills tracking               | ✗                  | ✗                 | ✗                      | ✓                            |
+| Intent/motivation (`why`)           | ✗                  | ✗                 | ✗                      | ✓                            |
+| Multi-source awareness              | ✗                  | ✗                 | platform+user          | ✓ source enum                |
+| Episode-to-episode linking          | graph (Neo4j)      | relationship maps | `parent_session_id`    | **✗ missing**                |
+| Token / cost per episode            | ✗                  | ✗                 | ✓ full breakdown       | **✗ missing**                |
+| Model used per episode              | ✗                  | ✗                 | ✓                      | **✗ missing**                |
+| Artifact/location field             | ✗                  | ✗                 | ✗                      | **✗ missing**                |
+| Raw evidence preservation           | sentences          | segments          | raw messages           | daily JSONL (separate)       |
+| Vector retrieval                    | ✓ sentence-level   | multi-granularity | FTS5 only              | planned, not built           |
+
+**Overall: our schema is best-in-class for task-oriented episodic memory.** 
+All three systems store conversations and search them — none model task completion, blockers, skills, or typed work identity. 
+The E-mem agent also surfaced a June 2026 paper (PROJECTMEM) specifically targeting coding agent episodic memory via MCP, 
+which confirms the direction and adds one critical gap: 
+**episode chaining** — the Issue→Attempt→Fix lifecycle where a later episode explicitly resolves an earlier failed one.
+
+### Genuine schema gaps to address before finalizing
+
+#### HIGH — episode chaining (all three systems have it, we have none)
+Add `relatedEpisodeIds: string[]` — general links to related episodes (prior failure, dependency, continuation). The agent writes this when an episode directly resolves or continues a prior one. Covers PROJECTMEM's `resolvesEpisodeId`, 
+Hermes's `parent_session_id`, and E-mem's cross-links with one flexible field.
+Yes, must have.
+
+#### HIGH — artifact/location (from PROJECTMEM)
+Add `location: string | null` — the primary file path, URL, or `file:line` artifact the episode worked on.
+Extremely useful for coding tasks: "last time we touched `src/daemon.ts`" is a meaningful query.
+Yes, must have.
+
+#### MEDIUM — model + token cost per episode (from Hermes)
+Add `model: string | null` and `inputTokens: number | null` / `outputTokens: number | null`. 
+The agent won't know these — they'd need to be captured at the system level 
+(agent-runner already has access to SDK usage data). 
+Enables "which task types are expensive" reflection and cost attribution per project/job.
+
+#### LOW — `evidenceIncomplete` naming
+The field exists but its semantics overlap awkwardly with `blockers`. 
+Either rename to `openQuestions` (what's unresolved) or fold into blockers. 
+The distinction in the plan was "things we couldn't determine", which is clearer as `openQuestions`.
+Yes, `openQuestions` will be more suitable.
+
+### Recommended schema additions before implementation
+
+```ts
+relatedEpisodeIds: string[]      // links to prior/continuation episodes
+model: string | null             // e.g. "claude-sonnet-4-6" — system-filled
+inputTokens: number | null       // system-filled from SDK usage
+outputTokens: number | null      // system-filled from SDK usage  
+location: string | null          // primary file/URL/artifact — agent-provided
+```
+
+And rename `evidenceIncomplete → openQuestions`.
+
+The `relatedEpisodeIds` is the most important — without it, a 3-session debugging arc across 3 separate days 
+is three disconnected stories instead of one recoverable thread. 
+

@@ -31,7 +31,12 @@ function makeEpisode(id: string, overrides: Partial<EpisodeRecord> = {}): Episod
     successScore: 0.9,
     blockers: [],
     errors: [],
-    evidenceIncomplete: [],
+    openQuestions: [],
+    relatedEpisodeIds: [],
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    location: null,
     trajectory: [
       {
         at: "2026-06-18T10:01:00.000Z",
@@ -78,7 +83,8 @@ describe("EpisodeStore", () => {
     const episode = makeEpisode("ep-roundtrip", {
       blockers: ["needs follow-up"],
       errors: ["temporary timeout"],
-      evidenceIncomplete: ["missing screenshot"],
+      openQuestions: ["missing screenshot"],
+      relatedEpisodeIds: [],
       trajectory: [
         { at: "2026-06-18T10:01:00.000Z", kind: "state", label: "started" },
         {
@@ -104,7 +110,8 @@ describe("EpisodeStore", () => {
       tags: ["github", "episodic-memory"],
       blockers: ["await review"],
       errors: ["none yet"],
-      evidenceIncomplete: ["need screenshot"],
+      openQuestions: ["need screenshot"],
+      relatedEpisodeIds: [],
       trajectory: [
         { at: "2026-06-18T10:01:00.000Z", kind: "decision", label: "picked slice 2" },
       ],

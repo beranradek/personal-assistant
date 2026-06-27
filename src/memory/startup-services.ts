@@ -5,9 +5,10 @@ import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js
 import { createVectorStore, type VectorStore } from "./vector-store.js";
 import { createIndexer, type Indexer } from "./indexer.js";
 import { createRobustMemorySearch } from "./robust-search.js";
-import { initializeEpisodeMemoryServer } from "./episodes/runtime-probes.js";
+import { initializeEpisodeMemoryRuntime } from "./episodes/runtime-probes.js";
 import type { EpisodeStore } from "./episodes/store.js";
-import type { EpisodeMemoryRuntimeInit } from "./episodes/runtime-probes.js";
+import type { EpisodeRecord } from "./episodes/types.js";
+import { createMemoryServer } from "../tools/memory-server.js";
 
 type MemorySearchFn = (query: string, maxResults?: number) => Promise<SearchResult[]>;
 type RedactFn = (text: string) => string;
@@ -18,14 +19,8 @@ type StartupMemoryDeps = {
   createIndexer?: typeof createIndexer;
   createRobustMemorySearch?: typeof createRobustMemorySearch;
   createRedactor?: typeof createRedactor;
-  initializeEpisodeMemoryServer?: (args: EpisodeMemoryRuntimeInit) => {
-    episodeStore?: EpisodeStore;
-    memoryServer: unknown;
-    assistantAvailable: true;
-    fallbackTriggered: boolean;
-    warningTriggered: boolean;
-    episodicSurfaceExposed: boolean;
-  };
+  openEpisodeStore?: (dbPath: string) => EpisodeStore;
+  createMemoryServer?: typeof createMemoryServer;
 };
 
 export type StartupMemoryServices = {
@@ -51,8 +46,7 @@ export async function initializeStartupMemoryServices(args: {
   const createIndexerImpl = args.deps?.createIndexer ?? createIndexer;
   const createRobustMemorySearchImpl = args.deps?.createRobustMemorySearch ?? createRobustMemorySearch;
   const createRedactorImpl = args.deps?.createRedactor ?? createRedactor;
-  const initializeEpisodeMemoryServerImpl =
-    args.deps?.initializeEpisodeMemoryServer ?? initializeEpisodeMemoryServer;
+  const createMemoryServerImpl = args.deps?.createMemoryServer ?? createMemoryServer;
 
   const embedder = await createEmbeddingProviderImpl();
   const dbPath = path.join(args.config.security.dataDir, "vectors.db");
@@ -73,11 +67,54 @@ export async function initializeStartupMemoryServices(args: {
     },
   });
   const redact = createRedactorImpl(CONSERVATIVE_PATTERNS);
-  const episodeRuntime = initializeEpisodeMemoryServerImpl({
+
+  let warningTriggered = false;
+  const episodeRuntime = initializeEpisodeMemoryRuntime({
     dbPath: path.join(args.config.security.dataDir, "episodes.db"),
+    openStore: args.deps?.openEpisodeStore,
+    onWarn: (err) => {
+      warningTriggered = true;
+      args.onEpisodeWarn?.(err);
+    },
+  });
+  const episodeStore = episodeRuntime.episodeStore;
+
+  const insertEpisodeWithEmbedding = episodeStore
+    ? async (episode: EpisodeRecord): Promise<void> => {
+        episodeStore.insertEpisode(episode);
+        try {
+          const embedding = await embedder.embed(episode.semanticEmbeddingText);
+          store.upsertChunk({
+            id: `episode:${episode.id}`,
+            path: `episode:${episode.id}`,
+            text: episode.semanticEmbeddingText,
+            embedding,
+            startLine: 0,
+            endLine: 0,
+          });
+        } catch {
+          // Non-fatal: keyword search still works without the vector
+        }
+      }
+    : undefined;
+
+  const searchEpisodesVector = episodeStore
+    ? async (query: string, maxResults = 10): Promise<EpisodeRecord[]> => {
+        const embedding = await embedder.embed(query);
+        const results = store.searchVector(embedding, maxResults * 2);
+        return results
+          .filter((r) => r.path.startsWith("episode:"))
+          .map((r) => episodeStore.getEpisodeById(r.path.slice("episode:".length)))
+          .filter((ep): ep is EpisodeRecord => ep !== null);
+      }
+    : undefined;
+
+  const memoryServer = createMemoryServerImpl({
     search: searchMemory,
     redact,
-    onWarn: args.onEpisodeWarn,
+    ...episodeRuntime.memoryServerDeps,
+    ...(insertEpisodeWithEmbedding ? { insertEpisode: insertEpisodeWithEmbedding } : {}),
+    ...(searchEpisodesVector ? { searchEpisodesVector } : {}),
   });
 
   return {
@@ -86,11 +123,11 @@ export async function initializeStartupMemoryServices(args: {
     indexer,
     searchMemory,
     redact,
-    memoryServer: episodeRuntime.memoryServer,
-    episodeStore: episodeRuntime.episodeStore,
+    memoryServer,
+    episodeStore,
     fallbackTriggered: episodeRuntime.fallbackTriggered,
-    warningTriggered: episodeRuntime.warningTriggered,
-    episodicSurfaceExposed: episodeRuntime.episodicSurfaceExposed,
+    warningTriggered,
+    episodicSurfaceExposed: !!episodeStore,
   };
 }
 
@@ -118,20 +155,27 @@ export async function runDegradedStartupMemoryServicesProbe(args: {
     deps: args.deps,
   });
 
-  return {
-    actualMode: "raw_audit_fallback",
+  const result = {
+    actualMode: "raw_audit_fallback" as const,
     actualResults: [
       {
         id: "startup-log-daemon-fallback",
-        matchedFields: [],
-        matchedFilters: [],
+        matchedFields: [] as string[],
+        matchedFilters: [] as string[],
         explanation: warningTriggered && !services.episodeStore
           ? "Shared startup memory services degraded correctly and continued without episodic surface."
           : "Shared startup memory services stayed available; degraded fallback did not trigger.",
       },
     ],
-    assistantAvailable: true,
+    assistantAvailable: true as const,
     warningTriggered,
     episodicSurfaceExposed: services.episodicSurfaceExposed,
   };
+
+  services.episodeStore?.close();
+  services.store.close();
+  services.indexer.close();
+  await services.embedder.close();
+
+  return result;
 }

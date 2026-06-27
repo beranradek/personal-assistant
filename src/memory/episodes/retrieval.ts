@@ -48,10 +48,12 @@ function searchableFields(episode: EpisodeRecord): Array<[string, string[]]> {
     ["toolsUsed", episode.toolsUsed],
     ["errors", episode.errors],
     ["blockers", episode.blockers],
+    ["openQuestions", episode.openQuestions],
+    ["location", [episode.location ?? ""]],
   ];
 }
 
-function matchesFilters(episode: EpisodeRecord, filters?: EpisodeListFilters): boolean {
+export function matchesFilters(episode: EpisodeRecord, filters?: EpisodeListFilters): boolean {
   if (!filters) return true;
   if (filters.sessionKey && episode.sessionKey !== filters.sessionKey) return false;
   if (filters.source && episode.source !== filters.source) return false;

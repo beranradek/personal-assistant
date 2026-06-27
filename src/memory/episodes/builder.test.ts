@@ -84,7 +84,7 @@ describe("buildEpisodeFromAuditEntries", () => {
     expect(episode.tags).toEqual(["coding", "github", "personal-assistant"]);
     expect(episode.successScore).toBe(0.6);
     expect(episode.blockers).toEqual([]);
-    expect(episode.evidenceIncomplete).toEqual([]);
+    expect(episode.openQuestions).toEqual([]);
     expect(episode.trajectory).toEqual([
       {
         at: "2026-06-18T12:00:00.000Z",
@@ -173,7 +173,7 @@ describe("buildEpisodeFromAuditEntries", () => {
     expect(episode.initiator).toBe("heartbeat");
     expect(episode.outcome).toBe("aborted");
     expect(episode.summary).toBe("Continue with active job");
-    expect(episode.evidenceIncomplete).toEqual([
+    expect(episode.openQuestions).toEqual([
       "missing assistant response in bounded audit window",
       "missing terminal outcome in bounded audit window",
     ]);
@@ -261,7 +261,7 @@ describe("buildEpisodeFromAuditEntries", () => {
 
     expect(episode.outcome).toBe("failure");
     expect(episode.successScore).toBe(0);
-    expect(episode.evidenceIncomplete).toEqual([
+    expect(episode.openQuestions).toEqual([
       "missing terminal outcome in bounded audit window",
     ]);
     expect(episode.trajectory).toContainEqual({

@@ -15,7 +15,7 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function normalizeAction(value: string): string {
+export function normalizeAction(value: string): string {
   return normalizeWhitespace(value).toLowerCase();
 }
 
@@ -105,7 +105,7 @@ function inferSummary(entries: AuditEntry[], action: string): string {
   return action;
 }
 
-function inferEvidenceIncomplete(entries: AuditEntry[], outcome: EpisodeRecord["outcome"]): string[] {
+function inferOpenQuestions(entries: AuditEntry[], outcome: EpisodeRecord["outcome"]): string[] {
   const issues: string[] = [];
   const hasAssistantResponse = entries.some(
     (entry) => entry.type === "interaction" && entry.assistantResponse?.trim(),
@@ -223,7 +223,7 @@ function buildTrajectory(entries: AuditEntry[]): EpisodeRecord["trajectory"] {
   return steps;
 }
 
-function buildSemanticEmbeddingText(episode: {
+export function buildSemanticEmbeddingText(episode: {
   action: string;
   summary: string;
   outcome: EpisodeRecord["outcome"];
@@ -326,7 +326,7 @@ export function buildEpisodeFromAuditEntries(
     endedAt: lastEntry.timestamp,
     source,
     sessionKey: firstEntry.sessionKey,
-    sessionId: firstEntry.sessionKey,
+    sessionId: null,
     initiator: inferInitiator(source),
     action,
     normalizedAction: normalizeAction(action),
@@ -350,7 +350,12 @@ export function buildEpisodeFromAuditEntries(
     successScore: inferSuccessScore(outcome),
     blockers: [],
     errors,
-    evidenceIncomplete: inferEvidenceIncomplete(entries, outcome),
+    openQuestions: inferOpenQuestions(entries, outcome),
+    relatedEpisodeIds: [],
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    location: null,
     trajectory: buildTrajectory(entries),
     semanticEmbeddingText: "",
   };

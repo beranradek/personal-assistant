@@ -140,10 +140,6 @@ describe("config", () => {
       expect(config.memory.search.enabled).toBe(true);
       expect(config.memory.search.hybridWeights).toEqual({ vector: 0.7, keyword: 0.3 });
       expect(config.memory.extraPaths).toEqual([]);
-      expect(config.memory.episodicMemory.autoWrite.enabled).toBe(false);
-      expect(config.memory.episodicMemory.autoWrite.dryRun).toBe(false);
-      expect(config.memory.episodicMemory.autoWrite.sources).toEqual(["github"]);
-      expect(config.memory.episodicMemory.autoWrite.requireTaskContext).toBe(true);
       expect(config.reflection.episodeSignals.enabled).toBe(false);
       expect(config.reflection.episodeSignals.maxRecentEpisodes).toBe(200);
       expect(config.reflection.episodeSignals.maxTopItems).toBe(3);

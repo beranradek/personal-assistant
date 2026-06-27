@@ -1,9 +1,4 @@
 import { z } from "zod";
-import { EpisodeSourceSchema } from "../memory/episodes/types.js";
-
-const DEFAULT_EPISODIC_AUTO_WRITE_SOURCES = [
-  "github",
-] as const;
 
 // ---------------------------------------------------------------------------
 // Config – Zod schema for runtime validation + inferred TypeScript type
@@ -180,29 +175,6 @@ export const MemoryConfigSchema = z.object({
   extraPaths: z.array(z.string()),
   indexDailyLogs: z.boolean().default(true),
   dailyLogRetentionDays: z.number().int().positive().default(90),
-  episodicMemory: z.object({
-    autoWrite: z.object({
-      enabled: z.boolean().default(false),
-      dryRun: z.boolean().default(false),
-      sources: z.array(EpisodeSourceSchema).default([...DEFAULT_EPISODIC_AUTO_WRITE_SOURCES]),
-      requireTaskContext: z.boolean().default(true),
-      maxWindowEntries: z.number().int().positive().max(1000).default(200),
-    }).default(() => ({
-      enabled: false,
-      dryRun: false,
-      sources: [...DEFAULT_EPISODIC_AUTO_WRITE_SOURCES],
-      requireTaskContext: true,
-      maxWindowEntries: 200,
-    })),
-  }).default(() => ({
-    autoWrite: {
-      enabled: false,
-      dryRun: false,
-      sources: [...DEFAULT_EPISODIC_AUTO_WRITE_SOURCES],
-      requireTaskContext: true,
-      maxWindowEntries: 200,
-    },
-  })),
 });
 
 export const McpServerConfigSchema = z.record(z.string(), z.unknown());

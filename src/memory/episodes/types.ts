@@ -69,7 +69,12 @@ export const EpisodeRecordSchema = z.object({
   successScore: z.number().nullable().optional(),
   blockers: z.array(z.string()),
   errors: z.array(z.string()),
-  evidenceIncomplete: z.array(z.string()),
+  openQuestions: z.array(z.string()),
+  relatedEpisodeIds: z.array(z.string()).default([]),
+  model: z.string().nullable().optional(),
+  inputTokens: z.number().int().nullable().optional(),
+  outputTokens: z.number().int().nullable().optional(),
+  location: z.string().nullable().optional(),
   trajectory: z.array(EpisodeStepSchema),
   semanticEmbeddingText: z.string().min(1),
 });

@@ -230,6 +230,8 @@ The agent's workspace lives at `~/.personal-assistant/workspace/` and contains:
 
 These files are seeded from templates on first run. Edit them to customize the assistant's behavior.
 
+For a full description of all memory systems (semantic, episodic, audit log, sessions, reflections), see [docs/agent-memory.md](docs/agent-memory.md).
+
 ## Security Model
 
 Three layers of defense:
@@ -250,16 +252,7 @@ Type `/clear` (in terminal, Telegram, or Slack) to reset the conversation and st
 
 ## Agent Tools
 
-Built-in tools available to the agent:
-
-| Tool | Description |
-|------|-------------|
-| `memory_search` | Hybrid search (vector + keyword) over workspace memory files |
-| `cron` | Schedule one-shot or recurring reminders |
-| `exec` | Run background shell commands with completion notifications |
-| `process` | Check status of background processes |
-
-Plus standard Claude Code tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, WebSearch.
+See [docs/agent-tools.md](docs/agent-tools.md) for the full tool reference, including memory tools, assistant tools, and the complete Claude Code and Codex backend tool sets.
 
 ## Skills
 

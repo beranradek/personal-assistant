@@ -31,7 +31,8 @@ const personalAssistantIssueSuccess: EpisodeRecord = {
   successScore: 1,
   blockers: [],
   errors: [],
-  evidenceIncomplete: [],
+  openQuestions: [],
+  relatedEpisodeIds: [],
   trajectory: [],
   semanticEmbeddingText: "fix episodic emitter duplicate guard issue 12",
 };
@@ -75,7 +76,8 @@ const deployFailure: EpisodeRecord = {
   successScore: 0.1,
   blockers: ["missing app access"],
   errors: ["interactive prompt"],
-  evidenceIncomplete: [],
+  openQuestions: [],
+  relatedEpisodeIds: [],
   trajectory: [],
   semanticEmbeddingText: "deploy failure heroku app access interactive prompt",
 };
@@ -122,7 +124,8 @@ const heartbeatProgress: EpisodeRecord = {
   successScore: 0.95,
   blockers: [],
   errors: [],
-  evidenceIncomplete: [],
+  openQuestions: [],
+  relatedEpisodeIds: [],
   trajectory: [],
   semanticEmbeddingText: "heartbeat progress added slice 6 episodic evaluation harness",
 };
@@ -152,7 +155,8 @@ const adminWorkflow: EpisodeRecord = {
   successScore: 0.9,
   blockers: [],
   errors: [],
-  evidenceIncomplete: [],
+  openQuestions: [],
+  relatedEpisodeIds: [],
   trajectory: [],
   semanticEmbeddingText: "admin telegram summary reminders next actions",
 };
@@ -247,17 +251,10 @@ function createEvalStartupDeps() {
     }),
     createRobustMemorySearch: () => async () => [],
     createRedactor: () => (text: string) => text,
-    initializeEpisodeMemoryServer: ({ onWarn }: { onWarn?: (err: unknown) => void }) => {
-      onWarn?.(new Error("episodes.db incompatible schema"));
-      return {
-        episodeStore: undefined,
-        memoryServer: { name: "memory" },
-        assistantAvailable: true as const,
-        fallbackTriggered: true,
-        warningTriggered: true,
-        episodicSurfaceExposed: false,
-      };
+    openEpisodeStore: () => {
+      throw new Error("episodes.db incompatible schema");
     },
+    createMemoryServer: (() => ({ name: "memory" })) as any,
   };
 }
 

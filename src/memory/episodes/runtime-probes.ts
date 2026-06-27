@@ -1,12 +1,13 @@
 import { createMemoryServer } from "../../tools/memory-server.js";
 import type { SearchResult } from "../../core/types.js";
 import { createEpisodeStore, type EpisodeStore } from "./store.js";
-import type { EpisodeListFilters } from "./types.js";
+import type { EpisodeListFilters, EpisodeRecord } from "./types.js";
 
 type EpisodeMemoryServerProbeDeps = {
   search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
   redact: (text: string) => string;
   listEpisodes?: (filters?: EpisodeListFilters) => ReturnType<EpisodeStore["listEpisodes"]>;
+  insertEpisode?: (episode: EpisodeRecord) => void;
 };
 
 type EpisodeMemoryServerFactory = (deps: EpisodeMemoryServerProbeDeps) => unknown;
@@ -34,12 +35,14 @@ export function openEpisodeStoreSafely(args: {
   }
 }
 
-export function buildEpisodeMemoryServerDeps(episodeStore?: Pick<EpisodeStore, "listEpisodes">): {
+export function buildEpisodeMemoryServerDeps(episodeStore?: Pick<EpisodeStore, "listEpisodes" | "insertEpisode">): {
   listEpisodes?: (filters?: EpisodeListFilters) => ReturnType<EpisodeStore["listEpisodes"]>;
+  insertEpisode?: (episode: EpisodeRecord) => void;
 } {
   if (!episodeStore) return {};
   return {
     listEpisodes: (filters) => episodeStore.listEpisodes(filters),
+    insertEpisode: (episode) => episodeStore.insertEpisode(episode),
   };
 }
 
@@ -51,6 +54,7 @@ export function initializeEpisodeMemoryRuntime(args: {
   episodeStore?: EpisodeStore;
   memoryServerDeps: {
     listEpisodes?: (filters?: EpisodeListFilters) => ReturnType<EpisodeStore["listEpisodes"]>;
+    insertEpisode?: (episode: EpisodeRecord) => void;
   };
   assistantAvailable: true;
   fallbackTriggered: boolean;
@@ -129,6 +133,7 @@ export function runDegradedStoreStartupProbe(args?: {
     openStore: args?.openStore,
     createServer: args?.createServer,
   });
+  runtime.episodeStore?.close();
 
   return {
     actualMode: "raw_audit_fallback",

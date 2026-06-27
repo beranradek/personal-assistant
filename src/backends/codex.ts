@@ -35,7 +35,6 @@ import type { AgentBackend, StreamEvent, AgentTurnResult } from "./interface.js"
 import type { AuditTaskContext, Config, SessionMessage } from "../core/types.js";
 import { saveInteraction } from "../session/manager.js";
 import { appendAuditEntry } from "../memory/daily-log.js";
-import { maybeAutoWriteEpisode } from "../memory/episodes/emitter.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { createLogger } from "../core/logger.js";
 import { appendPromptLog } from "../core/prompt-log.js";
@@ -579,7 +578,6 @@ export async function createCodexBackend(
         ...(taskContext ? { taskContext } : {}),
       } as const;
       await appendAuditEntry(config.security.workspace, auditEntry, redact);
-      await maybeAutoWriteEpisode(config, auditEntry);
 
       yield {
         type: "result",
@@ -667,7 +665,6 @@ export async function createCodexBackend(
           ...(taskContext ? { taskContext } : {}),
         } as const;
         await appendAuditEntry(config.security.workspace, auditEntry, redact);
-        await maybeAutoWriteEpisode(config, auditEntry);
 
         return { response: responseText, messages: turnMessages, partial: false };
       } catch (err) {

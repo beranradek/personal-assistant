@@ -11,7 +11,8 @@ import {
 import {
   CREATE_EPISODE_BLOCKERS_TABLE_SQL,
   CREATE_EPISODE_ERRORS_TABLE_SQL,
-  CREATE_EPISODE_EVIDENCE_TABLE_SQL,
+  CREATE_EPISODE_OPEN_QUESTIONS_TABLE_SQL,
+  CREATE_EPISODE_RELATED_TABLE_SQL,
   CREATE_EPISODE_SKILLS_TABLE_SQL,
   CREATE_EPISODE_STEPS_TABLE_SQL,
   CREATE_EPISODE_TAGS_TABLE_SQL,
@@ -48,6 +49,10 @@ type EpisodeRow = {
   category: string | null;
   outcome: string;
   success_score: number | null;
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  location: string | null;
   semantic_embedding_text: string;
 };
 
@@ -58,14 +63,14 @@ type EpisodeStepRow = {
   data_json: string | null;
 };
 
-function migrateSchema(db: Database.Database): void {
+function initializeSchema(db: Database.Database): void {
   const currentVersion = Number(db.pragma("user_version", { simple: true }) ?? 0);
-  if (currentVersion > EPISODE_SCHEMA_VERSION) {
+  if (currentVersion === EPISODE_SCHEMA_VERSION) return;
+  if (currentVersion > 0) {
     throw new Error(
-      `episodes.db schema version ${currentVersion} is newer than supported ${EPISODE_SCHEMA_VERSION}`,
+      `episodes.db schema version ${currentVersion} is not supported (expected ${EPISODE_SCHEMA_VERSION}). Delete the file to start fresh.`,
     );
   }
-  if (currentVersion === EPISODE_SCHEMA_VERSION) return;
 
   db.transaction(() => {
     db.exec(CREATE_EPISODES_TABLE_SQL);
@@ -75,8 +80,9 @@ function migrateSchema(db: Database.Database): void {
     db.exec(CREATE_EPISODE_TAGS_TABLE_SQL);
     db.exec(CREATE_EPISODE_BLOCKERS_TABLE_SQL);
     db.exec(CREATE_EPISODE_ERRORS_TABLE_SQL);
-    db.exec(CREATE_EPISODE_EVIDENCE_TABLE_SQL);
+    db.exec(CREATE_EPISODE_OPEN_QUESTIONS_TABLE_SQL);
     db.exec(CREATE_EPISODE_STEPS_TABLE_SQL);
+    db.exec(CREATE_EPISODE_RELATED_TABLE_SQL);
     db.pragma(`user_version = ${EPISODE_SCHEMA_VERSION}`);
   })();
 }
@@ -96,7 +102,7 @@ function loadSteps(
     at: row.at,
     kind: row.kind,
     label: row.label,
-    data: row.data_json ? JSON.parse(row.data_json) : undefined,
+    ...(row.data_json ? { data: JSON.parse(row.data_json) } : {}),
   }));
 }
 
@@ -108,7 +114,8 @@ function rowToEpisode(
     tags: Database.Statement<[string], { value: string }>;
     blockers: Database.Statement<[string], { value: string }>;
     errors: Database.Statement<[string], { value: string }>;
-    evidence: Database.Statement<[string], { value: string }>;
+    openQuestions: Database.Statement<[string], { value: string }>;
+    related: Database.Statement<[string], { value: string }>;
     steps: Database.Statement<[string], EpisodeStepRow>;
   },
 ): EpisodeRecord {
@@ -137,7 +144,12 @@ function rowToEpisode(
     successScore: row.success_score,
     blockers: loadStringValues(loaders.blockers, row.id),
     errors: loadStringValues(loaders.errors, row.id),
-    evidenceIncomplete: loadStringValues(loaders.evidence, row.id),
+    openQuestions: loadStringValues(loaders.openQuestions, row.id),
+    relatedEpisodeIds: loadStringValues(loaders.related, row.id),
+    model: row.model,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    location: row.location,
     trajectory: loadSteps(loaders.steps, row.id),
     semanticEmbeddingText: row.semantic_embedding_text,
   });
@@ -165,6 +177,10 @@ function episodeToParams(episode: EpisodeRecord) {
     category: parsed.category ?? null,
     outcome: parsed.outcome,
     success_score: parsed.successScore ?? null,
+    model: parsed.model ?? null,
+    input_tokens: parsed.inputTokens ?? null,
+    output_tokens: parsed.outputTokens ?? null,
+    location: parsed.location ?? null,
     semantic_embedding_text: parsed.semanticEmbeddingText,
   };
 }
@@ -192,19 +208,21 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
 
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
-  migrateSchema(db);
+  initializeSchema(db);
 
   const insertEpisodeStmt = db.prepare(`
     INSERT INTO episodes (
       id, started_at, ended_at, source, session_key, session_id, initiator,
       action, normalized_action, summary, why, project_name, job_name,
       issue_id, pull_request_id, detailed_memory_file, category,
-      outcome, success_score, semantic_embedding_text
+      outcome, success_score, model, input_tokens, output_tokens, location,
+      semantic_embedding_text
     ) VALUES (
       @id, @started_at, @ended_at, @source, @session_key, @session_id, @initiator,
       @action, @normalized_action, @summary, @why, @project_name, @job_name,
       @issue_id, @pull_request_id, @detailed_memory_file, @category,
-      @outcome, @success_score, @semantic_embedding_text
+      @outcome, @success_score, @model, @input_tokens, @output_tokens, @location,
+      @semantic_embedding_text
     )
   `);
   const insertSkillStmt = db.prepare(`
@@ -222,8 +240,11 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
   const insertErrorStmt = db.prepare(`
     INSERT INTO episode_errors (episode_id, error, position) VALUES (?, ?, ?)
   `);
-  const insertEvidenceStmt = db.prepare(`
-    INSERT INTO episode_evidence_incomplete (episode_id, evidence, position) VALUES (?, ?, ?)
+  const insertOpenQuestionsStmt = db.prepare(`
+    INSERT INTO episode_open_questions (episode_id, question, position) VALUES (?, ?, ?)
+  `);
+  const insertRelatedStmt = db.prepare(`
+    INSERT INTO episode_related (episode_id, related_episode_id, position) VALUES (?, ?, ?)
   `);
   const insertStepStmt = db.prepare(`
     INSERT INTO episode_steps (episode_id, position, at, kind, label, data_json)
@@ -248,8 +269,11 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
   const loadErrorsStmt = db.prepare<[string], { value: string }>(`
     SELECT error AS value FROM episode_errors WHERE episode_id = ? ORDER BY position ASC
   `);
-  const loadEvidenceStmt = db.prepare<[string], { value: string }>(`
-    SELECT evidence AS value FROM episode_evidence_incomplete WHERE episode_id = ? ORDER BY position ASC
+  const loadOpenQuestionsStmt = db.prepare<[string], { value: string }>(`
+    SELECT question AS value FROM episode_open_questions WHERE episode_id = ? ORDER BY position ASC
+  `);
+  const loadRelatedStmt = db.prepare<[string], { value: string }>(`
+    SELECT related_episode_id AS value FROM episode_related WHERE episode_id = ? ORDER BY position ASC
   `);
   const loadStepsStmt = db.prepare<[string], EpisodeStepRow>(`
     SELECT at, kind, label, data_json
@@ -266,7 +290,8 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
     insertOrderedStringValues(insertTagStmt, parsed.id, parsed.tags);
     insertOrderedStringValues(insertBlockerStmt, parsed.id, parsed.blockers);
     insertOrderedStringValues(insertErrorStmt, parsed.id, parsed.errors);
-    insertOrderedStringValues(insertEvidenceStmt, parsed.id, parsed.evidenceIncomplete);
+    insertOrderedStringValues(insertOpenQuestionsStmt, parsed.id, parsed.openQuestions);
+    insertOrderedStringValues(insertRelatedStmt, parsed.id, parsed.relatedEpisodeIds);
     for (const [position, step] of parsed.trajectory.entries()) {
       insertStepStmt.run(
         parsed.id,
@@ -285,7 +310,8 @@ export function createEpisodeStore(dbPath: string): EpisodeStore {
     tags: loadTagsStmt,
     blockers: loadBlockersStmt,
     errors: loadErrorsStmt,
-    evidence: loadEvidenceStmt,
+    openQuestions: loadOpenQuestionsStmt,
+    related: loadRelatedStmt,
     steps: loadStepsStmt,
   };
 
