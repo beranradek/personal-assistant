@@ -120,10 +120,15 @@ function httpRequest(
     method?: string;
     sessionId?: string;
     body?: string;
+    protocolVersion?: string;
   } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
-    const headers: http.OutgoingHttpHeaders = { "Content-Type": "application/json" };
+    const headers: http.OutgoingHttpHeaders = {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      "mcp-protocol-version": options.protocolVersion ?? "2025-03-26",
+    };
     if (options.sessionId) headers["mcp-session-id"] = options.sessionId;
     const req = http.request(
       { hostname: "127.0.0.1", port, path: "/", method: options.method ?? "POST", headers },
@@ -416,6 +421,34 @@ describe("startHttpMcpServer", () => {
     await Promise.resolve();
 
     const res = await httpRequest(handle.port, { method: "GET", body: "" });
+    expect(res.status).toBe(503);
+    expect(res.body).toContain("\"code\":-32000");
+    expect(res.body).toContain("\"message\":\"MCP server shutting down\"");
+    expect(mockTransports).toHaveLength(1);
+    expect(mockServers).toHaveLength(1);
+
+    resolveServerClose?.();
+    await shutdownPromise;
+    handle = undefined;
+  });
+
+  it("rejects DELETE requests with JSON-RPC 503 envelope once shutdown starts", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    await httpPost(handle.port);
+
+    let resolveServerClose: (() => void) | undefined;
+    mockServers[0].close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveServerClose = resolve;
+        }),
+    );
+
+    const shutdownPromise = handle.close();
+    await Promise.resolve();
+
+    const res = await httpRequest(handle.port, { method: "DELETE", body: "" });
     expect(res.status).toBe(503);
     expect(res.body).toContain("\"code\":-32000");
     expect(res.body).toContain("\"message\":\"MCP server shutting down\"");
