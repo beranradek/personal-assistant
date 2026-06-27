@@ -202,10 +202,10 @@ describe("startHttpMcpServer", () => {
     handle = undefined;
 
     for (const t of mockTransports) {
-      expect(t.close).toHaveBeenCalled();
+      expect(t.close).toHaveBeenCalledOnce();
     }
     for (const s of mockServers) {
-      expect(s.close).toHaveBeenCalled();
+      expect(s.close).toHaveBeenCalledOnce();
     }
   });
 
@@ -214,12 +214,76 @@ describe("startHttpMcpServer", () => {
 
     await httpPost(handle.port);
     const sid = mockTransports[0].sessionId;
+    const firstServer = mockServers[0];
 
     // Simulate transport close event
     mockTransports[0].onclose?.();
+    await Promise.resolve();
+
+    expect(firstServer.close).toHaveBeenCalledOnce();
+    expect(mockTransports[0].close).toHaveBeenCalledOnce();
 
     // A subsequent request with the stale sid now creates a new session
     await httpPost(handle.port, sid);
     expect(mockTransports).toHaveLength(2);
+  });
+
+  it("waits for session teardown already started via onclose before close() resolves", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    await httpPost(handle.port);
+
+    let resolveServerClose: (() => void) | undefined;
+    mockServers[0].close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveServerClose = resolve;
+        }),
+    );
+
+    mockTransports[0].onclose?.();
+    await Promise.resolve();
+
+    let shutdownResolved = false;
+    const shutdownPromise = handle.close().then(() => {
+      shutdownResolved = true;
+    });
+
+    await Promise.resolve();
+    expect(shutdownResolved).toBe(false);
+
+    resolveServerClose?.();
+    await shutdownPromise;
+    handle = undefined;
+
+    expect(shutdownResolved).toBe(true);
+    expect(mockTransports[0].close).toHaveBeenCalledOnce();
+    expect(mockServers[0].close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects new requests once shutdown starts so no new session can race in", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    await httpPost(handle.port);
+
+    let resolveServerClose: (() => void) | undefined;
+    mockServers[0].close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveServerClose = resolve;
+        }),
+    );
+
+    const shutdownPromise = handle.close();
+    await Promise.resolve();
+
+    const res = await httpPost(handle.port);
+    expect(res.status).toBe(503);
+    expect(mockTransports).toHaveLength(1);
+    expect(mockServers).toHaveLength(1);
+
+    resolveServerClose?.();
+    await shutdownPromise;
+    handle = undefined;
   });
 });

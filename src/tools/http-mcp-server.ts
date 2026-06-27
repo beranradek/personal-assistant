@@ -31,9 +31,48 @@ export async function startHttpMcpServer(
   port: number,
 ): Promise<HttpMcpServerHandle> {
   const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
+  const closingSessions = new Map<string, Promise<void>>();
+  let shuttingDown = false;
+
+  function closeSession(sessionId: string): Promise<void> {
+    const inFlight = closingSessions.get(sessionId);
+    if (inFlight) return inFlight;
+
+    const session = sessions.get(sessionId);
+    if (!session) return Promise.resolve();
+
+    sessions.delete(sessionId);
+    let resolveClose!: () => void;
+    const closePromise = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    closingSessions.set(sessionId, closePromise);
+
+    void (async () => {
+      try {
+        session.transport.onclose = undefined;
+        await session.transport.close();
+        await session.server.close();
+      } catch {
+        // ignore per-session close errors during shutdown
+      } finally {
+        closingSessions.delete(sessionId);
+        log.debug({ sid: sessionId }, "MCP session closed");
+        resolveClose();
+      }
+    })();
+
+    return closePromise;
+  }
 
   const httpServer = http.createServer(async (req, res) => {
     try {
+      if (shuttingDown) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "MCP server shutting down" }));
+        return;
+      }
+
       // Buffer the full request body before handing off to the transport.
       // This is required because `StreamableHTTPServerTransport.handleRequest`
       // uses @hono/node-server to convert the Node.js request to a Web Request,
@@ -62,8 +101,7 @@ export async function startHttpMcpServer(
         if (sid) {
           sessions.set(sid, { transport, server });
           transport.onclose = () => {
-            sessions.delete(sid);
-            log.debug({ sid }, "MCP session closed");
+            void closeSession(sid);
           };
           log.debug({ sid, total: sessions.size }, "MCP session opened");
         }
@@ -93,15 +131,11 @@ export async function startHttpMcpServer(
   return {
     port: assignedPort,
     async close() {
-      for (const { transport, server } of sessions.values()) {
-        try {
-          await transport.close();
-          await server.close();
-        } catch {
-          // ignore individual close errors during shutdown
-        }
-      }
-      sessions.clear();
+      shuttingDown = true;
+      await Promise.allSettled([
+        ...[...sessions.keys()].map((sessionId) => closeSession(sessionId)),
+        ...closingSessions.values(),
+      ]);
       await new Promise<void>((resolve) => {
         httpServer.close(() => resolve());
       });

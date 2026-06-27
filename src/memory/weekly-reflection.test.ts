@@ -535,6 +535,34 @@ describe("runWeeklyReflection", () => {
           evidenceIncomplete: [],
           trajectory: [],
           semanticEmbeddingText: "fixed issue",
+        }, {
+          id: "ep-2",
+          startedAt: `${lastWeekDate}T09:00:00.000Z`,
+          endedAt: `${lastWeekDate}T09:04:00.000Z`,
+          source: "github",
+          sessionKey: "github--2",
+          sessionId: "github--2",
+          initiator: "user",
+          action: "Retry issue",
+          normalizedAction: "retry issue",
+          summary: "Retried issue",
+          why: null,
+          projectName: "personal-assistant",
+          jobName: "003-personal-assistant-episodic-memory",
+          issueId: "2",
+          pullRequestId: null,
+          detailedMemoryFile: null,
+          category: "coding",
+          skillsUsed: [],
+          toolsUsed: ["functions.exec_command"],
+          tags: [],
+          outcome: "success",
+          successScore: 1,
+          blockers: [],
+          errors: ["schema drift"],
+          evidenceIncomplete: [],
+          trajectory: [],
+          semanticEmbeddingText: "retried issue",
         }],
         close: () => {
           throw new Error("close failed");
@@ -545,6 +573,7 @@ describe("runWeeklyReflection", () => {
     expect(capturedBody).toHaveLength(1);
     expect(capturedBody[0].messages[0].content).toContain(`Structured episodic signals for ${getLastWeekIdentifier()}`);
     expect(capturedBody[0].messages[0].content).toContain("schema drift");
+    expect(capturedBody[0].messages[0].content).toContain("promotion hints are advisory only");
   });
 
   it("continues weekly reflection without episodic summary when both list and close fail", async () => {
