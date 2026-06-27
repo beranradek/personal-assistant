@@ -21,6 +21,20 @@ import { createLogger } from "../core/logger.js";
 
 const log = createLogger("http-mcp-server");
 
+function writeJsonRpcError(
+  res: http.ServerResponse,
+  status: number,
+  code: number,
+  message: string,
+): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({
+    jsonrpc: "2.0",
+    error: { code, message },
+    id: null,
+  }));
+}
+
 export interface HttpMcpServerHandle {
   port: number;
   close(): Promise<void>;
@@ -68,15 +82,13 @@ export async function startHttpMcpServer(
   const httpServer = http.createServer(async (req, res) => {
     try {
       if (shuttingDown) {
-        res.writeHead(503, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "MCP server shutting down" }));
+        writeJsonRpcError(res, 503, -32000, "MCP server shutting down");
         return;
       }
 
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
       if (sessionId && !sessions.has(sessionId)) {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "MCP session not found" }));
+        writeJsonRpcError(res, 404, -32001, "Session not found");
         return;
       }
 
@@ -92,23 +104,27 @@ export async function startHttpMcpServer(
       const parsedBody: unknown = bodyStr ? (JSON.parse(bodyStr) as unknown) : undefined;
 
       if (sessionId) {
-        await sessions.get(sessionId)!.transport.handleRequest(req, res, parsedBody);
+        const session = sessions.get(sessionId);
+        if (!session) {
+          writeJsonRpcError(res, 404, -32001, "Session not found");
+          return;
+        }
+        await session.transport.handleRequest(req, res, parsedBody);
       } else {
         // New client — allocate a fresh transport + server pair.
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-        });
+        let transport: StreamableHTTPServerTransport;
         const server = createStdioMcpServer(deps);
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            sessions.set(sid, { transport, server });
+            transport.onclose = () => {
+              void closeSession(sid);
+            };
+            log.debug({ sid, total: sessions.size }, "MCP session opened");
+          },
+        });
         await server.connect(transport);
-
-        const sid = transport.sessionId;
-        if (sid) {
-          sessions.set(sid, { transport, server });
-          transport.onclose = () => {
-            void closeSession(sid);
-          };
-          log.debug({ sid, total: sessions.size }, "MCP session opened");
-        }
 
         await transport.handleRequest(req, res, parsedBody);
       }

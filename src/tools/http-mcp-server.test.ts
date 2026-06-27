@@ -11,6 +11,8 @@ const mockTransports: Array<{
   handleRequest: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   onclose: (() => void) | undefined;
+  onsessioninitialized?: ((sessionId: string) => void | Promise<void>) | undefined;
+  initialized?: boolean;
 }> = [];
 
 const mockServers: Array<{
@@ -47,10 +49,14 @@ vi.mock("@modelcontextprotocol/sdk/server/streamableHttp.js", () => ({
     handleRequest: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
     onclose: (() => void) | undefined;
+    onsessioninitialized?: ((sessionId: string) => void | Promise<void>) | undefined;
+    initialized: boolean;
 
-    constructor() {
-      this.sessionId = `sid-${mockTransports.length + 1}`;
+    constructor(options?: { sessionIdGenerator?: () => string; onsessioninitialized?: (sessionId: string) => void | Promise<void> }) {
+      this.sessionId = "";
       this.onclose = undefined;
+      this.onsessioninitialized = options?.onsessioninitialized;
+      this.initialized = false;
 
       // Simulate a simple 200 response and expose the instance for assertions.
       // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -59,6 +65,11 @@ vi.mock("@modelcontextprotocol/sdk/server/streamableHttp.js", () => ({
         _req: unknown,
         res: http.ServerResponse,
       ) {
+        if (!self.initialized) {
+          self.sessionId = options?.sessionIdGenerator?.() ?? `sid-${mockTransports.length + 1}`;
+          self.initialized = true;
+          void self.onsessioninitialized?.(self.sessionId);
+        }
         res.writeHead(200, {
           "Content-Type": "application/json",
           "mcp-session-id": self.sessionId,
@@ -110,15 +121,24 @@ function httpRequest(
     sessionId?: string;
     body?: string;
   } = {},
-): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
     const headers: http.OutgoingHttpHeaders = { "Content-Type": "application/json" };
     if (options.sessionId) headers["mcp-session-id"] = options.sessionId;
     const req = http.request(
       { hostname: "127.0.0.1", port, path: "/", method: options.method ?? "POST", headers },
       (res) => {
-        res.resume();
-        resolve({ status: res.statusCode ?? 0, headers: res.headers });
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
       },
     );
     req.on("error", reject);
@@ -129,7 +149,7 @@ function httpRequest(
 function httpPost(
   port: number,
   sessionId?: string,
-): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return httpRequest(port, { method: "POST", sessionId, body: "{}" });
 }
 
@@ -140,7 +160,7 @@ function httpRawRequest(
     sessionId?: string;
     body?: string;
   } = {},
-): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return httpRequest(port, options);
 }
 
@@ -177,6 +197,7 @@ describe("startHttpMcpServer", () => {
 
     expect(res.status).toBe(200);
     expect(mockTransports).toHaveLength(1);
+    expect(mockTransports[0].sessionId).toBeTruthy();
     expect(mockServers[0].connect).toHaveBeenCalledWith(mockTransports[0]);
   });
 
@@ -200,6 +221,8 @@ describe("startHttpMcpServer", () => {
     const res = await httpPost(handle.port, "unknown-session-id");
 
     expect(res.status).toBe(404);
+    expect(res.body).toContain("\"code\":-32001");
+    expect(res.body).toContain("\"message\":\"Session not found\"");
     expect(mockTransports).toHaveLength(0);
     expect(mockServers).toHaveLength(0);
   });
@@ -214,6 +237,7 @@ describe("startHttpMcpServer", () => {
     });
 
     expect(res.status).toBe(404);
+    expect(res.body).toContain("\"code\":-32001");
     expect(mockTransports).toHaveLength(0);
     expect(mockServers).toHaveLength(0);
   });
@@ -224,6 +248,7 @@ describe("startHttpMcpServer", () => {
     const res = await httpRequest(handle.port, { method: "GET", sessionId: "unknown-session-id", body: "" });
 
     expect(res.status).toBe(404);
+    expect(res.body).toContain("\"code\":-32001");
     expect(mockTransports).toHaveLength(0);
     expect(mockServers).toHaveLength(0);
   });
@@ -273,6 +298,7 @@ describe("startHttpMcpServer", () => {
     // A subsequent request with the stale sid is rejected instead of silently creating a new session
     const res = await httpPost(handle.port, sid);
     expect(res.status).toBe(404);
+    expect(res.body).toContain("\"code\":-32001");
     expect(mockTransports).toHaveLength(1);
   });
 
@@ -287,6 +313,7 @@ describe("startHttpMcpServer", () => {
 
     const res = await httpRequest(handle.port, { method: "DELETE", sessionId: sid, body: "" });
     expect(res.status).toBe(404);
+    expect(res.body).toContain("\"code\":-32001");
     expect(mockTransports).toHaveLength(1);
     expect(mockServers).toHaveLength(1);
   });
@@ -306,6 +333,7 @@ describe("startHttpMcpServer", () => {
     });
 
     expect(res.status).toBe(404);
+    expect(res.body).toContain("\"code\":-32001");
     expect(mockTransports).toHaveLength(1);
     expect(mockServers).toHaveLength(1);
   });
