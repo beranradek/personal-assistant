@@ -553,8 +553,13 @@ export async function createCodexBackend(
           // after the turn — log it but don't overwrite the real error message.
           log.warn({ err, sessionKey }, "Codex process exited non-zero after turn error (already surfaced)");
         } else {
-          log.error({ err, sessionKey }, "Codex turn failed");
-          yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
+          const isSignalExit = /exited with signal SIG/.test(errorMessage);
+          if (isSignalExit) {
+            log.warn({ err, sessionKey }, "Codex turn interrupted by signal (shutdown)");
+          } else {
+            log.error({ err, sessionKey }, "Codex turn failed");
+            yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
+          }
         }
         return;
       }

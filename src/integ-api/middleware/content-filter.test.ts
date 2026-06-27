@@ -25,7 +25,7 @@ import { AGGRESSIVE_PATTERNS } from "../../security/content-redaction.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-let portCounter = 19500;
+let portCounter = 19520;
 function nextPort(): number {
   return portCounter++;
 }

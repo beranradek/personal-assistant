@@ -13,7 +13,7 @@ import * as http from "node:http";
 import { createIntegApiServer } from "../server.js";
 import { createAuditMiddleware } from "./audit.js";
 
-let portCounter = 19300;
+let portCounter = 19320;
 function nextPort(): number {
   return portCounter++;
 }

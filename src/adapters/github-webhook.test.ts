@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createGithubWebhookAdapter } from "./github-webhook.js";
 
-let portCounter = 19300;
+let portCounter = 19340;
 function nextPort(): number {
   return portCounter++;
 }
