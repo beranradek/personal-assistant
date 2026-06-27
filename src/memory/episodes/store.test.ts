@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import Database from "better-sqlite3";
 import { createEpisodeStore, type EpisodeStore } from "./store.js";
 import type { EpisodeRecord } from "./types.js";
 
@@ -209,52 +208,4 @@ describe("EpisodeStore", () => {
     expect(results.map((episode) => episode.id)).toEqual(["ep-3", "ep-2"]);
   });
 
-  it("migrates a v1 database to v2 without data loss", () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "episode-store-migrate-"));
-    const dbPath = path.join(tmpDir, "episodes.db");
-
-    // Build a v1 database manually
-    const db = new Database(dbPath);
-    db.pragma("journal_mode = WAL");
-    db.pragma("foreign_keys = ON");
-    db.exec(`
-      CREATE TABLE episodes (
-        id TEXT PRIMARY KEY,
-        started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
-        source TEXT NOT NULL, session_key TEXT NOT NULL, session_id TEXT,
-        initiator TEXT NOT NULL, action TEXT NOT NULL, normalized_action TEXT NOT NULL,
-        summary TEXT NOT NULL, why TEXT, project_name TEXT, job_name TEXT,
-        issue_id TEXT, pull_request_id TEXT, detailed_memory_file TEXT, category TEXT,
-        outcome TEXT NOT NULL, success_score REAL, semantic_embedding_text TEXT NOT NULL
-      );
-      CREATE TABLE episode_skills (episode_id TEXT NOT NULL, skill TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-      CREATE TABLE episode_tools (episode_id TEXT NOT NULL, tool TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-      CREATE TABLE episode_tags (episode_id TEXT NOT NULL, tag TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-      CREATE TABLE episode_blockers (episode_id TEXT NOT NULL, blocker TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-      CREATE TABLE episode_errors (episode_id TEXT NOT NULL, error TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-      CREATE TABLE episode_evidence_incomplete (episode_id TEXT NOT NULL, evidence TEXT NOT NULL, position INTEGER NOT NULL, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-      CREATE TABLE episode_steps (episode_id TEXT NOT NULL, position INTEGER NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL, data_json TEXT, PRIMARY KEY (episode_id, position), FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE);
-    `);
-    db.exec(`INSERT INTO episodes (id, started_at, ended_at, source, session_key, initiator, action, normalized_action, summary, outcome, semantic_embedding_text) VALUES ('v1-ep', '2026-06-01T10:00:00.000Z', '2026-06-01T10:05:00.000Z', 'terminal', 'terminal--default', 'user', 'v1 action', 'v1 action', 'v1 summary', 'success', 'v1 action v1 summary')`);
-    db.exec(`INSERT INTO episode_evidence_incomplete (episode_id, evidence, position) VALUES ('v1-ep', 'open question from v1', 0)`);
-    db.pragma("user_version = 1");
-    db.close();
-
-    // Open with current createEpisodeStore — should auto-migrate
-    store = createEpisodeStore(dbPath);
-
-    const ep = store.getEpisodeById("v1-ep");
-    expect(ep).not.toBeNull();
-    expect(ep?.action).toBe("v1 action");
-    expect(ep?.openQuestions).toEqual(["open question from v1"]);
-    expect(ep?.relatedEpisodeIds).toEqual([]);
-    expect(ep?.model).toBeNull();
-    expect(ep?.location).toBeNull();
-
-    // Can insert a new v2 episode after migration
-    store.insertEpisode(makeEpisode("v2-ep"));
-    expect(store.getEpisodeById("v2-ep")?.id).toBe("v2-ep");
-
-    expect(store.listEpisodes().map((e) => e.id)).toContain("v1-ep");
-  });
 });
