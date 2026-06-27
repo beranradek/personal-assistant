@@ -7,7 +7,7 @@ import { createIndexer, type Indexer } from "./indexer.js";
 import { createRobustMemorySearch } from "./robust-search.js";
 import { initializeEpisodeMemoryRuntime } from "./episodes/runtime-probes.js";
 import type { EpisodeStore } from "./episodes/store.js";
-import type { EpisodeRecord } from "./episodes/types.js";
+import type { EpisodeRecord, EpisodeListFilters } from "./episodes/types.js";
 import { createMemoryServer } from "../tools/memory-server.js";
 
 type MemorySearchFn = (query: string, maxResults?: number) => Promise<SearchResult[]>;
@@ -31,6 +31,9 @@ export type StartupMemoryServices = {
   redact: RedactFn;
   memoryServer: unknown;
   episodeStore?: EpisodeStore;
+  listEpisodes?: (filters?: EpisodeListFilters) => EpisodeRecord[];
+  insertEpisode?: (episode: EpisodeRecord) => Promise<void>;
+  searchEpisodesVector?: (query: string, maxResults?: number) => Promise<EpisodeRecord[]>;
   fallbackTriggered: boolean;
   warningTriggered: boolean;
   episodicSurfaceExposed: boolean;
@@ -117,6 +120,10 @@ export async function initializeStartupMemoryServices(args: {
     ...(searchEpisodesVector ? { searchEpisodesVector } : {}),
   });
 
+  const listEpisodes = episodeStore
+    ? (filters?: EpisodeListFilters) => episodeStore.listEpisodes(filters)
+    : undefined;
+
   return {
     embedder,
     store,
@@ -125,6 +132,9 @@ export async function initializeStartupMemoryServices(args: {
     redact,
     memoryServer,
     episodeStore,
+    listEpisodes,
+    insertEpisode: insertEpisodeWithEmbedding,
+    searchEpisodesVector,
     fallbackTriggered: episodeRuntime.fallbackTriggered,
     warningTriggered,
     episodicSurfaceExposed: !!episodeStore,

@@ -23,6 +23,14 @@ import {
 import { z } from "zod";
 import type { SearchResult } from "../core/types.js";
 import type { AssistantServerDeps } from "./assistant-server.js";
+import {
+  EPISODE_TOOL_DEFINITIONS,
+  handleEpisodeRecent,
+  handleEpisodeSearch,
+  handleEpisodeStats,
+  handleEpisodeWrite,
+  type EpisodeMcpDeps,
+} from "./episode-mcp-tools.js";
 
 export interface StdioMcpServerDeps {
   search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
@@ -30,9 +38,10 @@ export interface StdioMcpServerDeps {
   handleExec: AssistantServerDeps["handleExec"];
   getProcessSession: AssistantServerDeps["getProcessSession"];
   listProcessSessions: AssistantServerDeps["listProcessSessions"];
+  episodeDeps?: EpisodeMcpDeps;
 }
 
-const TOOL_DEFINITIONS = [
+const BASE_TOOL_DEFINITIONS = [
   {
     name: "memory_search",
     description:
@@ -135,8 +144,12 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
     { capabilities: { tools: {} } },
   );
 
+  const toolDefinitions = deps.episodeDeps
+    ? [...BASE_TOOL_DEFINITIONS, ...EPISODE_TOOL_DEFINITIONS]
+    : BASE_TOOL_DEFINITIONS;
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS,
+    tools: toolDefinitions,
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -212,6 +225,18 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
           ],
         };
       }
+      case "episode_recent":
+        if (deps.episodeDeps) return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps);
+        break;
+      case "episode_search":
+        if (deps.episodeDeps) return handleEpisodeSearch(args as Record<string, unknown>, deps.episodeDeps);
+        break;
+      case "episode_stats":
+        if (deps.episodeDeps) return handleEpisodeStats(args as Record<string, unknown>, deps.episodeDeps);
+        break;
+      case "episode_write":
+        if (deps.episodeDeps) return handleEpisodeWrite(args as Record<string, unknown>, deps.episodeDeps);
+        break;
       default:
         return {
           content: [

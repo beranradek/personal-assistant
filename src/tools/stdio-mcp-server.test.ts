@@ -305,4 +305,115 @@ describe("createStdioMcpServer", () => {
       expect(parsed).toEqual({ error: "Unknown tool: nonexistent_tool" });
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Episodic tools (via episodeDeps)
+  // -----------------------------------------------------------------------
+  describe("episodic tools", () => {
+    const fakeEpisode = {
+      id: "ep-1",
+      startedAt: "2026-06-27T10:00:00.000Z",
+      endedAt: "2026-06-27T10:05:00.000Z",
+      source: "terminal" as const,
+      sessionKey: "terminal--default",
+      sessionId: null,
+      initiator: "user" as const,
+      action: "test action",
+      normalizedAction: "test action",
+      summary: "test summary",
+      why: null,
+      projectName: null,
+      jobName: null,
+      issueId: null,
+      pullRequestId: null,
+      detailedMemoryFile: null,
+      category: null,
+      location: null,
+      skillsUsed: [],
+      toolsUsed: [],
+      tags: [],
+      outcome: "success" as const,
+      successScore: 1,
+      blockers: [],
+      errors: [],
+      openQuestions: [],
+      relatedEpisodeIds: [],
+      model: null,
+      inputTokens: null,
+      outputTokens: null,
+      trajectory: [],
+      semanticEmbeddingText: "test action test summary",
+    };
+
+    function makeEpisodeDeps() {
+      return {
+        listEpisodes: vi.fn().mockReturnValue([fakeEpisode]),
+        insertEpisode: vi.fn().mockResolvedValue(undefined),
+        searchEpisodesVector: undefined,
+        redact: undefined,
+      };
+    }
+
+    it("includes episode tools in the tool list when episodeDeps is provided", async () => {
+      const episodeDeps = makeEpisodeDeps();
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ episodeDeps }));
+
+      const result = await getListHandler()({});
+      const names = result.tools.map((t: { name: string }) => t.name);
+      expect(names).toContain("episode_recent");
+      expect(names).toContain("episode_search");
+      expect(names).toContain("episode_stats");
+      expect(names).toContain("episode_write");
+    });
+
+    it("omits episode tools from the tool list when episodeDeps is absent", async () => {
+      const result = await getListHandler()({});
+      const names = result.tools.map((t: { name: string }) => t.name);
+      expect(names).not.toContain("episode_recent");
+      expect(names).not.toContain("episode_write");
+    });
+
+    it("episode_recent delegates to listEpisodes and returns sanitized records", async () => {
+      const episodeDeps = makeEpisodeDeps();
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ episodeDeps }));
+
+      const result = await callTool("episode_recent", { source: "terminal" });
+
+      expect(episodeDeps.listEpisodes).toHaveBeenCalled();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed[0].id).toBe("ep-1");
+    });
+
+    it("episode_write delegates to insertEpisode and returns inserted id", async () => {
+      const episodeDeps = makeEpisodeDeps();
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ episodeDeps }));
+
+      const result = await callTool("episode_write", {
+        action: "deployed fix",
+        summary: "deployed the schema migration fix",
+        outcome: "success",
+      });
+
+      expect(episodeDeps.insertEpisode).toHaveBeenCalled();
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.status).toBe("inserted");
+      expect(typeof parsed.id).toBe("string");
+    });
+
+    it("episode_stats returns aggregated counts", async () => {
+      const episodeDeps = makeEpisodeDeps();
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ episodeDeps }));
+
+      const result = await callTool("episode_stats", {});
+
+      const parsed = JSON.parse(result.content[0].text);
+      expect(parsed.totalEpisodes).toBe(1);
+      expect(parsed.byOutcome).toEqual({ success: 1 });
+    });
+  });
 });

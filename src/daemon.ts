@@ -105,7 +105,7 @@ async function createDaemonCoreFromConfig(args: {
   const createBackendImpl = args.deps?.createBackend ?? createBackend;
 
   let warningTriggered = false;
-  const { embedder, store, indexer, searchMemory, redact, memoryServer, episodeStore, fallbackTriggered, episodicSurfaceExposed } =
+  const { embedder, store, indexer, searchMemory, redact, memoryServer, episodeStore, listEpisodes, insertEpisode, searchEpisodesVector, fallbackTriggered, episodicSurfaceExposed } =
     await initializeStartupMemoryServicesImpl({
       config: args.config,
       onEpisodeWarn: (err) => {
@@ -223,6 +223,9 @@ async function createDaemonCoreFromConfig(args: {
       handleExec: (options) => handleExec(options, args.config),
       getProcessSession: getSession,
       listProcessSessions: listSessions,
+      ...(listEpisodes ? {
+        episodeDeps: { listEpisodes, insertEpisode, searchEpisodesVector, redact },
+      } : {}),
     };
     try {
       httpMcpServer = await startHttpMcpServer(mcpDeps, args.config.codex.httpMcpPort);
