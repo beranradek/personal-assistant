@@ -105,6 +105,7 @@ export const EPISODE_TOOL_DEFINITIONS = [
         jobName: { type: "string", description: "Job or task name if applicable" },
         issueId: { type: "string", description: "GitHub/Linear issue identifier" },
         pullRequestId: { type: "string", description: "Pull request identifier" },
+        detailedMemoryFile: { type: "string", description: "Path to a memory file with detailed notes about this episode (relative to workspace)" },
         category: { type: "string", description: "Task category, e.g. github-issue, deploy, review" },
         location: { type: "string", description: "Primary artifact location: file path, URL, or file:line" },
         blockers: { type: "array", items: { type: "string" }, description: "What blocked progress" },
@@ -173,8 +174,7 @@ export function sanitizeEpisodeRecord(episode: EpisodeRecord, redact?: (text: st
     openQuestions: redactUnknown(episode.openQuestions, redact) as string[],
     relatedEpisodeIds: (episode.relatedEpisodeIds ?? []).slice(),
     location: episode.location ?? null,
-    trajectoryStepCount: episode.trajectory.length,
-    trajectoryKinds: [...new Set(episode.trajectory.map((step) => step.kind))].sort(),
+    trajectory: episode.trajectory.map((step) => ({ at: step.at, kind: step.kind, label: step.label })),
   };
 }
 
@@ -351,7 +351,7 @@ export async function handleEpisodeWrite(
     jobName: (args["jobName"] as string | undefined) ?? null,
     issueId: (args["issueId"] as string | undefined) ?? null,
     pullRequestId: (args["pullRequestId"] as string | undefined) ?? null,
-    detailedMemoryFile: null,
+    detailedMemoryFile: (args["detailedMemoryFile"] as string | undefined) ?? null,
     category: (args["category"] as string | undefined) ?? null,
     location: (args["location"] as string | undefined) ?? null,
     skillsUsed: (args["skillsUsed"] as string[] | undefined) ?? [],

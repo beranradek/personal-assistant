@@ -334,15 +334,13 @@ describe("createMemoryServer", () => {
         id: "ep-2",
         action: "Implement MCP episodic retrieval",
         summary: "Added episode_search and episode_recent tools.",
-        trajectoryStepCount: 0,
-        trajectoryKinds: [],
+        trajectory: [],
       }),
       expect.objectContaining({
         id: "ep-1",
         action: "Continue with active job",
         summary: "Builder slice shipped.",
-        trajectoryStepCount: 0,
-        trajectoryKinds: [],
+        trajectory: [],
       }),
     ]);
   });
@@ -401,8 +399,8 @@ describe("createMemoryServer", () => {
       }),
     ]);
     expect(parsed[0]).not.toHaveProperty("normalizedAction");
-    expect(parsed[0]).not.toHaveProperty("trajectory");
     expect(parsed[0]).not.toHaveProperty("semanticEmbeddingText");
+    expect(parsed[0]).toHaveProperty("trajectory");
   });
 
   it("episode_search ranks deterministic text matches and respects exact filters", async () => {

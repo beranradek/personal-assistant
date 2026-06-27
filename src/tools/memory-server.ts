@@ -137,6 +137,7 @@ export function createMemoryServer(deps: {
           jobName: z.string().optional().describe("Job or task name if applicable"),
           issueId: z.string().optional().describe("GitHub/Linear issue identifier"),
           pullRequestId: z.string().optional().describe("Pull request identifier"),
+          detailedMemoryFile: z.string().optional().describe("Path to a memory file with detailed notes about this episode (relative to workspace)"),
           category: z.string().optional().describe("Task category, e.g. github-issue, deploy, review"),
           location: z.string().optional().describe("Primary artifact location: file path, URL, or file:line"),
           blockers: z.array(z.string()).optional().describe("What blocked progress"),
