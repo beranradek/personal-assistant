@@ -389,6 +389,36 @@ describe("startHttpMcpServer", () => {
 
     const res = await httpPost(handle.port);
     expect(res.status).toBe(503);
+    expect(res.body).toContain("\"code\":-32000");
+    expect(res.body).toContain("\"message\":\"MCP server shutting down\"");
+    expect(mockTransports).toHaveLength(1);
+    expect(mockServers).toHaveLength(1);
+
+    resolveServerClose?.();
+    await shutdownPromise;
+    handle = undefined;
+  });
+
+  it("rejects GET requests with JSON-RPC 503 envelope once shutdown starts", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    await httpPost(handle.port);
+
+    let resolveServerClose: (() => void) | undefined;
+    mockServers[0].close.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveServerClose = resolve;
+        }),
+    );
+
+    const shutdownPromise = handle.close();
+    await Promise.resolve();
+
+    const res = await httpRequest(handle.port, { method: "GET", body: "" });
+    expect(res.status).toBe(503);
+    expect(res.body).toContain("\"code\":-32000");
+    expect(res.body).toContain("\"message\":\"MCP server shutting down\"");
     expect(mockTransports).toHaveLength(1);
     expect(mockServers).toHaveLength(1);
 
