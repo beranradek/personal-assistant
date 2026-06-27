@@ -133,6 +133,17 @@ function httpPost(
   return httpRequest(port, { method: "POST", sessionId, body: "{}" });
 }
 
+function httpRawRequest(
+  port: number,
+  options: {
+    method?: string;
+    sessionId?: string;
+    body?: string;
+  } = {},
+): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
+  return httpRequest(port, options);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -187,6 +198,20 @@ describe("startHttpMcpServer", () => {
     handle = await startHttpMcpServer(makeDeps(), 0);
 
     const res = await httpPost(handle.port, "unknown-session-id");
+
+    expect(res.status).toBe(404);
+    expect(mockTransports).toHaveLength(0);
+    expect(mockServers).toHaveLength(0);
+  });
+
+  it("rejects unknown session before parsing malformed JSON body", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    const res = await httpRawRequest(handle.port, {
+      method: "POST",
+      sessionId: "unknown-session-id",
+      body: "{not-json",
+    });
 
     expect(res.status).toBe(404);
     expect(mockTransports).toHaveLength(0);
@@ -261,6 +286,25 @@ describe("startHttpMcpServer", () => {
     await Promise.resolve();
 
     const res = await httpRequest(handle.port, { method: "DELETE", sessionId: sid, body: "" });
+    expect(res.status).toBe(404);
+    expect(mockTransports).toHaveLength(1);
+    expect(mockServers).toHaveLength(1);
+  });
+
+  it("rejects stale session before parsing malformed JSON body", async () => {
+    handle = await startHttpMcpServer(makeDeps(), 0);
+
+    await httpPost(handle.port);
+    const sid = mockTransports[0].sessionId;
+    mockTransports[0].onclose?.();
+    await Promise.resolve();
+
+    const res = await httpRawRequest(handle.port, {
+      method: "POST",
+      sessionId: sid,
+      body: "{not-json",
+    });
+
     expect(res.status).toBe(404);
     expect(mockTransports).toHaveLength(1);
     expect(mockServers).toHaveLength(1);

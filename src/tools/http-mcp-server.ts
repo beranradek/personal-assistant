@@ -73,6 +73,13 @@ export async function startHttpMcpServer(
         return;
       }
 
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      if (sessionId && !sessions.has(sessionId)) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "MCP session not found" }));
+        return;
+      }
+
       // Buffer the full request body before handing off to the transport.
       // This is required because `StreamableHTTPServerTransport.handleRequest`
       // uses @hono/node-server to convert the Node.js request to a Web Request,
@@ -84,17 +91,8 @@ export async function startHttpMcpServer(
       const bodyStr = Buffer.concat(chunks).toString("utf8");
       const parsedBody: unknown = bodyStr ? (JSON.parse(bodyStr) as unknown) : undefined;
 
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
       if (sessionId) {
-        const session = sessions.get(sessionId);
-        if (!session) {
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "MCP session not found" }));
-          return;
-        }
-
-        await session.transport.handleRequest(req, res, parsedBody);
+        await sessions.get(sessionId)!.transport.handleRequest(req, res, parsedBody);
       } else {
         // New client — allocate a fresh transport + server pair.
         const transport = new StreamableHTTPServerTransport({
