@@ -226,17 +226,13 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
         };
       }
       case "episode_recent":
-        if (deps.episodeDeps) return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps);
-        break;
+        return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps!);
       case "episode_search":
-        if (deps.episodeDeps) return handleEpisodeSearch(args as Record<string, unknown>, deps.episodeDeps);
-        break;
+        return handleEpisodeSearch(args as Record<string, unknown>, deps.episodeDeps!);
       case "episode_stats":
-        if (deps.episodeDeps) return handleEpisodeStats(args as Record<string, unknown>, deps.episodeDeps);
-        break;
+        return handleEpisodeStats(args as Record<string, unknown>, deps.episodeDeps!);
       case "episode_write":
-        if (deps.episodeDeps) return handleEpisodeWrite(args as Record<string, unknown>, deps.episodeDeps);
-        break;
+        return handleEpisodeWrite(args as Record<string, unknown>, deps.episodeDeps!);
       default:
         return {
           content: [
