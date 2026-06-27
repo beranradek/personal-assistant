@@ -86,9 +86,15 @@ export async function startHttpMcpServer(
 
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-      if (sessionId && sessions.has(sessionId)) {
-        const { transport } = sessions.get(sessionId)!;
-        await transport.handleRequest(req, res, parsedBody);
+      if (sessionId) {
+        const session = sessions.get(sessionId);
+        if (!session) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "MCP session not found" }));
+          return;
+        }
+
+        await session.transport.handleRequest(req, res, parsedBody);
       } else {
         // New client — allocate a fresh transport + server pair.
         const transport = new StreamableHTTPServerTransport({

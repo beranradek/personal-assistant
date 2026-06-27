@@ -172,13 +172,14 @@ describe("startHttpMcpServer", () => {
     expect(mockTransports[0].handleRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("creates a new session when the mcp-session-id header is unknown", async () => {
+  it("rejects requests when the mcp-session-id header is unknown", async () => {
     handle = await startHttpMcpServer(makeDeps(), 0);
 
-    await httpPost(handle.port, "unknown-session-id");
+    const res = await httpPost(handle.port, "unknown-session-id");
 
-    expect(mockTransports).toHaveLength(1);
-    expect(mockServers[0].connect).toHaveBeenCalledOnce();
+    expect(res.status).toBe(404);
+    expect(mockTransports).toHaveLength(0);
+    expect(mockServers).toHaveLength(0);
   });
 
   it("two requests without session-id each get their own session", async () => {
@@ -223,9 +224,10 @@ describe("startHttpMcpServer", () => {
     expect(firstServer.close).toHaveBeenCalledOnce();
     expect(mockTransports[0].close).toHaveBeenCalledOnce();
 
-    // A subsequent request with the stale sid now creates a new session
-    await httpPost(handle.port, sid);
-    expect(mockTransports).toHaveLength(2);
+    // A subsequent request with the stale sid is rejected instead of silently creating a new session
+    const res = await httpPost(handle.port, sid);
+    expect(res.status).toBe(404);
+    expect(mockTransports).toHaveLength(1);
   });
 
   it("waits for session teardown already started via onclose before close() resolves", async () => {
