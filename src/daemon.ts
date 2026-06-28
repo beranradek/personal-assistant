@@ -81,6 +81,7 @@ type DaemonCoreRuntime = {
   memoryWatcher: ReturnType<typeof createMemoryWatcher>;
   memorySyncTimer: ReturnType<typeof setInterval>;
   getCurrentSyncPromise: () => Promise<void> | null;
+  stopMemorySync: () => void;
   warningTriggered: boolean;
   fallbackTriggered: boolean;
   episodicSurfaceExposed: boolean;
@@ -127,9 +128,17 @@ async function createDaemonCoreFromConfig(args: {
   });
 
   let syncInProgress = false;
+  let memorySyncStopped = false;
   let currentSyncPromise: Promise<void> | null = null;
   const getCurrentSyncPromise = () => currentSyncPromise;
+  const stopMemorySync = () => {
+    memorySyncStopped = true;
+    clearInterval(memorySyncTimer);
+    memoryWatcher.close();
+    indexer.abort();
+  };
   const syncMemoryFiles = async (reason: string) => {
+    if (memorySyncStopped) return;
     if (syncInProgress) return;
     syncInProgress = true;
     const run = async () => {
@@ -276,6 +285,7 @@ async function createDaemonCoreFromConfig(args: {
     memoryWatcher,
     memorySyncTimer,
     getCurrentSyncPromise,
+    stopMemorySync,
     warningTriggered,
     fallbackTriggered,
     episodicSurfaceExposed,
@@ -318,9 +328,7 @@ export async function runDegradedDaemonStartupProbe(args: {
   runtime.queue.processLoop(runtime.backend, args.config, runtime.router);
   runtime.queue.stop();
   runtime.cronManager.stop();
-  runtime.indexer.abort();
-  clearInterval(runtime.memorySyncTimer);
-  runtime.memoryWatcher.close();
+  runtime.stopMemorySync();
   runtime.episodeStore?.close();
   runtime.store.close();
   await runtime.embedder.close();
@@ -419,6 +427,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     memoryWatcher,
     memorySyncTimer,
     getCurrentSyncPromise,
+    stopMemorySync,
     backend,
     httpMcpServer,
   } = await createDaemonCoreFromConfig({ config, configDir });
@@ -623,6 +632,16 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Stop cron timer
     cronManager.stop();
 
+    // Stop memory reindex triggers before closing model-backed services so no
+    // periodic or watcher-driven sync can race into disposed llama contexts.
+    stopMemorySync();
+
+    // Wait for any in-flight syncFiles to drain before backend teardown.
+    const syncPromise = getCurrentSyncPromise();
+    if (syncPromise) {
+      await syncPromise.catch(() => undefined);
+    }
+
     // Close backend
     if (backend.close) {
       await backend.close();
@@ -649,18 +668,7 @@ export async function startDaemon(configDir: string): Promise<void> {
       });
     }
 
-    // Abort any in-flight indexing before disposing the embedder
-    indexer.abort();
-    clearInterval(memorySyncTimer);
-    memoryWatcher.close();
-
-    // Wait for any in-flight syncFiles to drain so the embedder context
-    // is not disposed while an embedBatch call is still running.
-    const syncPromise = getCurrentSyncPromise();
-    if (syncPromise) {
-      await syncPromise.catch(() => undefined);
-    }
-      episodeStore?.close();
+    episodeStore?.close();
     store.close();
     await embedder.close();
 

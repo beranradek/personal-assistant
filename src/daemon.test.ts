@@ -711,7 +711,8 @@ describe("daemon", () => {
     });
 
     const mockTelegramAdapter = makeMockAdapter("telegram");
-    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend, mockHttpMcpServer } = setupMocks(config);
+    const { mockQueue, mockStore, mockEmbedder, mockIndexer, mockCronManager, mockBackend, mockHttpMcpServer } =
+      setupMocks(config);
     vi.mocked(createTelegramAdapter).mockReturnValue(mockTelegramAdapter);
 
     const mockHeartbeatStop = vi.fn();
@@ -734,6 +735,10 @@ describe("daemon", () => {
     expect(mockTelegramAdapter.stop).toHaveBeenCalled();
     expect(mockHeartbeatStop).toHaveBeenCalled();
     expect(mockCronManager.stop).toHaveBeenCalled();
+    expect(mockIndexer.abort).toHaveBeenCalled();
+    expect(mockIndexer.abort.mock.invocationCallOrder[0]).toBeLessThan(
+      mockBackend.close.mock.invocationCallOrder[0],
+    );
     expect(mockBackend.close).toHaveBeenCalled();
     expect(mockHttpMcpServer.close).toHaveBeenCalled();
     expect(mockStore.close).toHaveBeenCalled();
@@ -750,7 +755,8 @@ describe("daemon", () => {
     const config = makeConfig({
       agent: { backend: "codex", model: null, maxTurns: 200 },
     });
-    const { mockQueue, mockStore, mockEmbedder, mockCronManager, mockBackend, mockHttpMcpServer } = setupMocks(config);
+    const { mockQueue, mockStore, mockEmbedder, mockIndexer, mockCronManager, mockBackend, mockHttpMcpServer } =
+      setupMocks(config);
 
     const mockHeartbeatStop = vi.fn();
     vi.mocked(createHeartbeatScheduler).mockReturnValue({ stop: mockHeartbeatStop });
@@ -768,6 +774,10 @@ describe("daemon", () => {
 
     // Verify graceful shutdown
     expect(mockQueue.stop).toHaveBeenCalled();
+    expect(mockIndexer.abort).toHaveBeenCalled();
+    expect(mockIndexer.abort.mock.invocationCallOrder[0]).toBeLessThan(
+      mockBackend.close.mock.invocationCallOrder[0],
+    );
     expect(mockBackend.close).toHaveBeenCalled();
     expect(mockHttpMcpServer.close).toHaveBeenCalled();
     expect(mockStore.close).toHaveBeenCalled();
