@@ -48,6 +48,12 @@ import {
 import { TtlMap, DAY_MS } from "../core/ttl-map.js";
 
 const log = createLogger("codex-backend");
+const MAX_SIGNAL_EXIT_ATTEMPTS = 2;
+
+function extractSignalName(errorMessage: string): string | null {
+  const match = errorMessage.match(/exited with signal ([A-Z0-9]+)/);
+  return match?.[1] ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Event mapping: Codex ThreadEvent → StreamEvent
@@ -441,8 +447,10 @@ export async function createCodexBackend(
 
       let responseText = "";
       let turnErrorYielded = false;
+      let recoveredSignal: string | null = null;
+      let recoveredFromAttempt: number | null = null;
 
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (let attempt = 0; attempt < MAX_SIGNAL_EXIT_ATTEMPTS; attempt++) {
         let yieldedUserVisibleEvent = false;
 
         try {
@@ -542,25 +550,77 @@ export async function createCodexBackend(
           if (thread.id && !threadIds.has(sessionKey)) {
             threadIds.set(sessionKey, thread.id);
           }
+          if (recoveredSignal && recoveredFromAttempt !== null) {
+            log.info(
+              {
+                attempt: attempt + 1,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "stream",
+                recovered: true,
+                recoveredFromAttempt,
+                sessionKey,
+                signal: recoveredSignal,
+              },
+              "Codex turn completed after retry",
+            );
+          }
           break;
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           const isSignalExit = /exited with signal SIG/.test(errorMessage);
+          const signal = isSignalExit ? extractSignalName(errorMessage) : null;
 
           if (turnErrorYielded) {
-            log.warn({ err, sessionKey }, "Codex process exited non-zero after turn error (already surfaced)");
+            log.warn(
+              {
+                attempt: attempt + 1,
+                err,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "stream",
+                recovered: false,
+                sessionKey,
+                signal,
+              },
+              "Codex process exited non-zero after turn error (already surfaced)",
+            );
             return;
           }
 
           if (isSignalExit && !yieldedUserVisibleEvent && attempt === 0) {
-            log.warn({ err, sessionKey }, "Codex turn interrupted before streaming output; retrying fresh thread");
+            log.warn(
+              {
+                attempt: attempt + 1,
+                err,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "stream",
+                recovered: false,
+                retryScheduled: true,
+                sessionKey,
+                signal,
+              },
+              "Codex turn interrupted before streaming output; retrying fresh thread",
+            );
             threadIds.delete(sessionKey);
+            recoveredSignal = signal;
+            recoveredFromAttempt = attempt + 1;
             responseText = "";
             continue;
           }
 
           if (isSignalExit) {
-            log.warn({ err, sessionKey }, "Codex turn interrupted by signal");
+            log.warn(
+              {
+                attempt: attempt + 1,
+                err,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "stream",
+                recovered: false,
+                retryScheduled: false,
+                sessionKey,
+                signal,
+              },
+              "Codex turn interrupted by signal",
+            );
           } else {
             log.error({ err, sessionKey }, "Codex turn failed");
           }
@@ -635,7 +695,10 @@ export async function createCodexBackend(
         redact,
       );
 
-      for (let attempt = 0; attempt < 2; attempt++) {
+      let recoveredSignal: string | null = null;
+      let recoveredFromAttempt: number | null = null;
+
+      for (let attempt = 0; attempt < MAX_SIGNAL_EXIT_ATTEMPTS; attempt++) {
         try {
           const existingThreadId = threadIds.get(sessionKey);
           let thread: Thread;
@@ -678,17 +741,59 @@ export async function createCodexBackend(
           } as const;
           await appendAuditEntry(config.security.workspace, auditEntry, redact);
 
+          if (recoveredSignal && recoveredFromAttempt !== null) {
+            log.info(
+              {
+                attempt: attempt + 1,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "sync",
+                recovered: true,
+                recoveredFromAttempt,
+                sessionKey,
+                signal: recoveredSignal,
+              },
+              "Codex sync turn completed after retry",
+            );
+          }
+
           return { response: responseText, messages: turnMessages, partial: false };
         } catch (err) {
           const errorMessage = err instanceof Error ? err.message : String(err);
           const isSignalExit = /exited with signal SIG/.test(errorMessage);
+          const signal = isSignalExit ? extractSignalName(errorMessage) : null;
           if (isSignalExit && attempt === 0) {
-            log.warn({ err, sessionKey }, "Codex sync turn interrupted before result; retrying fresh thread");
+            log.warn(
+              {
+                attempt: attempt + 1,
+                err,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "sync",
+                recovered: false,
+                retryScheduled: true,
+                sessionKey,
+                signal,
+              },
+              "Codex sync turn interrupted before result; retrying fresh thread",
+            );
             threadIds.delete(sessionKey);
+            recoveredSignal = signal;
+            recoveredFromAttempt = attempt + 1;
             continue;
           }
           if (isSignalExit) {
-            log.warn({ err, sessionKey }, "Codex turn interrupted by signal");
+            log.warn(
+              {
+                attempt: attempt + 1,
+                err,
+                maxAttempts: MAX_SIGNAL_EXIT_ATTEMPTS,
+                phase: "sync",
+                recovered: false,
+                retryScheduled: false,
+                sessionKey,
+                signal,
+              },
+              "Codex turn interrupted by signal",
+            );
           } else {
             log.error({ err, sessionKey }, "Codex turn failed (sync)");
           }

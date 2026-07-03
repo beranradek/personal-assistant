@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Use vi.hoisted so the mock factory can reference these
-const { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread, capturedCodexOptions } = vi.hoisted(() => {
+const { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread, capturedCodexOptions, mockLog } = vi.hoisted(() => {
+  const mockLog = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
   /** Captured options passed to the Codex constructor (last call wins). */
   const capturedCodexOptions: { value: Record<string, unknown> | undefined } = { value: undefined };
   /**
@@ -58,7 +64,7 @@ const { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThr
   const mockStartThread = vi.fn();
   const mockResumeThread = vi.fn();
 
-  return { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread, capturedCodexOptions };
+  return { makeMockThread, makeMockThreadWithEvents, mockStartThread, mockResumeThread, capturedCodexOptions, mockLog };
 });
 
 vi.mock("@openai/codex-sdk", () => ({
@@ -80,6 +86,9 @@ vi.mock("../memory/daily-log.js", () => ({
 }));
 vi.mock("../memory/files.js", () => ({
   readMemoryFiles: vi.fn().mockResolvedValue("Memory content here"),
+}));
+vi.mock("../core/logger.js", () => ({
+  createLogger: vi.fn(() => mockLog),
 }));
 
 import { createCodexBackend } from "./codex.js";
@@ -452,6 +461,30 @@ describe("createCodexBackend", () => {
 
       expect(mockStartThread).toHaveBeenCalledTimes(2);
       expect(events.at(-1)?.response).toBe("Recovered after retry");
+      expect(mockLog.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attempt: 1,
+          maxAttempts: 2,
+          phase: "stream",
+          recovered: false,
+          retryScheduled: true,
+          sessionKey: "test--retry-stream",
+          signal: "SIGKILL",
+        }),
+        "Codex turn interrupted before streaming output; retrying fresh thread",
+      );
+      expect(mockLog.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attempt: 2,
+          maxAttempts: 2,
+          phase: "stream",
+          recovered: true,
+          recoveredFromAttempt: 1,
+          sessionKey: "test--retry-stream",
+          signal: "SIGKILL",
+        }),
+        "Codex turn completed after retry",
+      );
     });
   });
 
@@ -674,6 +707,30 @@ describe("createCodexBackend", () => {
 
       expect(mockStartThread).toHaveBeenCalledTimes(2);
       expect(result.response).toBe("Recovered sync");
+      expect(mockLog.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attempt: 1,
+          maxAttempts: 2,
+          phase: "sync",
+          recovered: false,
+          retryScheduled: true,
+          sessionKey: "test--retry-sync",
+          signal: "SIGKILL",
+        }),
+        "Codex sync turn interrupted before result; retrying fresh thread",
+      );
+      expect(mockLog.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attempt: 2,
+          maxAttempts: 2,
+          phase: "sync",
+          recovered: true,
+          recoveredFromAttempt: 1,
+          sessionKey: "test--retry-sync",
+          signal: "SIGKILL",
+        }),
+        "Codex sync turn completed after retry",
+      );
     });
   });
 
