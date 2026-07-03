@@ -909,6 +909,38 @@ describe("MessageQueue", () => {
       );
     });
 
+    it("stops processing accumulator and sends error response when streaming backend throws", async () => {
+      const config = makeConfig();
+      const backend = makeBackend({
+        runTurn: vi.fn(async function* () {
+          throw new Error("Codex agent turn failed: backend crash");
+        }) as unknown as AgentBackend["runTurn"],
+      });
+      const router = createRouter();
+      const adapter = makeStreamingAdapter("telegram");
+      router.register(adapter);
+
+      const mockAcc = {
+        handleEvent: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        trimSuffixFromProcessingMessage: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(createProcessingAccumulator).mockReturnValue(mockAcc);
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ source: "telegram", sourceId: "123456" }));
+
+      await queue.processNext(backend, config, router);
+
+      expect(mockAcc.stop).toHaveBeenCalled();
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("something went wrong"),
+        }),
+      );
+    });
+
     it("passes processingUpdateIntervalMs from config to accumulator", async () => {
       const config = makeConfig({
         gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 3000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },

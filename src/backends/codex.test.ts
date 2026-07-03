@@ -433,6 +433,26 @@ describe("createCodexBackend", () => {
       expect(errorEvents).toHaveLength(1);
       expect(errorEvents[0].error).toBe("Connection lost");
     });
+
+    it("retries once when streaming turn exits with a signal before any events", async () => {
+      const firstThread = {
+        id: "thread-signal-1",
+        runStreamed: vi.fn().mockRejectedValue(
+          new Error("Codex Exec exited with signal SIGKILL: Reading prompt from stdin...\n"),
+        ),
+        run: vi.fn(),
+      };
+      const secondThread = makeMockThread("thread-signal-2", "Recovered after retry");
+      mockStartThread
+        .mockReturnValueOnce(firstThread)
+        .mockReturnValueOnce(secondThread);
+
+      const backend = await createCodexBackend(makeConfig());
+      const events = await collectEvents(backend.runTurn("retry me", "test--retry-stream"));
+
+      expect(mockStartThread).toHaveBeenCalledTimes(2);
+      expect(events.at(-1)?.response).toBe("Recovered after retry");
+    });
   });
 
   // -----------------------------------------------------------------------
@@ -634,6 +654,26 @@ describe("createCodexBackend", () => {
       expect(mockResumeThread).toHaveBeenCalledTimes(1);
       // 1 from establish + 1 from fallback
       expect(mockStartThread).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries once when sync turn exits with a signal before any result", async () => {
+      const firstThread = {
+        id: "thread-sync-signal-1",
+        runStreamed: vi.fn(),
+        run: vi.fn().mockRejectedValue(
+          new Error("Codex Exec exited with signal SIGKILL: Reading prompt from stdin...\n"),
+        ),
+      };
+      const secondThread = makeMockThread("thread-sync-signal-2", "Recovered sync");
+      mockStartThread
+        .mockReturnValueOnce(firstThread)
+        .mockReturnValueOnce(secondThread);
+
+      const backend = await createCodexBackend(makeConfig());
+      const result = await backend.runTurnSync("retry sync", "test--retry-sync");
+
+      expect(mockStartThread).toHaveBeenCalledTimes(2);
+      expect(result.response).toBe("Recovered sync");
     });
   });
 

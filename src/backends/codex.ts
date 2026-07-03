@@ -442,126 +442,132 @@ export async function createCodexBackend(
       let responseText = "";
       let turnErrorYielded = false;
 
-      try {
-        // Get or create thread
-        const existingThreadId = threadIds.get(sessionKey);
-        let thread: Thread;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let yieldedUserVisibleEvent = false;
 
-        if (existingThreadId) {
-          try {
-            thread = codex.resumeThread(existingThreadId, threadOptions);
-          } catch (err) {
-            log.warn({ err, threadId: existingThreadId }, "failed to resume thread, starting fresh");
-            threadIds.delete(sessionKey);
+        try {
+          const existingThreadId = threadIds.get(sessionKey);
+          let thread: Thread;
+
+          if (existingThreadId) {
+            try {
+              thread = codex.resumeThread(existingThreadId, threadOptions);
+            } catch (err) {
+              log.warn({ err, threadId: existingThreadId }, "failed to resume thread, starting fresh");
+              threadIds.delete(sessionKey);
+              thread = codex.startThread(threadOptions);
+            }
+          } else {
             thread = codex.startThread(threadOptions);
           }
-        } else {
-          thread = codex.startThread(threadOptions);
-        }
 
-        // Stream the turn
-        const streamed = await thread.runStreamed(message);
+          const streamed = await thread.runStreamed(message);
 
-        // C2: Track active tool for synthetic tool_progress events
-        let stopProgress: (() => void) | null = null;
-        const pendingProgressEvents: StreamEvent[] = [];
+          let stopProgress: (() => void) | null = null;
+          const pendingProgressEvents: StreamEvent[] = [];
 
-        for await (const event of streamed.events) {
-          const te = event as ThreadEvent;
+          for await (const event of streamed.events) {
+            const te = event as ThreadEvent;
 
-          switch (te.type) {
-            case "thread.started":
-              if (thread.id) {
-                threadIds.set(sessionKey, thread.id);
-              }
-              break;
-
-            case "item.started": {
-              const startEvent = mapItemStarted((te as ItemStartedEvent).item);
-              if (startEvent) {
-                // Stop any existing progress timer
-                if (stopProgress) stopProgress();
-                // Start synthetic tool_progress for this tool
-                stopProgress = startProgressTimer(
-                  startEvent.type === "tool_start" ? startEvent.toolName : "",
-                  (evt) => pendingProgressEvents.push(evt),
-                );
-                yield startEvent;
-              }
-              break;
-            }
-
-            case "item.completed": {
-              // Stop progress timer when item completes
-              if (stopProgress) {
-                stopProgress();
-                stopProgress = null;
-              }
-              // Yield any pending progress events
-              for (const pe of pendingProgressEvents) {
-                yield pe;
-              }
-              pendingProgressEvents.length = 0;
-
-              const completeEvent = mapItemCompleted((te as ItemCompletedEvent).item);
-              if (completeEvent) {
-                if (completeEvent.type === "text_delta") {
-                  responseText += completeEvent.text;
+            switch (te.type) {
+              case "thread.started":
+                if (thread.id) {
+                  threadIds.set(sessionKey, thread.id);
                 }
-                yield completeEvent;
+                break;
+
+              case "item.started": {
+                const startEvent = mapItemStarted((te as ItemStartedEvent).item);
+                if (startEvent) {
+                  if (stopProgress) stopProgress();
+                  stopProgress = startProgressTimer(
+                    startEvent.type === "tool_start" ? startEvent.toolName : "",
+                    (evt) => pendingProgressEvents.push(evt),
+                  );
+                  yieldedUserVisibleEvent = true;
+                  yield startEvent;
+                }
+                break;
               }
-              break;
-            }
 
-            // I1 fix: extract error from te.error.message, not te.message
-            case "turn.failed": {
-              if (stopProgress) { stopProgress(); stopProgress = null; }
-              const tf = te as TurnFailedEvent;
-              const tfMsg = tf.error?.message ?? "Turn failed";
-              yield { type: "error", error: redact ? redact(tfMsg) : tfMsg };
-              turnErrorYielded = true;
-              break;
-            }
+              case "item.completed": {
+                if (stopProgress) {
+                  stopProgress();
+                  stopProgress = null;
+                }
+                for (const pe of pendingProgressEvents) {
+                  yieldedUserVisibleEvent = true;
+                  yield pe;
+                }
+                pendingProgressEvents.length = 0;
 
-            case "error": {
-              if (stopProgress) { stopProgress(); stopProgress = null; }
-              const err = te as ThreadErrorEvent;
-              const errMsg = err.message ?? "Codex error";
-              yield { type: "error", error: redact ? redact(errMsg) : errMsg };
-              turnErrorYielded = true;
-              break;
-            }
+                const completeEvent = mapItemCompleted((te as ItemCompletedEvent).item);
+                if (completeEvent) {
+                  if (completeEvent.type === "text_delta") {
+                    responseText += completeEvent.text;
+                  }
+                  yieldedUserVisibleEvent = true;
+                  yield completeEvent;
+                }
+                break;
+              }
 
-            // item.updated, turn.started, turn.completed — no action needed during streaming
-            default:
-              break;
+              case "turn.failed": {
+                if (stopProgress) { stopProgress(); stopProgress = null; }
+                const tf = te as TurnFailedEvent;
+                const tfMsg = tf.error?.message ?? "Turn failed";
+                yieldedUserVisibleEvent = true;
+                yield { type: "error", error: redact ? redact(tfMsg) : tfMsg };
+                turnErrorYielded = true;
+                break;
+              }
+
+              case "error": {
+                if (stopProgress) { stopProgress(); stopProgress = null; }
+                const err = te as ThreadErrorEvent;
+                const errMsg = err.message ?? "Codex error";
+                yieldedUserVisibleEvent = true;
+                yield { type: "error", error: redact ? redact(errMsg) : errMsg };
+                turnErrorYielded = true;
+                break;
+              }
+
+              default:
+                break;
+            }
           }
-        }
 
-        // Clean up any lingering progress timer
-        if (stopProgress) stopProgress();
+          if (stopProgress) stopProgress();
 
-        // Capture thread ID after the turn
-        if (thread.id && !threadIds.has(sessionKey)) {
-          threadIds.set(sessionKey, thread.id);
-        }
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        if (turnErrorYielded) {
-          // A meaningful error (turn.failed / error event) was already surfaced to
-          // the user. The SDK throws here only because the process exited non-zero
-          // after the turn — log it but don't overwrite the real error message.
-          log.warn({ err, sessionKey }, "Codex process exited non-zero after turn error (already surfaced)");
-        } else {
+          if (thread.id && !threadIds.has(sessionKey)) {
+            threadIds.set(sessionKey, thread.id);
+          }
+          break;
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
           const isSignalExit = /exited with signal SIG/.test(errorMessage);
+
+          if (turnErrorYielded) {
+            log.warn({ err, sessionKey }, "Codex process exited non-zero after turn error (already surfaced)");
+            return;
+          }
+
+          if (isSignalExit && !yieldedUserVisibleEvent && attempt === 0) {
+            log.warn({ err, sessionKey }, "Codex turn interrupted before streaming output; retrying fresh thread");
+            threadIds.delete(sessionKey);
+            responseText = "";
+            continue;
+          }
+
           if (isSignalExit) {
-            log.warn({ err, sessionKey }, "Codex turn interrupted by signal (shutdown)");
+            log.warn({ err, sessionKey }, "Codex turn interrupted by signal");
           } else {
             log.error({ err, sessionKey }, "Codex turn failed");
-            yield { type: "error", error: redact ? redact(errorMessage) : errorMessage };
           }
+
+          const safeMessage = redact ? redact(errorMessage) : errorMessage;
+          throw new Error(`Codex agent turn failed: ${safeMessage}`);
         }
-        return;
       }
 
       // Save session + audit
@@ -629,60 +635,69 @@ export async function createCodexBackend(
         redact,
       );
 
-      try {
-        const existingThreadId = threadIds.get(sessionKey);
-        let thread: Thread;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const existingThreadId = threadIds.get(sessionKey);
+          let thread: Thread;
 
-        if (existingThreadId) {
-          try {
-            thread = codex.resumeThread(existingThreadId, threadOptions);
-          } catch {
-            threadIds.delete(sessionKey);
+          if (existingThreadId) {
+            try {
+              thread = codex.resumeThread(existingThreadId, threadOptions);
+            } catch {
+              threadIds.delete(sessionKey);
+              thread = codex.startThread(threadOptions);
+            }
+          } else {
             thread = codex.startThread(threadOptions);
           }
-        } else {
-          thread = codex.startThread(threadOptions);
+
+          const result = await thread.run(message);
+
+          if (thread.id) {
+            threadIds.set(sessionKey, thread.id);
+          }
+
+          const responseText = result.finalResponse ?? extractResponseText(result.items);
+
+          turnMessages.push({
+            role: "assistant",
+            content: responseText,
+            timestamp: new Date().toISOString(),
+          });
+
+          await saveInteraction(sessionKey, turnMessages, config, redact);
+          turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
+          const auditEntry = {
+            timestamp: new Date().toISOString(),
+            source: sessionKey.split("--")[0],
+            sessionKey,
+            type: "interaction",
+            userMessage: message,
+            assistantResponse: responseText,
+            ...(taskContext ? { taskContext } : {}),
+          } as const;
+          await appendAuditEntry(config.security.workspace, auditEntry, redact);
+
+          return { response: responseText, messages: turnMessages, partial: false };
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          const isSignalExit = /exited with signal SIG/.test(errorMessage);
+          if (isSignalExit && attempt === 0) {
+            log.warn({ err, sessionKey }, "Codex sync turn interrupted before result; retrying fresh thread");
+            threadIds.delete(sessionKey);
+            continue;
+          }
+          if (isSignalExit) {
+            log.warn({ err, sessionKey }, "Codex turn interrupted by signal");
+          } else {
+            log.error({ err, sessionKey }, "Codex turn failed (sync)");
+          }
+          const safeMessage = redact ? redact(errorMessage) : errorMessage;
+          throw new Error(`Codex agent turn failed: ${safeMessage}`);
         }
-
-        const result = await thread.run(message);
-
-        if (thread.id) {
-          threadIds.set(sessionKey, thread.id);
-        }
-
-        const responseText = result.finalResponse ?? extractResponseText(result.items);
-
-        turnMessages.push({
-          role: "assistant",
-          content: responseText,
-          timestamp: new Date().toISOString(),
-        });
-
-        await saveInteraction(sessionKey, turnMessages, config, redact);
-        turnCounts.set(sessionKey, (turnCounts.get(sessionKey) ?? 0) + 1);
-        const auditEntry = {
-          timestamp: new Date().toISOString(),
-          source: sessionKey.split("--")[0],
-          sessionKey,
-          type: "interaction",
-          userMessage: message,
-          assistantResponse: responseText,
-          ...(taskContext ? { taskContext } : {}),
-        } as const;
-        await appendAuditEntry(config.security.workspace, auditEntry, redact);
-
-        return { response: responseText, messages: turnMessages, partial: false };
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        const isSignalExit = /exited with signal SIG/.test(errorMessage);
-        if (isSignalExit) {
-          log.warn({ err, sessionKey }, "Codex turn interrupted by signal (shutdown)");
-        } else {
-          log.error({ err, sessionKey }, "Codex turn failed (sync)");
-        }
-        const safeMessage = redact ? redact(errorMessage) : errorMessage;
-        throw new Error(`Codex agent turn failed: ${safeMessage}`);
       }
+
+      throw new Error("Codex agent turn failed: retry loop exhausted");
     },
 
     clearSession(sessionKey: string): void {

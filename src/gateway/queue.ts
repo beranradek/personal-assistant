@@ -236,29 +236,31 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
           let finalText = "";
           let sawTool = false;
 
-          const taskContext = deriveAuditTaskContext(message);
-          for await (const event of backend.runTurn(
-            message.text,
-            sessionKey,
-            taskContext,
-          )) {
-            accumulator.handleEvent(event);
-            if (event.type === "tool_start") {
-              finalText = "";
-              sawTool = true;
+          try {
+            const taskContext = deriveAuditTaskContext(message);
+            for await (const event of backend.runTurn(
+              message.text,
+              sessionKey,
+              taskContext,
+            )) {
+              accumulator.handleEvent(event);
+              if (event.type === "tool_start") {
+                finalText = "";
+                sawTool = true;
+              }
+              if (event.type === "text_delta") {
+                finalText += event.text;
+              }
+              if (event.type === "result") {
+                resultEvent = event;
+              }
+              if (event.type === "error") {
+                resultEvent = { response: event.error, messages: [], partial: true };
+              }
             }
-            if (event.type === "text_delta") {
-              finalText += event.text;
-            }
-            if (event.type === "result") {
-              resultEvent = event;
-            }
-            if (event.type === "error") {
-              resultEvent = { response: event.error, messages: [], partial: true };
-            }
+          } finally {
+            await accumulator.stop();
           }
-
-          await accumulator.stop();
 
           // If tools were used and there is text after the last tool call,
           // send only that tail text (the rest was already shown in the
