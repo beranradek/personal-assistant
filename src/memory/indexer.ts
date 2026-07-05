@@ -15,6 +15,60 @@ export interface Chunk {
   endLine: number;
 }
 
+function countNewlines(text: string): number {
+  let count = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") count++;
+  }
+  return count;
+}
+
+function splitOversizedChunk(
+  chunk: Chunk,
+  maxChars: number,
+  overlapChars: number,
+): Chunk[] {
+  if (chunk.text.length <= maxChars) return [chunk];
+
+  const pieces: Chunk[] = [];
+  const text = chunk.text;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const windowEnd = Math.min(cursor + maxChars, text.length);
+    let end = windowEnd;
+
+    if (windowEnd < text.length) {
+      const newlineIdx = text.lastIndexOf("\n", windowEnd - 1);
+      if (newlineIdx >= cursor) {
+        end = newlineIdx + 1;
+      }
+    }
+
+    if (end <= cursor) {
+      end = windowEnd;
+    }
+
+    const pieceText = text.slice(cursor, end);
+    const prefix = text.slice(0, cursor);
+    const startLine = chunk.startLine + countNewlines(prefix);
+    const endLine = startLine + countNewlines(pieceText);
+
+    pieces.push({
+      text: pieceText,
+      startLine,
+      endLine,
+    });
+
+    if (end >= text.length) break;
+
+    const nextCursor = Math.max(end - overlapChars, cursor + 1);
+    cursor = nextCursor;
+  }
+
+  return pieces;
+}
+
 export interface Indexer {
   syncFiles(filePaths: string[]): Promise<void>;
   markDirty(): void;
@@ -145,7 +199,9 @@ export function chunkText(
     }
   }
 
-  return chunks;
+  return chunks.flatMap((chunk) =>
+    splitOversizedChunk(chunk, maxChars, overlapChars),
+  );
 }
 
 // ─── createIndexer ──────────────────────────────────────────────────

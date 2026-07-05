@@ -195,6 +195,18 @@ describe("chunkText", () => {
     // Last chunk must cover the final line
     expect(chunks[chunks.length - 1].endLine).toBe(200);
   });
+
+  it("hard-splits an oversized single line so no chunk exceeds the character budget", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkText(text, { tokens: 400, overlap: 80 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(1600);
+      expect(chunk.startLine).toBe(1);
+      expect(chunk.endLine).toBe(1);
+    }
+  });
 });
 
 // ─── createIndexer / syncFiles ───────────────────────────────────────
@@ -250,6 +262,22 @@ describe("Indexer", () => {
       const results = store.searchKeyword("export const", 10);
       expect(results.length).toBeGreaterThanOrEqual(1);
       expect(results[0].path).toBe(file);
+    });
+
+    it("indexes a file containing an oversized single line without sending oversize chunks to the embedder", async () => {
+      const file = createTempFile("long-line.md", "x".repeat(2500));
+      const recordedLengths: number[] = [];
+      const originalEmbedBatch = embedder.embedBatch.bind(embedder);
+      embedder.embedBatch = async (texts: string[]) => {
+        recordedLengths.push(...texts.map((text) => text.length));
+        return originalEmbedBatch(texts);
+      };
+
+      await indexer.syncFiles([file]);
+
+      expect(recordedLengths.length).toBeGreaterThan(1);
+      expect(Math.max(...recordedLengths)).toBeLessThanOrEqual(1600);
+      expect(store.getFileHash(file)).not.toBeNull();
     });
 
     it("only re-indexes files whose hash changed since last sync", async () => {
