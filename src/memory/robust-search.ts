@@ -4,6 +4,7 @@ import { collectMemoryFiles } from "./collect-files.js";
 import type { SearchResult } from "../core/types.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { VectorStore } from "./vector-store.js";
+import { readTextFileSafely } from "./text-file.js";
 
 function stripDiacritics(input: string): string {
   return input.normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -38,12 +39,11 @@ async function grepLikeFallbackSearch(
   if (tokens.length >= 8) minMatch = 3;
 
   for (const filePath of filePaths) {
-    let content: string;
-    try {
-      content = await fs.readFile(filePath, "utf8");
-    } catch {
+    const file = await readTextFileSafely(filePath);
+    if (!file.ok) {
       continue;
     }
+    const { content } = file;
 
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {

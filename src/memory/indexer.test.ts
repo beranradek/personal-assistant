@@ -351,6 +351,16 @@ describe("Indexer", () => {
       expect(store.getFileHash(file2)).not.toBeNull();
       expect(store.getFileHash(file3)).not.toBeNull();
     });
+
+    it("skips files that contain binary content", async () => {
+      const file = path.join(tmpDir, "binary.md");
+      fs.writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));
+
+      await indexer.syncFiles([file]);
+
+      expect(store.getFileHash(file)).toBeNull();
+      expect(store.searchKeyword("PNG", 10)).toEqual([]);
+    });
   });
 
   describe("isDirty / markDirty / syncIfDirty", () => {

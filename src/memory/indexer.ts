@@ -4,6 +4,7 @@ import * as crypto from "node:crypto";
 import { createLogger } from "../core/logger.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { VectorStore } from "./vector-store.js";
+import { readTextFileSafely } from "./text-file.js";
 
 const log = createLogger("indexer");
 
@@ -238,16 +239,13 @@ export function createIndexer(
           log.info("Indexing aborted by shutdown");
           return;
         }
-        let content: string;
-        let stat: { mtimeMs: number; size: number };
-        try {
-          content = await fs.readFile(filePath, "utf-8");
-          const statResult = await fs.stat(filePath);
-          stat = { mtimeMs: statResult.mtimeMs, size: statResult.size };
-        } catch (err) {
-          log.debug({ filePath, err }, "Skipping unreadable file");
+
+        const file = await readTextFileSafely(filePath);
+        if (!file.ok) {
+          log.debug({ filePath, reason: file.reason }, "Skipping non-text memory file");
           continue;
         }
+        const { content, stat } = file;
 
         // Compute hash of the file content
         const hash = crypto.createHash("sha256").update(content).digest("hex");
