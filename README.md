@@ -104,6 +104,7 @@ NODE_MAX_CPUS=1 MEMORY_HIGH=2500M MEMORY_MAX=3200M scripts/install-pa-daemon-res
 systemctl --user daemon-reload
 systemctl --user restart pa-daemon
 systemctl --user status pa-daemon --no-pager
+scripts/check-pa-daemon-resource-caps.sh
 ```
 
 This installs:
