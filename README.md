@@ -94,6 +94,27 @@ systemctl --user enable --now pa-daemon
 Logs can be observed via `journalctl --user -u pa-daemon -n 100 --no-pager`, or precisely:
 `journalctl --user -u pa-daemon --since "24 hours ago" --no-pager -o cat | grep -E "ERROR|FATAL|Unhandled|uncaughtException|UnhandledPromiseRejection" -A 15 -B 3` 
 
+#### Optional: resource caps for small VPS hosts
+
+If the daemon runs on a small machine such as Hetzner CAX11 (`2 vCPU / 4 GB RAM`), CPU-heavy repo commands like `pnpm test` / `pnpm lint` can oversubscribe the box and destabilize agent sessions. A workspace helper is available to install central caps for `pa-daemon.service`:
+
+```bash
+cd ~/.personal-assistant/workspace
+NODE_MAX_CPUS=1 MEMORY_HIGH=2500M MEMORY_MAX=3200M scripts/install-pa-daemon-resource-caps.sh
+systemctl --user daemon-reload
+systemctl --user restart pa-daemon
+systemctl --user status pa-daemon --no-pager
+```
+
+This installs:
+
+- `taskset` wrappers for `node`, `npm`, `npx`, and `pnpm`
+- `UV_THREADPOOL_SIZE` and `npm_config_jobs`
+- `BASH_ENV` / `ENV` plus login-shell bootstrap so the cap also applies inside `bash -lc`
+- a systemd drop-in with `MemoryHigh`, `MemoryMax`, and `TasksMax`
+
+Start conservative on CAX11 with `NODE_MAX_CPUS=1`, then raise to `2` only if the daemon stays stable and the workload is still too slow.
+
 ### Terminal Mode
 
 Interactive terminal for direct conversation. Type messages and get responses. Press `Ctrl+C` to exit.
