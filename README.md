@@ -100,7 +100,7 @@ If the daemon runs on a small machine such as Hetzner CAX11 (`2 vCPU / 4 GB RAM`
 
 ```bash
 cd ~/.personal-assistant/workspace
-NODE_MAX_CPUS=1 MEMORY_HIGH=2500M MEMORY_MAX=3200M scripts/install-pa-daemon-resource-caps.sh
+NODE_MAX_CPUS=1 NODE_MAX_OLD_SPACE_MIB=1536 MEMORY_HIGH=2500M MEMORY_MAX=3200M scripts/install-pa-daemon-resource-caps.sh
 systemctl --user daemon-reload
 systemctl --user restart pa-daemon
 systemctl --user status pa-daemon --no-pager
@@ -110,9 +110,10 @@ scripts/check-pa-daemon-resource-caps.sh
 This installs:
 
 - `taskset` wrappers for `node`, `npm`, `npx`, and `pnpm`
-- `UV_THREADPOOL_SIZE` and `npm_config_jobs`
+- `UV_THREADPOOL_SIZE`, `npm_config_jobs`, and `VITEST_MAX_WORKERS`
+- `NODE_OPTIONS=--max-old-space-size=...` for a per-process Node/V8 heap cap
 - `BASH_ENV` / `ENV` plus login-shell bootstrap so the cap also applies inside `bash -lc`
-- a systemd drop-in with `MemoryHigh`, `MemoryMax`, and `TasksMax`
+- a systemd drop-in with `CPUQuota`, `MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `TasksMax`, and `Nice`
 
 Start conservative on CAX11 with `NODE_MAX_CPUS=1`, then raise to `2` only if the daemon stays stable and the workload is still too slow.
 
