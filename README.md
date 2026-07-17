@@ -116,6 +116,15 @@ This installs:
 
 Start conservative on CAX11 with `NODE_MAX_CPUS=1`, then raise to `2` only if the daemon stays stable and the workload is still too slow.
 
+To remove the caps again:
+
+```bash
+cd ~/.personal-assistant/workspace
+scripts/uninstall-pa-daemon-resource-caps.sh
+systemctl --user daemon-reload
+systemctl --user restart pa-daemon
+```
+
 ### Terminal Mode
 
 Interactive terminal for direct conversation. Type messages and get responses. Press `Ctrl+C` to exit.
