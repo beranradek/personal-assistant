@@ -77,6 +77,7 @@ export const DEFAULTS: Config = {
   gateway: {
     maxQueueSize: 20,
     processingUpdateIntervalMs: 5000,
+    workloadLockFiles: ["~/.personal-assistant/workspace/tmp/autoworker-heavy-tests.lock"],
     rateLimiter: { enabled: true, windowMs: 60_000, maxRequests: 20 },
   },
   agent: { backend: "claude" as const, model: null, maxTurns: 200 },
@@ -260,6 +261,7 @@ export function loadConfig(configDir: string): Config {
   // Resolve ~ in path fields
   config.security.workspace = resolveUserPath(config.security.workspace);
   config.security.dataDir = resolveUserPath(config.security.dataDir);
+  config.gateway.workloadLockFiles = config.gateway.workloadLockFiles.map(resolveUserPath);
 
   return config;
 }

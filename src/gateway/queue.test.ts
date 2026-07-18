@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AdapterMessage, Adapter, Config } from "../core/types.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -49,7 +52,7 @@ function makeMessage(overrides: Partial<AdapterMessage> = {}): AdapterMessage {
 }
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
+  const base: Config = {
     security: {
       allowedCommands: [],
       commandsNeedingExtraValidation: [],
@@ -91,7 +94,12 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       activeHours: "8-21",
       deliverTo: "last" as const,
     },
-    gateway: { maxQueueSize: 5, processingUpdateIntervalMs: 5000, rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 } },
+    gateway: {
+      maxQueueSize: 5,
+      processingUpdateIntervalMs: 5000,
+      workloadLockFiles: [],
+      rateLimiter: { enabled: false, windowMs: 60_000, maxRequests: 20 },
+    },
     agent: { backend: "claude" as const, model: null, maxTurns: 10 },
     session: { maxHistoryMessages: 50, compactionEnabled: false },
     memory: {
@@ -130,7 +138,72 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       skipGitRepoCheck: true,
       configOverrides: {},
     },
+  };
+
+  return {
+    ...base,
     ...overrides,
+    security: { ...base.security, ...overrides.security },
+    adapters: {
+      telegram: {
+        ...base.adapters.telegram,
+        ...overrides.adapters?.telegram,
+        audio: {
+          ...base.adapters.telegram.audio,
+          ...overrides.adapters?.telegram?.audio,
+        },
+      },
+      slack: {
+        ...base.adapters.slack,
+        ...overrides.adapters?.slack,
+      },
+    },
+    heartbeat: { ...base.heartbeat, ...overrides.heartbeat },
+    gateway: {
+      ...base.gateway,
+      ...overrides.gateway,
+      rateLimiter: {
+        ...base.gateway.rateLimiter,
+        ...overrides.gateway?.rateLimiter,
+      },
+    },
+    agent: { ...base.agent, ...overrides.agent },
+    session: { ...base.session, ...overrides.session },
+    memory: {
+      ...base.memory,
+      ...overrides.memory,
+      search: {
+        ...base.memory.search,
+        ...overrides.memory?.search,
+        hybridWeights: {
+          ...base.memory.search.hybridWeights,
+          ...overrides.memory?.search?.hybridWeights,
+        },
+      },
+      extraPaths: overrides.memory?.extraPaths ?? base.memory.extraPaths,
+    },
+    reflection: { ...base.reflection, ...overrides.reflection },
+    integApi: {
+      ...base.integApi,
+      ...overrides.integApi,
+      contentFilter: {
+        ...base.integApi.contentFilter,
+        ...overrides.integApi?.contentFilter,
+      },
+      services: {
+        gmail: {
+          ...base.integApi.services.gmail,
+          ...overrides.integApi?.services?.gmail,
+        },
+        calendar: {
+          ...base.integApi.services.calendar,
+          ...overrides.integApi?.services?.calendar,
+        },
+      },
+    },
+    habits: { ...base.habits, ...overrides.habits },
+    drafts: { ...base.drafts, ...overrides.drafts },
+    codex: { ...base.codex, ...overrides.codex },
   } as Config;
 }
 
@@ -294,6 +367,81 @@ describe("MessageQueue", () => {
       expect(processed).toBe(false);
       expect(backend.runTurnSync).not.toHaveBeenCalled();
     });
+
+    it("pauses user message processing while a workload lock is active", async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "queue-lock-"));
+      const lockPath = path.join(tempDir, "workload.lock");
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          startedAt: new Date().toISOString(),
+          reason: "local autoworker test run",
+          command: "pnpm test",
+        }),
+      );
+
+      try {
+        const config = makeConfig({
+          gateway: { workloadLockFiles: [lockPath] },
+        });
+        const backend = makeBackend();
+        const router = createRouter();
+        const adapter = makeAdapter("telegram");
+        router.register(adapter);
+
+        const queue = createMessageQueue(config);
+        queue.enqueue(makeMessage({ text: "Hello" }));
+
+        const processed = await queue.processNext(backend, config, router);
+
+        expect(processed).toBe(true);
+        expect(backend.runTurnSync).not.toHaveBeenCalled();
+        expect(adapter.sendResponse).toHaveBeenCalledWith(
+          expect.objectContaining({
+            source: "telegram",
+            sourceId: "123456",
+            text: expect.stringContaining(
+              "temporarily paused because local autoworker test run",
+            ),
+          }),
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("silently skips heartbeat processing while a workload lock is active", async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "queue-lock-"));
+      const lockPath = path.join(tempDir, "workload.lock");
+      fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid }));
+
+      try {
+        const config = makeConfig({
+          gateway: { workloadLockFiles: [lockPath] },
+          heartbeat: { enabled: true },
+        });
+        const backend = makeBackend();
+        const router = createRouter();
+        const adapter = makeAdapter("telegram");
+        router.register(adapter);
+
+        const queue = createMessageQueue(config);
+        queue.enqueue({
+          source: "heartbeat",
+          sourceId: "telegram",
+          text: "heartbeat prompt",
+        });
+
+        const processed = await queue.processNext(backend, config, router);
+
+        expect(processed).toBe(true);
+        expect(backend.runTurnSync).not.toHaveBeenCalled();
+        expect(adapter.sendResponse).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -402,6 +550,42 @@ describe("MessageQueue", () => {
         "late arrival",
         "user--default",
         undefined,
+      );
+    });
+  });
+
+  describe("error handling", () => {
+    it("sends a signal-specific fallback when the backend exits with SIGKILL", async () => {
+      const config = makeConfig();
+      const backend = makeBackend({
+        runTurnSync: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              "Codex agent turn failed: Codex Exec exited with signal SIGKILL: Reading prompt from stdin...",
+            ),
+          ),
+      });
+      const router = createRouter();
+      const adapter = makeAdapter("telegram");
+      router.register(adapter);
+
+      const queue = createMessageQueue(config);
+      queue.enqueue(makeMessage({ text: "Hello" }));
+
+      const processed = await queue.processNext(backend, config, router);
+
+      expect(processed).toBe(true);
+      expect(adapter.sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "telegram",
+          sourceId: "123456",
+          text: expect.stringContaining("terminated by SIGKILL"),
+        }),
+      );
+      const [[responseMessage]] = vi.mocked(adapter.sendResponse).mock.calls;
+      expect(responseMessage.text).not.toContain(
+        "Sorry, something went wrong while processing your message",
       );
     });
   });

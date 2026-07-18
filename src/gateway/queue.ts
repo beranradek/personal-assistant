@@ -18,8 +18,18 @@ import { createLogger } from "../core/logger.js";
 import { isHeartbeatOk } from "../heartbeat/prompts.js";
 import { createProcessingAccumulator } from "./processing-message.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limiter.js";
+import {
+  findActiveWorkloadLock,
+  formatSignalFailureMessage,
+  formatWorkloadPauseMessage,
+} from "./workload-guard.js";
 
 const log = createLogger("gateway-queue");
+
+function extractSignalName(errorMessage: string): string | null {
+  const match = errorMessage.match(/exited with signal ([A-Z0-9]+)/);
+  return match?.[1] ?? null;
+}
 
 function deriveAuditTaskContext(message: AdapterMessage): AuditTaskContext | undefined {
   if (message.metadata == null || typeof message.metadata !== "object") return undefined;
@@ -194,6 +204,42 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
       }
 
       try {
+        const activeWorkloadLock = await findActiveWorkloadLock(
+          config.gateway.workloadLockFiles,
+        );
+        if (activeWorkloadLock) {
+          log.warn(
+            {
+              lockPath: activeWorkloadLock.path,
+              reason: activeWorkloadLock.reason,
+              sessionKey,
+              source: message.source,
+            },
+            "skipping turn while protected local workload lock is active",
+          );
+
+          if (message.source === "heartbeat") {
+            return true;
+          }
+
+          const lockTarget = resolveRouteTarget(message, config);
+          if (lockTarget) {
+            await router.route({
+              source: lockTarget.source,
+              sourceId: lockTarget.sourceId,
+              text: formatWorkloadPauseMessage(activeWorkloadLock),
+              metadata: {
+                ...(message.metadata && typeof message.metadata === "object"
+                  ? (message.metadata as Record<string, unknown>)
+                  : {}),
+                responseKind: "system",
+              },
+            });
+          }
+
+          return true;
+        }
+
         const routeTarget = resolveRouteTarget(message, config);
         const targetAdapter = routeTarget
           ? router.getAdapter(routeTarget.source)
@@ -384,10 +430,18 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
         const errorTarget = resolveRouteTarget(message, config);
         if (errorTarget) {
           try {
+            const errorMessage =
+              err instanceof Error ? err.message : String(err);
+            const signal = extractSignalName(errorMessage);
+            const activeWorkloadLock = signal
+              ? await findActiveWorkloadLock(config.gateway.workloadLockFiles)
+              : null;
             const errorResponse: AdapterMessage = {
               source: errorTarget.source,
               sourceId: errorTarget.sourceId,
-              text: "Sorry, something went wrong while processing your message. Please try again.",
+              text: signal
+                ? formatSignalFailureMessage(signal, activeWorkloadLock)
+                : "Sorry, something went wrong while processing your message. Please try again.",
               metadata: {
                 ...(message.metadata && typeof message.metadata === "object"
                   ? (message.metadata as Record<string, unknown>)

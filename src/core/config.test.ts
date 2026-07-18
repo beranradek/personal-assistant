@@ -98,6 +98,9 @@ describe("config", () => {
           workspace: "~/my-workspace",
           dataDir: "~/my-data",
         },
+        gateway: {
+          workloadLockFiles: ["~/locks/autoworker.lock"],
+        },
       };
       fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(partial));
 
@@ -106,9 +109,13 @@ describe("config", () => {
       const home = os.homedir();
       expect(config.security.workspace).toBe(path.join(home, "my-workspace"));
       expect(config.security.dataDir).toBe(path.join(home, "my-data"));
+      expect(config.gateway.workloadLockFiles).toEqual([
+        path.join(home, "locks", "autoworker.lock"),
+      ]);
       // Should not contain ~
       expect(config.security.workspace).not.toContain("~");
       expect(config.security.dataDir).not.toContain("~");
+      expect(config.gateway.workloadLockFiles[0]).not.toContain("~");
     });
 
     it("returns full defaults when settings.json has empty object {}", () => {
@@ -131,6 +138,9 @@ describe("config", () => {
       expect(config.heartbeat.intervalMinutes).toBe(30);
       expect(config.gateway.maxQueueSize).toBe(20);
       expect(config.gateway.processingUpdateIntervalMs).toBe(5000);
+      expect(config.gateway.workloadLockFiles).toEqual([
+        path.join(home, ".personal-assistant", "workspace", "tmp", "autoworker-heavy-tests.lock"),
+      ]);
       expect(config.agent.model).toBeNull();
       expect(config.agent.maxTurns).toBe(200);
       expect(config.session.maxHistoryMessages).toBe(20);

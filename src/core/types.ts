@@ -116,6 +116,7 @@ export const RateLimiterConfigSchema = z.object({
 export const GatewayConfigSchema = z.object({
   maxQueueSize: z.number().int().positive(),
   processingUpdateIntervalMs: z.number().int().positive().default(5000),
+  workloadLockFiles: z.array(z.string()).default([]),
   rateLimiter: RateLimiterConfigSchema.default(() => RateLimiterConfigSchema.parse({})),
 });
 
