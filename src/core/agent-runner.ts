@@ -623,7 +623,7 @@ export async function* streamAgentTurn(
             block !== null &&
             "type" in block
           ) {
-            const typed = block as { type: string; [k: string]: unknown };
+            const typed = block as unknown as { type: string; [k: string]: unknown };
             if (typed.type === "text" && "text" in typed) {
               const text = typed.text as string;
               responseText += text;
