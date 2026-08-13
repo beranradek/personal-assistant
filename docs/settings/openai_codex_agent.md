@@ -32,7 +32,8 @@ Edit `~/.personal-assistant/settings.json`:
     "networkAccess": true,
     "reasoningEffort": null,
     "skipGitRepoCheck": true,
-    "configOverrides": {}
+    "configOverrides": {},
+    "turnTimeoutMs": 1800000
   }
 }
 ```
@@ -42,6 +43,7 @@ Notes:
 - `codex.apiKey` is optional if `OPENAI_API_KEY` is set in the environment.
 - `codex.baseUrl` is optional (useful for proxies / OpenAI-compatible endpoints).
 - In daemon mode, using `approvalPolicy: "untrusted"` will typically block execution waiting for approvals. If you want autonomous operation, keep `approvalPolicy: "never"` and rely on sandboxing.
+- `codex.turnTimeoutMs` bounds the total wall-clock time of a single turn (across all internal retries), applied uniformly to every turn regardless of source (heartbeat, Telegram, Slack, terminal). Once exceeded, the turn is aborted via `AbortSignal` and the turn fails with a timeout error instead of running indefinitely. Defaults to 1,800,000ms (30 minutes); set to `null` to disable.
 
 ## How MCP tools work with Codex
 

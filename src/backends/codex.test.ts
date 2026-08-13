@@ -829,4 +829,71 @@ describe("createCodexBackend", () => {
       expect(resultEvent).toBeDefined();
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Turn timeout (2026-08-12 pa-daemon outage follow-up)
+  // -----------------------------------------------------------------------
+
+  describe("turn timeout", () => {
+    /** A thread whose runStreamed/run never resolve on their own — only when the passed AbortSignal fires. */
+    function makeHangingThread(id: string) {
+      return {
+        id,
+        runStreamed: vi.fn(
+          (_msg: string, opts?: { signal?: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+              opts?.signal?.addEventListener("abort", () => reject(new Error("aborted by signal")));
+            }),
+        ),
+        run: vi.fn(
+          (_msg: string, opts?: { signal?: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+              opts?.signal?.addEventListener("abort", () => reject(new Error("aborted by signal")));
+            }),
+        ),
+      };
+    }
+
+    it("aborts a streaming turn and throws once turnTimeoutMs elapses", async () => {
+      const hangingThread = makeHangingThread("thread-hang");
+      mockStartThread.mockReturnValue(hangingThread);
+
+      const backend = await createCodexBackend(makeConfig({ codex: { ...DEFAULTS.codex, turnTimeoutMs: 10 } }));
+
+      await expect(collectEvents(backend.runTurn("hang forever", "test--timeout"))).rejects.toThrow(
+        /timed out after 10ms/,
+      );
+
+      expect(hangingThread.runStreamed).toHaveBeenCalledWith("hang forever", { signal: expect.any(AbortSignal) });
+      expect(hangingThread.runStreamed).toHaveBeenCalledTimes(1);
+      const passedSignal = hangingThread.runStreamed.mock.calls[0]?.[1]?.signal as AbortSignal;
+      expect(passedSignal.aborted).toBe(true);
+      expect(mockLog.error).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: "test--timeout", turnTimeoutMs: 10 }),
+        "Codex turn exceeded its timeout and was aborted",
+      );
+    });
+
+    it("aborts a sync turn and throws once turnTimeoutMs elapses", async () => {
+      const hangingThread = makeHangingThread("thread-hang-sync");
+      mockStartThread.mockReturnValue(hangingThread);
+
+      const backend = await createCodexBackend(makeConfig({ codex: { ...DEFAULTS.codex, turnTimeoutMs: 10 } }));
+
+      await expect(backend.runTurnSync("hang forever", "test--timeout-sync")).rejects.toThrow(/timed out after 10ms/);
+
+      expect(hangingThread.run).toHaveBeenCalledWith("hang forever", { signal: expect.any(AbortSignal) });
+      expect(hangingThread.run).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not pass a signal when turnTimeoutMs is null (disabled)", async () => {
+      const backend = await createCodexBackend(makeConfig({ codex: { ...DEFAULTS.codex, turnTimeoutMs: null } }));
+
+      await collectEvents(backend.runTurn("no timeout", "test--no-timeout"));
+
+      expect(mockStartThread.mock.results).toBeDefined();
+      const thread = mockStartThread.mock.results[0]?.value as ReturnType<typeof makeMockThread>;
+      expect(thread.runStreamed).toHaveBeenCalledWith("no timeout", undefined);
+    });
+  });
 });

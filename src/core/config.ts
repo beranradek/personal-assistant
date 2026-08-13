@@ -150,6 +150,7 @@ export const DEFAULTS: Config = {
     skipGitRepoCheck: true,
     configOverrides: {},
     httpMcpPort: 47392,
+    turnTimeoutMs: 30 * 60 * 1000,
   },
 };
 

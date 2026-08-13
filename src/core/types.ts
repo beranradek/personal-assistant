@@ -138,6 +138,13 @@ export const CodexConfigSchema = z.object({
   configOverrides: z.record(z.string(), z.unknown()).default({}),
   /** Port for the shared HTTP MCP server started by the daemon (Codex backend only). */
   httpMcpPort: z.number().int().positive().default(47392),
+  /**
+   * Wall-clock budget (ms) for a single turn (across all internal retries).
+   * Once exceeded, the turn is aborted via AbortSignal instead of being
+   * allowed to run indefinitely. Applies uniformly to every turn regardless
+   * of source (heartbeat, Telegram, Slack, terminal) — set to null to disable.
+   */
+  turnTimeoutMs: z.number().int().positive().nullable().default(30 * 60 * 1000),
 });
 
 export const SessionConfigSchema = z.object({

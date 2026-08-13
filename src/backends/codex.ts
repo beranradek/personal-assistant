@@ -233,6 +233,76 @@ function startProgressTimer(
 }
 
 // ---------------------------------------------------------------------------
+// Turn timeout: bound total wall-clock time of a turn (across all internal
+// retries) via AbortSignal, instead of letting a hung/runaway turn run
+// indefinitely (see 2026-08-12 pa-daemon outage).
+//
+// Scope of what this actually guarantees, verified empirically against a real
+// `codex exec` process (2026-08-13):
+//
+// - @openai/codex-sdk passes this signal straight into
+//   `child_process.spawn(..., { signal })`, which sends SIGTERM to the direct
+//   `codex exec` child only — not a process group.
+// - Sandboxed shell commands DO die: every `codex exec` shell tool call runs
+//   inside bwrap with `--die-with-parent` at each nesting level, so SIGTERM to
+//   the top-level process reliably cascades all the way down to the sandboxed
+//   command. Verified directly via `codex sandbox linux -- sleep N` (kill the
+//   wrapper, the whole nested-bwrap+command tree dies) and via a real
+//   multi_agent `codex exec` run (its `codex-linux-sandbox`/bwrap/sleep chain
+//   died on SIGTERM to the top-level process). This covers the dominant
+//   resource cost from the 2026-08-12 incident (concurrent pnpm/tsc/vitest
+//   chains all run through this exact mechanism).
+// - Plain (non-sandboxed) child processes codex exec spawns directly do NOT
+//   reliably die: in the same real `codex exec` run, its `codex-code-mode`
+//   (multi_agent) process died on SIGTERM, but its stdio MCP server child
+//   (`pa mcp-server`, spawned per the `mcp_servers` config) was left running
+//   as an orphan (reparented, still alive over a minute later) until manually
+//   killed. Node's child_process.spawn does not auto-kill children when a
+//   parent dies, and this MCP server evidently doesn't treat a closed stdin
+//   pipe as a shutdown signal.
+//   - PA's own MCP server avoids this in daemon mode: `httpMcpPort` (set by
+//     daemon.ts) makes Codex connect over HTTP to a long-lived shared server
+//     instead of spawning `pa mcp-server` per turn — see buildThreadOptions
+//     usage below. Only the terminal-mode stdio fallback is exposed to this.
+//   - Operator-configured MCP servers in `~/.codex/config.toml` (e.g. the
+//     context7-mcp/chrome-devtools-mcp servers implicated in the 2026-08-12
+//     incident) are spawned the same stdio way in EVERY mode, including
+//     heartbeat turns, and this repo has no PID/handle to target a precise
+//     cleanup of them — a blunt cmdline-pattern kill would risk killing an
+//     unrelated concurrent codex session's servers. That residual risk is
+//     bounded by the existing pa-daemon.service cgroup caps (orphans inherit
+//     their ancestor's cgroup regardless of reparenting) but not eliminated;
+//     the clean fix lives outside this repo, in scoping those servers to
+//     interactive-only Codex config profiles.
+// ---------------------------------------------------------------------------
+
+interface TurnTimeout {
+  /** AbortSignal to pass to thread.runStreamed()/thread.run(), or null if disabled. */
+  signal: AbortSignal | null;
+  /** Clear the timer. Must be called once the turn (all retries) has finished. */
+  cancel: () => void;
+  /** Whether the timeout (as opposed to some other abort) already fired. */
+  timedOut: () => boolean;
+}
+
+function startTurnTimeout(turnTimeoutMs: number | null): TurnTimeout {
+  if (!turnTimeoutMs) {
+    return { signal: null, cancel: () => {}, timedOut: () => false };
+  }
+  const controller = new AbortController();
+  let fired = false;
+  const handle = setTimeout(() => {
+    fired = true;
+    controller.abort(new Error(`turn exceeded ${turnTimeoutMs}ms timeout`));
+  }, turnTimeoutMs);
+  return {
+    signal: controller.signal,
+    cancel: () => clearTimeout(handle),
+    timedOut: () => fired,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -450,6 +520,9 @@ export async function createCodexBackend(
       let recoveredSignal: string | null = null;
       let recoveredFromAttempt: number | null = null;
 
+      const { signal: turnSignal, cancel: cancelTurnTimeout, timedOut } = startTurnTimeout(config.codex.turnTimeoutMs);
+
+      try {
       for (let attempt = 0; attempt < MAX_SIGNAL_EXIT_ATTEMPTS; attempt++) {
         let yieldedUserVisibleEvent = false;
 
@@ -469,7 +542,7 @@ export async function createCodexBackend(
             thread = codex.startThread(threadOptions);
           }
 
-          const streamed = await thread.runStreamed(message);
+          const streamed = await thread.runStreamed(message, turnSignal ? { signal: turnSignal } : undefined);
 
           let stopProgress: (() => void) | null = null;
           const pendingProgressEvents: StreamEvent[] = [];
@@ -570,6 +643,14 @@ export async function createCodexBackend(
           const isSignalExit = /exited with signal SIG/.test(errorMessage);
           const signal = isSignalExit ? extractSignalName(errorMessage) : null;
 
+          if (timedOut()) {
+            log.error(
+              { attempt: attempt + 1, err, phase: "stream", sessionKey, turnTimeoutMs: config.codex.turnTimeoutMs },
+              "Codex turn exceeded its timeout and was aborted",
+            );
+            throw new Error(`Codex agent turn timed out after ${config.codex.turnTimeoutMs}ms and was aborted`);
+          }
+
           if (turnErrorYielded) {
             log.warn(
               {
@@ -628,6 +709,9 @@ export async function createCodexBackend(
           const safeMessage = redact ? redact(errorMessage) : errorMessage;
           throw new Error(`Codex agent turn failed: ${safeMessage}`);
         }
+      }
+      } finally {
+        cancelTurnTimeout();
       }
 
       // Save session + audit
@@ -698,6 +782,9 @@ export async function createCodexBackend(
       let recoveredSignal: string | null = null;
       let recoveredFromAttempt: number | null = null;
 
+      const { signal: turnSignal, cancel: cancelTurnTimeout, timedOut } = startTurnTimeout(config.codex.turnTimeoutMs);
+
+      try {
       for (let attempt = 0; attempt < MAX_SIGNAL_EXIT_ATTEMPTS; attempt++) {
         try {
           const existingThreadId = threadIds.get(sessionKey);
@@ -714,7 +801,7 @@ export async function createCodexBackend(
             thread = codex.startThread(threadOptions);
           }
 
-          const result = await thread.run(message);
+          const result = await thread.run(message, turnSignal ? { signal: turnSignal } : undefined);
 
           if (thread.id) {
             threadIds.set(sessionKey, thread.id);
@@ -761,6 +848,15 @@ export async function createCodexBackend(
           const errorMessage = err instanceof Error ? err.message : String(err);
           const isSignalExit = /exited with signal SIG/.test(errorMessage);
           const signal = isSignalExit ? extractSignalName(errorMessage) : null;
+
+          if (timedOut()) {
+            log.error(
+              { attempt: attempt + 1, err, phase: "sync", sessionKey, turnTimeoutMs: config.codex.turnTimeoutMs },
+              "Codex turn exceeded its timeout and was aborted",
+            );
+            throw new Error(`Codex agent turn timed out after ${config.codex.turnTimeoutMs}ms and was aborted`);
+          }
+
           if (isSignalExit && attempt === 0) {
             log.warn(
               {
@@ -800,6 +896,9 @@ export async function createCodexBackend(
           const safeMessage = redact ? redact(errorMessage) : errorMessage;
           throw new Error(`Codex agent turn failed: ${safeMessage}`);
         }
+      }
+      } finally {
+        cancelTurnTimeout();
       }
 
       throw new Error("Codex agent turn failed: retry loop exhausted");
