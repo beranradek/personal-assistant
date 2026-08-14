@@ -126,6 +126,20 @@ systemctl --user daemon-reload
 systemctl --user restart pa-daemon
 ```
 
+#### Optional: codex watchdog (stale process reaper)
+
+`config.codex.turnTimeoutMs` bounds a codex turn's wall-clock time, but it's a timer inside pa-daemon's own Node event loop — it can itself be delayed if the daemon is starved by the exact RAM/CPU exhaustion it's meant to guard against. `scripts/codex-watchdog.sh` is an OS-level backstop, installed as a separate systemd `--user` timer, that reaps stale `codex exec` process trees and orphaned `mcpServers` child processes purely from `/proc` — it keeps working even if pa-daemon is fully wedged.
+
+```bash
+mkdir -p ~/.personal-assistant/bin
+cp scripts/codex-watchdog.sh ~/.personal-assistant/bin/
+cp deploy/systemd/codex-watchdog.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now codex-watchdog.timer
+```
+
+See [docs/settings/openai_codex_agent.md](docs/settings/openai_codex_agent.md#codex-watchdog-stale-process-reaper) for how it derives its thresholds, what it does and doesn't cover, and dry-run/logging details.
+
 ### Terminal Mode
 
 Interactive terminal for direct conversation. Type messages and get responses. Press `Ctrl+C` to exit.
