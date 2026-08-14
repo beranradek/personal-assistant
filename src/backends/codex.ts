@@ -268,12 +268,35 @@ function startProgressTimer(
 //     context7-mcp/chrome-devtools-mcp servers implicated in the 2026-08-12
 //     incident) are spawned the same stdio way in EVERY mode, including
 //     heartbeat turns, and this repo has no PID/handle to target a precise
-//     cleanup of them — a blunt cmdline-pattern kill would risk killing an
-//     unrelated concurrent codex session's servers. That residual risk is
-//     bounded by the existing pa-daemon.service cgroup caps (orphans inherit
-//     their ancestor's cgroup regardless of reparenting) but not eliminated;
-//     the clean fix lives outside this repo, in scoping those servers to
-//     interactive-only Codex config profiles.
+//     in-process cleanup of them from here.
+//
+// 2026-08-14 follow-up: turnTimeoutMs itself is a setTimeout/AbortController
+// living in this process's own Node event loop. A 2026-08-14 incident showed
+// it can fail to fire at all: five concurrent sandboxed pnpm test/build
+// trees under one heartbeat turn drove host RAM to exhaustion, and the
+// resulting event-loop stalls (visible as missed Slack socket-mode
+// heartbeat pongs in the daemon's own logs) delayed the timer long enough
+// that a turn ran 50+ minutes past its 30-minute timeout with no
+// "exceeded its timeout" log line ever appearing. A timeout that lives
+// inside the event loop it's meant to protect against starving is not a
+// reliable backstop for that exact failure mode.
+//
+// `scripts/codex-watchdog.sh` (installed as a systemd --user timer, see
+// `deploy/systemd/codex-watchdog.{service,timer}`) closes the turnTimeoutMs
+// reliability gap and the orphan gap for MCP servers listed in this
+// deployment's `settings.json` `mcpServers` (chrome-devtools/context7 today,
+// read dynamically so it tracks whatever is actually configured there) — it
+// never touches this process, reading only /proc and pa-daemon.service's
+// cgroup, so it works even while pa-daemon is fully wedged. It kills codex
+// exec trees stale well past turnTimeoutMs (pure backstop, threshold derived
+// from the same settings.json value) and any configured-MCP-server tree
+// whose codex exec parent is already gone (safe at any age, since an orphan
+// has no legitimate use). It is scoped to pa-daemon.service's own cgroup, so
+// it cannot reach a codex/claude session the user runs manually in their own
+// terminal. It does NOT cover the `pa mcp-server` stdio-orphan case from the
+// 2026-08-12 incident — that one is a PA-internal MCP server, not something
+// declared in `mcpServers`, and stays mitigated the way it already was
+// (`httpMcpPort` avoiding a per-turn stdio spawn in daemon mode, see above).
 // ---------------------------------------------------------------------------
 
 interface TurnTimeout {

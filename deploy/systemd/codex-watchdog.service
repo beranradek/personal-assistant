@@ -1,0 +1,11 @@
+[Unit]
+Description=Reap stale codex turns / orphaned MCP servers left behind by pa-daemon.service
+After=pa-daemon.service
+
+[Service]
+Type=oneshot
+# Runs from a copy installed under ~/.personal-assistant/bin, not the mutable
+# dev git checkout - a rebase/branch-switch/move of the checkout must not be
+# able to break this timer-triggered oneshot. Re-copy after editing the
+# script in the repo; see docs/settings/openai_codex_agent.md.
+ExecStart=%h/.personal-assistant/bin/codex-watchdog.sh
