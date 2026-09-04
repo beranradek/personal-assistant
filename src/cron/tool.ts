@@ -17,9 +17,9 @@ export interface CronToolResult {
   data?: unknown;
 }
 
-function validateCronExpression(expression: string): { valid: boolean; reason?: string } {
+function validateCronExpression(expression: string, timezone = "UTC"): { valid: boolean; reason?: string } {
   try {
-    CronExpressionParser.parse(expression, { tz: "UTC" });
+    CronExpressionParser.parse(expression, { tz: timezone });
     return { valid: true };
   } catch {
     return { valid: false, reason: `Invalid cron expression: "${expression}"` };
@@ -73,7 +73,7 @@ async function handleAdd(
 
   // Validate cron expressions are parseable
   if (scheduleResult.data.type === "cron") {
-    const cronResult = validateCronExpression(scheduleResult.data.expression);
+    const cronResult = validateCronExpression(scheduleResult.data.expression, scheduleResult.data.timezone);
     if (!cronResult.valid) {
       return { success: false, message: cronResult.reason! };
     }
@@ -134,7 +134,7 @@ async function handleUpdate(
       return { success: false, message: `Invalid schedule: ${scheduleResult.error.issues[0]?.message ?? "unknown error"}` };
     }
     if (scheduleResult.data.type === "cron") {
-      const cronResult = validateCronExpression(scheduleResult.data.expression);
+      const cronResult = validateCronExpression(scheduleResult.data.expression, scheduleResult.data.timezone);
       if (!cronResult.valid) {
         return { success: false, message: cronResult.reason! };
       }
@@ -203,8 +203,13 @@ export function createCronToolManager(deps: CronToolDeps) {
   }
 
   return {
-    handleAction: (action: string, params: Record<string, unknown>) =>
-      handleCronAction(action, params, deps),
+    handleAction: async (action: string, params: Record<string, unknown>) => {
+      const result = await handleCronAction(action, params, deps);
+      if (result.success && (action === "add" || action === "update" || action === "remove")) {
+        await rearmTimer();
+      }
+      return result;
+    },
     rearmTimer,
     stop: () => timerHandle?.disarm(),
   };

@@ -49,6 +49,15 @@ describe("nextRunAt", () => {
     expect(next!.toISOString()).toBe("2025-06-15T09:00:00.000Z");
   });
 
+  it("honours an IANA timezone for cron schedules across daylight saving time", () => {
+    const job = makeJob({
+      schedule: { type: "cron", expression: "0 11 * * 3,6", timezone: "Europe/Prague" },
+    });
+
+    const next = nextRunAt(job);
+    expect(next!.toISOString()).toBe("2025-06-18T09:00:00.000Z");
+  });
+
   it("for one-shot returns the specified ISO time", () => {
     const job = makeJob({
       schedule: { type: "oneshot", iso: "2025-06-20T12:00:00.000Z" },

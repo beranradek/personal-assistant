@@ -20,7 +20,7 @@ export function nextRunAt(job: CronJob): Date | null {
       try {
         const expr = CronExpressionParser.parse(schedule.expression, {
           currentDate: new Date(),
-          tz: "UTC",
+          tz: schedule.timezone ?? "UTC",
         });
         return expr.next().toDate();
       } catch {

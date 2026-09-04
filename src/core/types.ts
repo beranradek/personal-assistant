@@ -369,7 +369,7 @@ export interface SystemEvent {
 
 /** Zod schema for cron schedule types. */
 export const CronScheduleSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("cron"), expression: z.string().min(1) }),
+  z.object({ type: z.literal("cron"), expression: z.string().min(1), timezone: z.string().min(1).optional() }),
   z.object({ type: z.literal("oneshot"), iso: z.string().min(1) }),
   z.object({ type: z.literal("interval"), everyMs: z.number().int().positive() }),
 ]);

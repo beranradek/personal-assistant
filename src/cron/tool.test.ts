@@ -79,6 +79,21 @@ describe("handleCronAction", () => {
       expect(persisted[0].id).toBe(job.id);
     });
 
+    it("accepts an IANA timezone for a cron schedule", async () => {
+      const result = await handleCronAction(
+        "add",
+        {
+          label: "Prague morning",
+          schedule: { type: "cron", expression: "0 11 * * 3,6", timezone: "Europe/Prague" },
+          payload: { text: "Research cars" },
+        },
+        deps,
+      );
+
+      expect(result.success).toBe(true);
+      expect((result.data as CronJob).schedule).toEqual({ type: "cron", expression: "0 11 * * 3,6", timezone: "Europe/Prague" });
+    });
+
     it("returns error if label is missing", async () => {
       const result = await handleCronAction(
         "add",
@@ -453,6 +468,23 @@ describe("createCronToolManager", () => {
 
     expect(onJobFired.mock.calls[0][0].id).toBe("timer-test");
 
+    mgr.stop();
+  });
+
+  it("rearms immediately after adding a job so it can fire without a daemon restart", async () => {
+    vi.useRealTimers();
+    const onJobFired = vi.fn();
+    const mgr = createCronToolManager({ storePath, onJobFired });
+    await mgr.rearmTimer();
+
+    const result = await mgr.handleAction("add", {
+      label: "Immediate one-shot",
+      schedule: { type: "oneshot", iso: new Date(Date.now() + 100).toISOString() },
+      payload: { text: "Run now" },
+    });
+
+    expect(result.success).toBe(true);
+    await vi.waitFor(() => expect(onJobFired).toHaveBeenCalledTimes(1), { timeout: 3000, interval: 50 });
     mgr.stop();
   });
 });
