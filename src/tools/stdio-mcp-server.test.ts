@@ -141,6 +141,13 @@ describe("createStdioMcpServer", () => {
   // cron
   // -----------------------------------------------------------------------
   describe("cron tool", () => {
+    it("documents the optional IANA timezone for cron schedules", async () => {
+      const result = await getListHandler()({}) as { tools: Array<{ name: string; description: string }> };
+      const cronTool = result.tools.find((tool) => tool.name === "cron");
+
+      expect(cronTool?.description).toContain('"timezone": "<IANA timezone, optional>"');
+    });
+
     it("dispatches to deps.handleCronAction with action and params", async () => {
       const cronResult = {
         success: true,

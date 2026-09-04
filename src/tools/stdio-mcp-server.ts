@@ -65,7 +65,7 @@ const BASE_TOOL_DEFINITIONS = [
 ADD — create a new job. Required params:
   - label: string — human-readable name (e.g. "Daily standup reminder")
   - schedule: object — one of three types:
-      { "type": "cron", "expression": "<cron expr>" } — standard 5-field cron (e.g. "30 9 * * 1-5" = weekdays 9:30 UTC)
+      { "type": "cron", "expression": "<cron expr>", "timezone": "<IANA timezone, optional>" } — standard 5-field cron (e.g. "30 9 * * 1-5" = weekdays 9:30 UTC; defaults to UTC)
       { "type": "oneshot", "iso": "<ISO 8601 datetime>" } — fires once (e.g. "2026-03-01T14:00:00Z")
       { "type": "interval", "everyMs": <milliseconds> } — repeating interval (e.g. 3600000 = every hour)
   - payload: { "text": "<message>" } — the text delivered when the job fires
