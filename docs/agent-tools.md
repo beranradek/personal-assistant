@@ -20,9 +20,19 @@ Exposed via the built-in `assistant` MCP server.
 
 | Tool | Description |
 |------|-------------|
-| `cron` | Schedule one-shot or recurring jobs. Supports create, list, update, and delete operations. |
+| `cron_list` | List scheduled jobs. This is a read-only, idempotent operation. |
+| `cron_create` | Create a one-shot or recurring scheduled job. |
+| `cron_update` | Update a scheduled job by ID. |
+| `cron_remove` | Permanently delete a scheduled job by ID. |
 | `exec` | Spawn a background shell process with completion notification. Returns a process ID. |
 | `process` | Check status of a background process by ID (running, exited, output). |
+
+### Cron API migration
+
+The former `cron` tool with an `action` argument was removed. Use the dedicated tool that
+matches the former action instead: `list` → `cron_list`, `add` → `cron_create`, `update` →
+`cron_update`, and `remove` → `cron_remove`. This lets MCP hosts recognize `cron_list` as a
+read-only operation while keeping mutations explicit.
 
 ---
 

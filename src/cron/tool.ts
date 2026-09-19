@@ -5,6 +5,9 @@ import { CronScheduleSchema, CronPayloadSchema } from "./types.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { armTimer, type CronTimerHandle } from "./timer.js";
 import { enqueueSystemEvent } from "../heartbeat/system-events.js";
+import { createLogger } from "../core/logger.js";
+
+const log = createLogger("cron-tool");
 
 export interface CronToolDeps {
   storePath: string;
@@ -31,18 +34,46 @@ export async function handleCronAction(
   params: Record<string, unknown>,
   deps: CronToolDeps,
 ): Promise<CronToolResult> {
+  let result: CronToolResult;
   switch (action) {
     case "add":
-      return handleAdd(params, deps);
+      result = await handleAdd(params, deps);
+      break;
     case "list":
-      return handleList(deps);
+      result = await handleList(deps);
+      break;
     case "update":
-      return handleUpdate(params, deps);
+      result = await handleUpdate(params, deps);
+      break;
     case "remove":
-      return handleRemove(params, deps);
+      result = await handleRemove(params, deps);
+      break;
     default:
-      return { success: false, message: `Unknown action: "${action}"` };
+      result = { success: false, message: `Unknown action: "${action}"` };
   }
+
+  const resultData = result.data as Partial<CronJob> | CronJob[] | undefined;
+  const jobId = typeof params.id === "string"
+    ? params.id
+    : resultData && !Array.isArray(resultData) && typeof resultData.id === "string"
+      ? resultData.id
+      : undefined;
+  const fields = {
+    action,
+    success: result.success,
+    ...(jobId ? { jobId } : {}),
+    ...(action === "list" && Array.isArray(resultData) ? { jobCount: resultData.length } : {}),
+  };
+
+  if (action === "list") {
+    log.debug(fields, "Cron jobs listed");
+  } else if (result.success) {
+    log.info(fields, "Cron action completed");
+  } else {
+    log.warn(fields, "Cron action rejected");
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,12 +222,14 @@ export function createCronToolManager(deps: CronToolDeps) {
     timerHandle?.disarm();
     const jobs = await loadCronStore(deps.storePath);
     timerHandle = armTimer(jobs, async (job) => {
+      log.info({ jobId: job.id }, "Cron job firing");
       enqueueSystemEvent(job.payload.text, "cron");
       // Update lastFiredAt
       job.lastFiredAt = new Date().toISOString();
       const allJobs = await loadCronStore(deps.storePath);
       const updated = allJobs.map((j) => (j.id === job.id ? job : j));
       await saveCronStore(deps.storePath, updated);
+      log.info({ jobId: job.id }, "Cron job fire recorded");
       rearmTimer(); // Re-arm for next job
       deps.onJobFired?.(job);
     });

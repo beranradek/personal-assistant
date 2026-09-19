@@ -75,13 +75,17 @@ The factory at `src/backends/factory.ts` dispatches based on `config.agent.backe
 
 ### MCP Tool Injection
 
-PA's built-in tools (memory_search, cron, exec, process) are exposed to Codex via a standalone stdio MCP server:
+PA's built-in tools (memory_search, cron_list, cron_create, cron_update, cron_remove, exec, process) are exposed to Codex via the daemon's local HTTP MCP server:
 
 ```
-Codex CLI → (spawns) → pa mcp-server → (JSON-RPC over stdio) → PA tools
+Codex CLI → (streamable HTTP, loopback only) → pa-daemon → PA tools
 ```
 
 The MCP server is automatically injected into Codex's configuration. No manual setup needed.
+
+`cron` was replaced by explicit `cron_list`, `cron_create`, `cron_update`, and `cron_remove`
+tools. When updating older prompts, map the previous `action` values `list`, `add`, `update`,
+and `remove` to those names respectively.
 
 ### Two-Tier Skill Model
 

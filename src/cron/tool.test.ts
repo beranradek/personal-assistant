@@ -3,6 +3,18 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { CronJob } from "./types.js";
+
+const cronLog = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../core/logger.js", () => ({
+  createLogger: () => cronLog,
+}));
+
 import { handleCronAction, createCronToolManager, type CronToolDeps } from "./tool.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 
@@ -33,6 +45,7 @@ describe("handleCronAction", () => {
   let deps: CronToolDeps;
 
   beforeEach(async () => {
+    vi.clearAllMocks();
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-tool-test-"));
     storePath = path.join(tmpDir, "data", "cron-jobs.json");
     deps = { storePath };
@@ -40,6 +53,39 @@ describe("handleCronAction", () => {
 
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  // -------------------------------------------------------------------------
+  // logging
+  // -------------------------------------------------------------------------
+  describe("audit logging", () => {
+    it("logs only action metadata and never the label or payload", async () => {
+      await handleCronAction(
+        "add",
+        {
+          label: "Private reminder title",
+          schedule: makeSchedule(),
+          payload: { text: "Private delivery message" },
+        },
+        deps,
+      );
+
+      expect(cronLog.info).toHaveBeenCalledOnce();
+      const [fields, message] = cronLog.info.mock.calls[0];
+      expect(message).toBe("Cron action completed");
+      expect(fields).toEqual(expect.objectContaining({ action: "add", success: true, jobId: expect.any(String) }));
+      expect(JSON.stringify(fields)).not.toContain("Private reminder title");
+      expect(JSON.stringify(fields)).not.toContain("Private delivery message");
+    });
+
+    it("logs list operations at debug level with the job count only", async () => {
+      await handleCronAction("list", {}, deps);
+
+      expect(cronLog.debug).toHaveBeenCalledWith(
+        { action: "list", success: true, jobCount: 0 },
+        "Cron jobs listed",
+      );
+    });
   });
 
   // -------------------------------------------------------------------------

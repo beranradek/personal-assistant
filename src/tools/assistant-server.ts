@@ -52,7 +52,7 @@ export interface AssistantServerDeps {
 }
 
 /**
- * Create an MCP server that exposes `cron`, `exec`, and `process` tools.
+ * Create an MCP server that exposes cron read/write, exec, and process tools.
  *
  * This is the main assistant server that combines scheduling, command execution,
  * and background process management into a single MCP endpoint.
@@ -63,47 +63,61 @@ export function createAssistantServer(deps: AssistantServerDeps) {
     version: "1.0.0",
     tools: [
       tool(
-        "cron",
-        `Manage scheduled reminders and jobs. Actions:
+        "cron_list",
+        "List all scheduled reminders and jobs without changing them.",
+        {},
+        async () => ({
+          content: [
+            { type: "text" as const, text: JSON.stringify(await deps.handleCronAction("list", {}), null, 2) },
+          ],
+        }),
+        { annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+      ),
 
-ADD — create a new job. Required params:
-  - label: string — human-readable name (e.g. "Daily standup reminder")
-  - schedule: object — one of three types:
-      { "type": "cron", "expression": "<cron expr>", "timezone": "<IANA timezone, optional>" } — standard 5-field cron (e.g. "30 9 * * 1-5" = weekdays 9:30 UTC; defaults to UTC)
-      { "type": "oneshot", "iso": "<ISO 8601 datetime>" } — fires once (e.g. "2026-03-01T14:00:00Z")
-      { "type": "interval", "everyMs": <milliseconds> } — repeating interval (e.g. 3600000 = every hour)
-  - payload: { "text": "<message>" } — the text delivered when the job fires
-
-LIST — returns all jobs. No params needed.
-
-UPDATE — modify an existing job. Required params:
-  - id: string — the job UUID (from add/list response)
-  Optional: label, schedule, payload (same format as add), enabled (boolean)
-
-REMOVE — delete a job. Required params:
-  - id: string — the job UUID`,
+      tool(
+        "cron_create",
+        "Create a scheduled reminder or job with a label, schedule, and delivery payload.",
         {
-          action: z
-            .enum(["add", "list", "update", "remove"])
-            .describe("Action to perform"),
-          params: z
-            .record(z.string(), z.unknown())
-            .optional()
-            .describe(
-              "Action parameters — see tool description for required fields per action",
-            ),
+          label: z.string().min(1).describe("Human-readable job name"),
+          schedule: z.record(z.string(), z.unknown()).describe("Cron, oneshot, or interval schedule"),
+          payload: z.record(z.string(), z.unknown()).describe("Message delivered when the job fires"),
         },
-        async (args) => {
-          const result = await deps.handleCronAction(
-            args.action,
-            args.params ?? {},
-          );
-          return {
-            content: [
-              { type: "text" as const, text: JSON.stringify(result, null, 2) },
-            ],
-          };
+        async (args) => ({
+          content: [
+            { type: "text" as const, text: JSON.stringify(await deps.handleCronAction("add", args), null, 2) },
+          ],
+        }),
+        { annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
+      ),
+
+      tool(
+        "cron_update",
+        "Update an existing scheduled reminder or job by its id.",
+        {
+          id: z.string().min(1).describe("Job UUID"),
+          label: z.string().min(1).optional().describe("Updated job name"),
+          schedule: z.record(z.string(), z.unknown()).optional().describe("Replacement schedule"),
+          payload: z.record(z.string(), z.unknown()).optional().describe("Replacement delivery message"),
+          enabled: z.boolean().optional().describe("Whether the job is enabled"),
         },
+        async (args) => ({
+          content: [
+            { type: "text" as const, text: JSON.stringify(await deps.handleCronAction("update", args), null, 2) },
+          ],
+        }),
+        { annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
+      ),
+
+      tool(
+        "cron_remove",
+        "Permanently remove a scheduled reminder or job by its id.",
+        { id: z.string().min(1).describe("Job UUID") },
+        async (args) => ({
+          content: [
+            { type: "text" as const, text: JSON.stringify(await deps.handleCronAction("remove", args), null, 2) },
+          ],
+        }),
+        { annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false } },
       ),
 
       tool(

@@ -82,10 +82,18 @@ describe("createStdioMcpServer", () => {
   // ListTools
   // -----------------------------------------------------------------------
   describe("ListTools handler", () => {
-    it("returns all four tool definitions", async () => {
+    it("returns separate read and write cron tool definitions", async () => {
       const result = await getListHandler()({});
       const names = result.tools.map((t: { name: string }) => t.name);
-      expect(names).toEqual(["memory_search", "cron", "exec", "process"]);
+      expect(names).toEqual([
+        "memory_search",
+        "cron_list",
+        "cron_create",
+        "cron_update",
+        "cron_remove",
+        "exec",
+        "process",
+      ]);
     });
 
     it("each tool definition has a name, description, and inputSchema", async () => {
@@ -138,17 +146,56 @@ describe("createStdioMcpServer", () => {
   });
 
   // -----------------------------------------------------------------------
-  // cron
+  // cron tools
   // -----------------------------------------------------------------------
-  describe("cron tool", () => {
+  describe("cron tools", () => {
+    it("declares cron_list as an idempotent read-only operation", async () => {
+      const result = await getListHandler()({}) as {
+        tools: Array<{ name: string; annotations?: Record<string, boolean> }>;
+      };
+      const cronListTool = result.tools.find((tool) => tool.name === "cron_list");
+
+      expect(cronListTool?.annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+    });
+
+    it("declares mutations separately from reads", async () => {
+      const result = await getListHandler()({}) as {
+        tools: Array<{ name: string; annotations?: Record<string, boolean> }>;
+      };
+      const createTool = result.tools.find((tool) => tool.name === "cron_create");
+      const updateTool = result.tools.find((tool) => tool.name === "cron_update");
+      const removeTool = result.tools.find((tool) => tool.name === "cron_remove");
+
+      expect(createTool?.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+      expect(updateTool?.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      });
+      expect(removeTool?.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        openWorldHint: false,
+      });
+    });
+
     it("documents the optional IANA timezone for cron schedules", async () => {
       const result = await getListHandler()({}) as { tools: Array<{ name: string; description: string }> };
-      const cronTool = result.tools.find((tool) => tool.name === "cron");
+      const cronTool = result.tools.find((tool) => tool.name === "cron_create");
 
       expect(cronTool?.description).toContain('"timezone": "<IANA timezone, optional>"');
     });
 
-    it("dispatches to deps.handleCronAction with action and params", async () => {
+    it("dispatches cron_create to the add action", async () => {
       const cronResult = {
         success: true,
         message: "Job added",
@@ -160,22 +207,43 @@ describe("createStdioMcpServer", () => {
       handlers.clear();
       createStdioMcpServer(deps);
 
-      const result = await callTool("cron", {
-        action: "add",
-        params: { schedule: "0 9 * * *", message: "standup" },
+      const result = await callTool("cron_create", {
+        label: "Standup",
+        schedule: { type: "cron", expression: "0 9 * * *" },
+        payload: { text: "standup" },
       });
 
       expect(deps.handleCronAction).toHaveBeenCalledWith("add", {
-        schedule: "0 9 * * *",
-        message: "standup",
+        label: "Standup",
+        schedule: { type: "cron", expression: "0 9 * * *" },
+        payload: { text: "standup" },
       });
       const parsed = JSON.parse(result.content[0].text);
       expect(parsed).toEqual(cronResult);
     });
 
-    it("defaults params to empty object when not provided", async () => {
-      await callTool("cron", { action: "list" });
+    it("dispatches cron_list without mutation parameters", async () => {
+      await callTool("cron_list");
       expect(deps.handleCronAction).toHaveBeenCalledWith("list", {});
+    });
+
+    it("dispatches cron_update and cron_remove to their matching actions", async () => {
+      await callTool("cron_update", { id: "job-1", enabled: false });
+      await callTool("cron_remove", { id: "job-1" });
+
+      expect(deps.handleCronAction).toHaveBeenNthCalledWith(1, "update", {
+        id: "job-1",
+        enabled: false,
+      });
+      expect(deps.handleCronAction).toHaveBeenNthCalledWith(2, "remove", {
+        id: "job-1",
+      });
+    });
+
+    it("does not expose the legacy mixed cron tool", async () => {
+      const result = await callTool("cron", { action: "list" });
+
+      expect(result.isError).toBe(true);
     });
   });
 

@@ -78,7 +78,7 @@ export function armTimer(
 
   const timer = setTimeout(() => {
     Promise.resolve(onFire(job)).catch((err) => {
-      log.error({ err, jobId: job.id, label: job.label }, "Cron job onFire callback failed");
+      log.error({ err, jobId: job.id }, "Cron job onFire callback failed");
     });
   }, delay);
 

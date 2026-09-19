@@ -13,7 +13,10 @@
 - **episode_search** - Search past task episodes by text, project, issue, outcome, etc.
 - **episode_recent** - List recent episodes filtered by source, project, outcome, etc.
 - **episode_stats** - Count and summarise episodes by outcome, source, project
-- **cron** - Schedule one-shot or recurring reminders and tasks
+- **cron_list** - List scheduled reminders and tasks (read-only)
+- **cron_create** - Create a one-shot or recurring reminder or task
+- **cron_update** - Update a scheduled reminder or task by ID
+- **cron_remove** - Permanently remove a scheduled reminder or task by ID
 - **exec** - Run long-running shell commands as background processes (allowlisted in config)
 - **process** - Check status of background processes
 

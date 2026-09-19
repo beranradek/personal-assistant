@@ -77,6 +77,7 @@ function findToolByName(name: string) {
     description: call[1] as string,
     inputSchema: call[2] as Record<string, unknown>,
     handler: call[3] as (args: Record<string, unknown>, extra: unknown) => Promise<{ content: Array<{ type: string; text: string }> }>,
+    annotations: (call[4] as { annotations?: Record<string, unknown> } | undefined)?.annotations,
   };
 }
 
@@ -106,15 +107,15 @@ describe("createAssistantServer", () => {
 
   // --- Tool registration ---
 
-  it("registers exactly 5 tools via the tool() helper", () => {
+  it("registers exactly 8 tools via the tool() helper", () => {
     createAssistantServer(makeDeps());
-    expect(mockTool).toHaveBeenCalledTimes(5);
+    expect(mockTool).toHaveBeenCalledTimes(8);
   });
 
-  it("exposes a 'cron' tool", () => {
+  it("exposes distinct cron read and mutation tools", () => {
     createAssistantServer(makeDeps());
     const toolNames = mockTool.mock.calls.map((c) => c[0]);
-    expect(toolNames).toContain("cron");
+    expect(toolNames).toEqual(expect.arrayContaining(["cron_list", "cron_create", "cron_update", "cron_remove"]));
   });
 
   it("exposes an 'exec' tool", () => {
@@ -129,10 +130,10 @@ describe("createAssistantServer", () => {
     expect(toolNames).toContain("process");
   });
 
-  it("passes all 5 tools to createSdkMcpServer in the tools array", () => {
+  it("passes all 8 tools to createSdkMcpServer in the tools array", () => {
     createAssistantServer(makeDeps());
     const serverOpts = mockCreateSdkMcpServer.mock.calls[0][0];
-    expect(serverOpts.tools).toHaveLength(5);
+    expect(serverOpts.tools).toHaveLength(8);
   });
 
   it("exposes a 'habit_check' tool", () => {
@@ -147,41 +148,67 @@ describe("createAssistantServer", () => {
     expect(toolNames).toContain("habit_status");
   });
 
-  // --- Cron tool ---
+  // --- Cron tools ---
 
-  describe("cron tool", () => {
-    it("has a description mentioning scheduled or reminders or jobs", () => {
+  describe("cron tools", () => {
+    it("marks cron_list as a read-only idempotent operation", () => {
       createAssistantServer(makeDeps());
-      const cronTool = findToolByName("cron");
-      expect(cronTool.description.toLowerCase()).toMatch(/schedul|reminder|job/);
+      const cronList = findToolByName("cron_list");
+
+      expect(cronList.description.toLowerCase()).toMatch(/schedul|reminder|job/);
+      expect(cronList.annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
     });
 
-    it("has action and params in its input schema", () => {
+    it("marks cron mutations with accurate annotations", () => {
       createAssistantServer(makeDeps());
-      const cronTool = findToolByName("cron");
-      expect(cronTool.inputSchema).toHaveProperty("action");
-      expect(cronTool.inputSchema).toHaveProperty("params");
+      const expectedMutationAnnotations = {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      };
+
+      expect(findToolByName("cron_create").annotations).toEqual(expectedMutationAnnotations);
+      expect(findToolByName("cron_update").annotations).toEqual(expectedMutationAnnotations);
+      expect(findToolByName("cron_remove").annotations).toEqual({
+        ...expectedMutationAnnotations,
+        destructiveHint: true,
+      });
     });
 
-    it("delegates to handleCronAction with correct arguments", async () => {
+    it("provides individual schemas for cron mutations", () => {
+      createAssistantServer(makeDeps());
+
+      expect(findToolByName("cron_create").inputSchema).toEqual(expect.objectContaining({
+        label: expect.anything(),
+        schedule: expect.anything(),
+        payload: expect.anything(),
+      }));
+      expect(findToolByName("cron_update").inputSchema).toHaveProperty("id");
+      expect(findToolByName("cron_remove").inputSchema).toHaveProperty("id");
+    });
+
+    it("delegates each cron tool to the matching cron action", async () => {
       const deps = makeDeps();
       createAssistantServer(deps);
-      const cronTool = findToolByName("cron");
 
-      await cronTool.handler({ action: "add", params: { label: "test" } }, {});
+      await findToolByName("cron_list").handler({}, {});
+      await findToolByName("cron_create").handler({ label: "test", schedule: { type: "cron", expression: "0 10 * * 3" }, payload: { type: "systemEvent", text: "research" } }, {});
+      await findToolByName("cron_update").handler({ id: "j1", enabled: false }, {});
+      await findToolByName("cron_remove").handler({ id: "j1" }, {});
 
-      expect(deps.handleCronAction).toHaveBeenCalledOnce();
-      expect(deps.handleCronAction).toHaveBeenCalledWith("add", { label: "test" });
-    });
-
-    it("passes empty object when params is omitted", async () => {
-      const deps = makeDeps();
-      createAssistantServer(deps);
-      const cronTool = findToolByName("cron");
-
-      await cronTool.handler({ action: "list" }, {});
-
-      expect(deps.handleCronAction).toHaveBeenCalledWith("list", {});
+      expect(deps.handleCronAction).toHaveBeenNthCalledWith(1, "list", {});
+      expect(deps.handleCronAction).toHaveBeenNthCalledWith(2, "add", {
+        label: "test",
+        schedule: { type: "cron", expression: "0 10 * * 3" },
+        payload: { type: "systemEvent", text: "research" },
+      });
+      expect(deps.handleCronAction).toHaveBeenNthCalledWith(3, "update", { id: "j1", enabled: false });
+      expect(deps.handleCronAction).toHaveBeenNthCalledWith(4, "remove", { id: "j1" });
     });
 
     it("returns result as JSON in content array", async () => {
@@ -189,9 +216,9 @@ describe("createAssistantServer", () => {
         handleCronAction: vi.fn(async () => ({ success: true, message: "Job added", data: { id: "j1" } })),
       });
       createAssistantServer(deps);
-      const cronTool = findToolByName("cron");
+      const cronTool = findToolByName("cron_create");
 
-      const result = await cronTool.handler({ action: "add", params: { label: "test" } }, {});
+      const result = await cronTool.handler({ label: "test", schedule: { type: "cron", expression: "0 10 * * 3" }, payload: { type: "systemEvent", text: "research" } }, {});
 
       expect(result.content).toHaveLength(1);
       expect(result.content[0].type).toBe("text");

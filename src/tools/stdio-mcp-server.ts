@@ -7,7 +7,8 @@
  *
  * Registered tools:
  *   - memory_search — hybrid vector + keyword search
- *   - cron — manage scheduled jobs
+ *   - cron_list — read scheduled jobs
+ *   - cron_create / cron_update / cron_remove — mutate scheduled jobs
  *   - exec — run background commands
  *   - process — check background process status
  *
@@ -59,39 +60,70 @@ const BASE_TOOL_DEFINITIONS = [
     },
   },
   {
-    name: "cron",
-    description: `Manage scheduled reminders and jobs. Actions:
-
-ADD — create a new job. Required params:
-  - label: string — human-readable name (e.g. "Daily standup reminder")
-  - schedule: object — one of three types:
-      { "type": "cron", "expression": "<cron expr>", "timezone": "<IANA timezone, optional>" } — standard 5-field cron (e.g. "30 9 * * 1-5" = weekdays 9:30 UTC; defaults to UTC)
-      { "type": "oneshot", "iso": "<ISO 8601 datetime>" } — fires once (e.g. "2026-03-01T14:00:00Z")
-      { "type": "interval", "everyMs": <milliseconds> } — repeating interval (e.g. 3600000 = every hour)
-  - payload: { "text": "<message>" } — the text delivered when the job fires
-
-LIST — returns all jobs. No params needed.
-
-UPDATE — modify an existing job. Required params:
-  - id: string — the job UUID (from add/list response)
-  Optional: label, schedule, payload (same format as add), enabled (boolean)
-
-REMOVE — delete a job. Required params:
-  - id: string — the job UUID`,
+    name: "cron_list",
+    description: "List all scheduled reminders and jobs without changing them.",
+    inputSchema: { type: "object" as const, properties: {} },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "cron_create",
+    description: `Create a scheduled reminder or job. Required fields: label, schedule, and payload.
+Schedule is one of:
+  { "type": "cron", "expression": "<cron expr>", "timezone": "<IANA timezone, optional>" }
+  { "type": "oneshot", "iso": "<ISO 8601 datetime>" }
+  { "type": "interval", "everyMs": <milliseconds> }`,
     inputSchema: {
       type: "object" as const,
       properties: {
-        action: {
-          type: "string",
-          enum: ["add", "list", "update", "remove"],
-          description: "Action to perform",
-        },
-        params: {
-          type: "object",
-          description: "Action parameters — see tool description for required fields per action",
-        },
+        label: { type: "string", description: "Human-readable job name" },
+        schedule: { type: "object", description: "Cron, oneshot, or interval schedule" },
+        payload: { type: "object", description: "Message delivered when the job fires" },
       },
-      required: ["action"],
+      required: ["label", "schedule", "payload"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "cron_update",
+    description: "Update an existing scheduled reminder or job by its id.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: { type: "string", description: "Job UUID" },
+        label: { type: "string", description: "Updated human-readable job name" },
+        schedule: { type: "object", description: "Replacement schedule" },
+        payload: { type: "object", description: "Replacement delivery message" },
+        enabled: { type: "boolean", description: "Whether the job is enabled" },
+      },
+      required: ["id"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    },
+  },
+  {
+    name: "cron_remove",
+    description: "Permanently remove a scheduled reminder or job by its id.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { id: { type: "string", description: "Job UUID" } },
+      required: ["id"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: false,
     },
   },
   {
@@ -166,10 +198,32 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
           ],
         };
       }
-      case "cron": {
-        const action = args?.action as string;
-        const params = (args?.params as Record<string, unknown>) ?? {};
-        const result = await deps.handleCronAction(action, params);
+      case "cron_list": {
+        const result = await deps.handleCronAction("list", {});
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      }
+      case "cron_create": {
+        const result = await deps.handleCronAction("add", (args ?? {}) as Record<string, unknown>);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      }
+      case "cron_update": {
+        const result = await deps.handleCronAction("update", (args ?? {}) as Record<string, unknown>);
+        return {
+          content: [
+            { type: "text" as const, text: JSON.stringify(result, null, 2) },
+          ],
+        };
+      }
+      case "cron_remove": {
+        const result = await deps.handleCronAction("remove", (args ?? {}) as Record<string, unknown>);
         return {
           content: [
             { type: "text" as const, text: JSON.stringify(result, null, 2) },

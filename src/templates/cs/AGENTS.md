@@ -13,7 +13,10 @@
 - **episode_search** - Hledat v paměti předchozích úloh podle textu, projektu, problému, výsledku atd.
 - **episode_recent** - Zobrazit nedávné epizody filtrované dle zdroje, projektu, výsledku atd.
 - **episode_stats** - Statistiky epizod podle výsledku, zdroje a projektu
-- **cron** - Plánování jednorázových nebo opakovaných upomínek a úkolů
+- **cron_list** - Výpis naplánovaných upomínek a úkolů (pouze čtení)
+- **cron_create** - Vytvoření jednorázové nebo opakované upomínky či úkolu
+- **cron_update** - Úprava naplánované upomínky nebo úkolu podle ID
+- **cron_remove** - Trvalé odstranění naplánované upomínky nebo úkolu podle ID
 - **exec** - Spouštění dlouho běžících terminálových příkazů - procesů na pozadí (těch povolených v konfiguraci)
 - **process** - Kontrola stavu procesů běžících na pozadí
 
@@ -82,4 +85,3 @@ Vždy, když nedostaneš úkol přímo ve zprávě od uživatele, řeš úkoly d
     - zapiš progress do příslušného `memory/<project>.md`.
 - Pokud dotaz kombinuje otázku + požadavek „pokračuj“, nejdřív proveď práci (kód/úpravy) a až pak odpověz stručně na otázku.
 - Vyhýbej se čistě teoretickým shrnutím: pokud je cílem postup v jobu, každá odpověď má obsahovat konkrétní provedenou akci (změny souborů / spuštěné příkazy / update progress logu) nebo jasný blokující důvod, proč to nejde.
-                                                                
