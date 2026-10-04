@@ -19,8 +19,12 @@ import { isHeartbeatOk } from "../heartbeat/prompts.js";
 import { createProcessingAccumulator } from "./processing-message.js";
 import { createRateLimiter, type RateLimiter } from "./rate-limiter.js";
 import {
+  formatFailureMessage,
+  readHostSnapshot,
+  readRecentWatchdogKill,
+} from "./failure-diagnosis.js";
+import {
   findActiveWorkloadLock,
-  formatSignalFailureMessage,
   formatWorkloadPauseMessage,
 } from "./workload-guard.js";
 
@@ -436,12 +440,21 @@ export function createMessageQueue(config: Config, redact?: (text: string) => st
             const activeWorkloadLock = signal
               ? await findActiveWorkloadLock(config.gateway.workloadLockFiles)
               : null;
+            const dataDir = config.security.dataDir;
+            const [watchdogKill, host] = await Promise.all([
+              signal ? readRecentWatchdogKill(dataDir) : null,
+              readHostSnapshot(dataDir),
+            ]);
             const errorResponse: AdapterMessage = {
               source: errorTarget.source,
               sourceId: errorTarget.sourceId,
-              text: signal
-                ? formatSignalFailureMessage(signal, activeWorkloadLock)
-                : "Sorry, something went wrong while processing your message. Please try again.",
+              text: formatFailureMessage({
+                errorMessage,
+                signal,
+                lock: activeWorkloadLock,
+                watchdogKill,
+                host,
+              }),
               metadata: {
                 ...(message.metadata && typeof message.metadata === "object"
                   ? (message.metadata as Record<string, unknown>)
