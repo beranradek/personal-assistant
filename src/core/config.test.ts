@@ -118,6 +118,22 @@ describe("config", () => {
       expect(config.gateway.workloadLockFiles[0]).not.toContain("~");
     });
 
+    it("resolves ~ in additionalReadDirs and additionalWriteDirs", () => {
+      const partial = {
+        security: {
+          additionalReadDirs: ["~/read-me", "/tmp"],
+          additionalWriteDirs: ["~/.android", "/tmp"],
+        },
+      };
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(partial));
+
+      const config = loadConfig(tmpDir);
+
+      const home = os.homedir();
+      expect(config.security.additionalReadDirs).toEqual([path.join(home, "read-me"), "/tmp"]);
+      expect(config.security.additionalWriteDirs).toEqual([path.join(home, ".android"), "/tmp"]);
+    });
+
     it("returns full defaults when settings.json has empty object {}", () => {
       fs.writeFileSync(path.join(tmpDir, "settings.json"), "{}");
 

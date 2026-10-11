@@ -262,6 +262,8 @@ export function loadConfig(configDir: string): Config {
   // Resolve ~ in path fields
   config.security.workspace = resolveUserPath(config.security.workspace);
   config.security.dataDir = resolveUserPath(config.security.dataDir);
+  config.security.additionalReadDirs = config.security.additionalReadDirs.map(resolveUserPath);
+  config.security.additionalWriteDirs = config.security.additionalWriteDirs.map(resolveUserPath);
   config.gateway.workloadLockFiles = config.gateway.workloadLockFiles.map(resolveUserPath);
 
   return config;
