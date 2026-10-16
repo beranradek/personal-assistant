@@ -147,6 +147,36 @@ function hostSuffix(host: HostSnapshot | null): string {
   return problems.length > 0 ? ` Host state: ${problems.join(", ")}.` : "";
 }
 
+interface ProviderFailure {
+  pattern: RegExp;
+  description: string;
+}
+
+// Errors reported by the model provider itself; retrying later (or switching
+// model) is the only remedy, so say so instead of a generic failure notice.
+const PROVIDER_FAILURES: ProviderFailure[] = [
+  {
+    pattern: /is at capacity|overloaded/i,
+    description: "the selected model is at capacity (provider overload)",
+  },
+  {
+    pattern: /rate.?limit|too many requests|\b429\b/i,
+    description: "the model provider rate limit was hit",
+  },
+  {
+    pattern: /usage limit|quota|insufficient[_ ]credits|billing/i,
+    description: "the model provider usage quota is exhausted",
+  },
+  {
+    pattern: /unauthorized|invalid[_ ]api[_ ]key|authentication|\b401\b|\b403\b/i,
+    description: "the model provider rejected the credentials (login expired or invalid)",
+  },
+];
+
+function describeProviderFailure(errorMessage: string): string | null {
+  return PROVIDER_FAILURES.find((f) => f.pattern.test(errorMessage))?.description ?? null;
+}
+
 function firstLineExcerpt(errorMessage: string): string {
   const line = errorMessage.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "";
   return line.length > MAX_DETAIL_CHARS ? `${line.slice(0, MAX_DETAIL_CHARS)}…` : line;
@@ -188,6 +218,13 @@ export function formatFailureMessage(ctx: FailureContext): string {
   }
 
   const detail = firstLineExcerpt(errorMessage);
+  const providerFailure = describeProviderFailure(errorMessage);
+  if (providerFailure) {
+    return (
+      `Sorry, I couldn't process your message: ${providerFailure}. ` +
+      `Details: ${detail}.${hostSuffix(host)} Please try again in a few minutes.`
+    );
+  }
   return (
     "Sorry, something went wrong while processing your message." +
     `${detail ? ` Cause: ${detail}.` : ""}${hostSuffix(host)} Please try again.`

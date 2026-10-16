@@ -122,6 +122,18 @@ describe("formatFailureMessage", () => {
     expect(text).not.toContain("something went wrong");
   });
 
+  it.each([
+    ["Codex agent turn failed: Selected model is at capacity. Please try a different model.", "at capacity"],
+    ["429 Too Many Requests", "rate limit"],
+    ["You've hit your usage limit", "quota"],
+    ["401 Unauthorized", "credentials"],
+  ])("names provider failure %s", (errorMessage, expected) => {
+    const text = formatFailureMessage(ctx({ errorMessage }));
+    expect(text).toContain(expected);
+    expect(text).toContain(errorMessage.split(". ")[0]);
+    expect(text).not.toContain("something went wrong");
+  });
+
   it("falls back to a generic message with a short cause excerpt", () => {
     const text = formatFailureMessage(ctx({ errorMessage: `agent failure\n${"x".repeat(500)}` }));
     expect(text).toContain("something went wrong");
