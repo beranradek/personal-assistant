@@ -5,6 +5,7 @@ import {
   validateCommand,
   extractFilePathsFromCommand,
   validateRmCommand,
+  type RmValidationContext,
   validateKillCommand,
 } from "../security/allowed-commands.js";
 import { validatePath } from "../security/path-validator.js";
@@ -160,7 +161,10 @@ function extractPathArguments(segment: string): string[] {
 
 const EXTRA_VALIDATORS: Record<
   string,
-  (segment: string) => { allowed: boolean; reason?: string }
+  (
+    segment: string,
+    ctx?: RmValidationContext,
+  ) => { allowed: boolean; reason?: string }
 > = {
   rm: validateRmCommand,
   kill: validateKillCommand,
@@ -234,7 +238,10 @@ export async function handleExec(
     if (baseCmd && extraValidationSet.has(baseCmd)) {
       const validator = EXTRA_VALIDATORS[baseCmd];
       if (validator) {
-        const extraResult = validator(segment);
+        const extraResult = validator(segment, {
+          workspaceDir: config.security.workspace,
+          additionalWriteDirs: config.security.additionalWriteDirs,
+        });
         if (!extraResult.allowed) {
           return {
             success: false,

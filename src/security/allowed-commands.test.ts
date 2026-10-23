@@ -288,6 +288,50 @@ describe("validateRmCommand", () => {
   });
 });
 
+describe("validateRmCommand with writable scope", () => {
+  const ctx = {
+    workspaceDir: "/home/u/.pa/workspace",
+    additionalWriteDirs: ["/tmp", "/home/u/.gradle"],
+  };
+
+  it("allows recursive delete inside workspace (under /home)", () => {
+    expect(validateRmCommand("rm -rf /home/u/.pa/workspace/proj/build", ctx).allowed).toBe(true);
+    expect(validateRmCommand("rm -rf proj/tmp", ctx).allowed).toBe(true);
+  });
+
+  it("allows recursive delete in additional write dirs", () => {
+    expect(validateRmCommand("rm -rf /tmp/foo", ctx).allowed).toBe(true);
+    expect(validateRmCommand("rm -rf /home/u/.gradle/caches", ctx).allowed).toBe(true);
+  });
+
+  it("allows wildcard recursive delete inside writable scope", () => {
+    expect(validateRmCommand("rm -rf /tmp/foo/*", ctx).allowed).toBe(true);
+    expect(validateRmCommand("rm -rf proj/*.tmp", ctx).allowed).toBe(true);
+  });
+
+  it("blocks bare recursive wildcard in the workspace root", () => {
+    expect(validateRmCommand("rm -rf *", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf ./*", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf /home/u/.pa/workspace/*", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf *.tmp", ctx).allowed).toBe(true);
+    expect(validateRmCommand("rm -rf proj/*", ctx).allowed).toBe(true);
+  });
+
+  it("does not allow deleting a writable root itself", () => {
+    expect(validateRmCommand("rm -rf /tmp", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf /home/u/.gradle", ctx).allowed).toBe(false);
+  });
+
+  it("still blocks outside scope and traversal", () => {
+    expect(validateRmCommand("rm -rf /home/u/Documents", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf /tmp/../etc/x", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf ../*", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf /home/u/*", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf /tmp/.*", ctx).allowed).toBe(false);
+    expect(validateRmCommand("rm -rf /tmp/*/../../etc/x", ctx).allowed).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // validateKillCommand
 // ---------------------------------------------------------------------------

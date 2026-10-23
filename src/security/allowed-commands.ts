@@ -12,6 +12,8 @@
  * - Handles common patterns: pipes, chaining, substitutions, keywords
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -587,6 +589,68 @@ export function validateCommand(
 // validateRmCommand
 // ---------------------------------------------------------------------------
 
+export interface RmValidationContext {
+  workspaceDir: string;
+  additionalWriteDirs?: string[];
+}
+
+function resolveRoot(dir: string): string {
+  let resolved = path.resolve(dir.startsWith("~") ? path.join(os.homedir(), dir.slice(1)) : dir);
+  try {
+    resolved = fs.realpathSync(resolved);
+  } catch {
+    // directory may not exist yet
+  }
+  return resolved;
+}
+
+/**
+ * Whether an rm target lies strictly inside a writable root (workspace or
+ * additionalWriteDirs). Only the glob-free prefix is resolved (symlinks
+ * included), so `/tmp/foo/*` is checked as `/tmp/foo`. The root itself is
+ * never in scope (except as `<root>/*`), and `..` cannot escape because the
+ * prefix is normalized before comparison.
+ */
+function isRmTargetInWritableScope(target: string, ctx: RmValidationContext): boolean {
+  // `..` after a glob (e.g. `/tmp/*/../../etc`) would escape the resolved prefix
+  if (target.split("/").includes("..")) return false;
+  const globIdx = target.search(/[*?[]/);
+  const hasGlob = globIdx !== -1;
+  let prefix = hasGlob ? target.slice(0, globIdx) : target;
+  if (hasGlob) {
+    // Cut back to the last separator so a partial segment ("foo*") is not resolved
+    prefix = prefix.slice(0, prefix.lastIndexOf("/") + 1) || "./";
+  }
+  if (prefix === "~") prefix = os.homedir();
+  else if (prefix.startsWith("~/")) prefix = path.join(os.homedir(), prefix.slice(2));
+  const abs = path.resolve(path.isAbsolute(prefix) ? prefix : path.join(ctx.workspaceDir, prefix));
+  let resolved = abs;
+  try {
+    resolved = fs.realpathSync(abs);
+  } catch {
+    // does not exist; lexical path is already normalized
+  }
+  const workspaceRoot = resolveRoot(ctx.workspaceDir);
+  const roots = [ctx.workspaceDir, ...(ctx.additionalWriteDirs ?? [])].map(resolveRoot);
+  for (const root of roots) {
+    if (resolved === root) {
+      // `<root>/*` ok (except a bare `*` directly in the workspace root), `<root>` itself not
+      const bareWorkspaceStar = root === workspaceRoot && target.split("/").pop() === "*";
+      return hasGlob && !bareWorkspaceStar;
+    }
+    if (resolved.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) return true;
+  }
+  return false;
+}
+
+function isRmTargetWritableRoot(target: string, ctx: RmValidationContext): boolean {
+  if (/[*?[]/.test(target)) return false;
+  const expanded =
+    target === "~" ? os.homedir() : target.startsWith("~/") ? path.join(os.homedir(), target.slice(2)) : target;
+  const abs = resolveRoot(path.isAbsolute(expanded) ? expanded : path.join(ctx.workspaceDir, expanded));
+  return [ctx.workspaceDir, ...(ctx.additionalWriteDirs ?? [])].some((r) => resolveRoot(r) === abs);
+}
+
 /**
  * Validate rm commands -- block dangerous recursive/root operations.
  *
@@ -595,11 +659,16 @@ export function validateCommand(
  * 2. Block dangerous patterns like /*, system directories, hidden files
  * 3. Block recursive deletion with wildcards
  *
+ * When `ctx` is given, targets strictly inside the workspace or an
+ * additionalWriteDir are exempt from checks 2 (except hidden/`..` globs)
+ * and 3, so bulk recursive deletes work in writable areas only.
+ *
  * @param segment - The full rm command segment (e.g. "rm -rf /")
  * @returns Object with `allowed` boolean and optional `reason` string
  */
 export function validateRmCommand(
   segment: string,
+  ctx?: RmValidationContext,
 ): { allowed: boolean; reason?: string } {
   const tokens = shellTokenize(segment);
   if (!tokens) {
@@ -641,6 +710,20 @@ export function validateRmCommand(
       return { allowed: false, reason: `rm blocked: dangerous target '/'` };
     }
 
+    const inScope = ctx ? isRmTargetInWritableScope(target, ctx) : false;
+    const hiddenGlob = /(^|\/)\.\*/.test(target) || /(^|\/)\.\.?$/.test(target) || target.split("/").includes("..");
+
+    if (inScope && !hiddenGlob) {
+      continue;
+    }
+
+    if (ctx && isRecursive && isRmTargetWritableRoot(target, ctx)) {
+      return {
+        allowed: false,
+        reason: `rm blocked: recursive deletion of a writable root directory itself is not allowed: ${target}`,
+      };
+    }
+
     for (const pattern of DANGEROUS_RM_PATTERNS) {
       if (
         target === pattern ||
@@ -666,7 +749,7 @@ export function validateRmCommand(
   // Block recursive deletion with wildcards
   if (isRecursive) {
     for (const target of targets) {
-      if (target.includes("*")) {
+      if (target.includes("*") && !(ctx && isRmTargetInWritableScope(target, ctx))) {
         return {
           allowed: false,
           reason: `rm blocked: recursive deletion with wildcard not allowed: ${target}`,

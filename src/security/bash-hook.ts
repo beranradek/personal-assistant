@@ -27,6 +27,7 @@ import {
   extractCommands,
   validateCommand,
   validateRmCommand,
+  type RmValidationContext,
   validateKillCommand,
   extractFilePathsFromCommand,
 } from "./allowed-commands.js";
@@ -64,7 +65,10 @@ type HookResult = Record<string, unknown>;
  */
 const EXTRA_VALIDATORS: Record<
   string,
-  (segment: string) => { allowed: boolean; reason?: string }
+  (
+    segment: string,
+    ctx?: RmValidationContext,
+  ) => { allowed: boolean; reason?: string }
 > = {
   rm: validateRmCommand,
   kill: validateKillCommand,
@@ -325,7 +329,10 @@ export async function bashSecurityHook(
     if (baseCmd && extraValidationSet.has(baseCmd)) {
       const validator = EXTRA_VALIDATORS[baseCmd];
       if (validator) {
-        const extraResult = validator(segment);
+        const extraResult = validator(segment, {
+          workspaceDir: workspaceDir,
+          additionalWriteDirs: config.security.additionalWriteDirs,
+        });
         if (!extraResult.allowed) {
           return {
             decision: "block",
