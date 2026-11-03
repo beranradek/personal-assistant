@@ -60,6 +60,14 @@ function isInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
 }
 
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.lstat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function linksIn(markdown: string): string[] {
   const result: string[] = [];
   const withoutFences = markdown.replace(/```[\s\S]*?```/g, "");
@@ -77,16 +85,14 @@ export async function lintMemoryKnowledgeBase(workspaceDir: string): Promise<Mem
   const files = await collectMarkdownFiles(memoryDir);
   const issues: MemoryLintIssue[] = [];
   const contentByPath = new Map<string, string>();
-  const headingsByPath = new Map<string, Set<string>>();
   const entities = new Map<string, string>();
 
   for (const filePath of files) {
     const content = await fs.readFile(filePath, "utf8");
     contentByPath.set(filePath, content);
-    headingsByPath.set(filePath, headingIds(content));
     const parsed = parseMemoryMetadata(content);
     for (const issue of parsed.issues) {
-      issues.push({ ...issue, severity: "error", path: filePath });
+      issues.push({ ...issue, severity: "error", path: path.relative(workspaceDir, filePath) });
     }
 
     if (parsed.metadata.type && parsed.metadata.title) {
@@ -109,14 +115,27 @@ export async function lintMemoryKnowledgeBase(workspaceDir: string): Promise<Mem
     for (const link of linksIn(content)) {
       if (isExternalLink(link)) continue;
       const [rawPath, rawAnchor] = link.split("#", 2);
-      const targetPath = rawPath
-        ? path.resolve(path.dirname(sourcePath), decodeURIComponent(rawPath))
-        : sourcePath;
-      if (!isInside(workspaceDir, targetPath)) {
+      let decodedPath: string;
+      try {
+        decodedPath = rawPath ? decodeURIComponent(rawPath) : "";
+      } catch {
         issues.push({
           code: "broken-link",
           severity: "error",
-          path: sourcePath,
+          path: path.relative(workspaceDir, sourcePath),
+          message: `Link target has invalid percent encoding: ${link}`,
+        });
+        continue;
+      }
+      const targetPath = rawPath
+        ? path.resolve(path.dirname(sourcePath), decodedPath)
+        : sourcePath;
+      const isKnownMemoryFile = contentByPath.has(targetPath);
+      if (!isInside(workspaceDir, targetPath) || (!isKnownMemoryFile && !await isRegularFile(targetPath))) {
+        issues.push({
+          code: "broken-link",
+          severity: "error",
+          path: path.relative(workspaceDir, sourcePath),
           message: `Link target does not exist: ${link}`,
         });
         continue;
@@ -130,7 +149,7 @@ export async function lintMemoryKnowledgeBase(workspaceDir: string): Promise<Mem
           issues.push({
             code: "broken-link",
             severity: "error",
-            path: sourcePath,
+            path: path.relative(workspaceDir, sourcePath),
             message: `Link target does not exist: ${link}`,
           });
           continue;
@@ -140,7 +159,7 @@ export async function lintMemoryKnowledgeBase(workspaceDir: string): Promise<Mem
         issues.push({
           code: "broken-anchor",
           severity: "error",
-          path: sourcePath,
+          path: path.relative(workspaceDir, sourcePath),
           message: `Link anchor does not exist: ${link}`,
         });
       }

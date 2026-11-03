@@ -1,4 +1,5 @@
 import { parseDocument } from "yaml";
+import { z } from "zod";
 
 export interface MemoryMetadata {
   type?: string;
@@ -13,6 +14,13 @@ export interface MemorySearchFilters {
   /** Every requested tag must be present (case-insensitive). */
   tags?: string[];
 }
+
+export const MemorySearchInputSchema = z.object({
+  query: z.string().trim().min(1).max(512),
+  maxResults: z.number().int().positive().max(100).optional(),
+  type: z.string().trim().min(1).max(100).optional(),
+  tags: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+}).strict();
 
 export interface MemoryMetadataIssue {
   code: "invalid-frontmatter" | "invalid-type" | "invalid-title" | "invalid-tags";

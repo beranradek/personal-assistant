@@ -120,6 +120,23 @@ describe("memory file reader", () => {
       expect(result).toBeNull();
     });
 
+    it("does not read files outside the workspace", async () => {
+      const outsideFile = path.join(path.dirname(tmpDir), "memory-reader-outside.md");
+      await fs.writeFile(outsideFile, "outside");
+
+      await expect(readMemoryFile(tmpDir, "../memory-reader-outside.md")).resolves.toBeNull();
+      await fs.rm(outsideFile, { force: true });
+    });
+
+    it("does not follow a workspace symlink outside the workspace", async () => {
+      const outsideFile = path.join(path.dirname(tmpDir), "memory-reader-symlink-outside.md");
+      await fs.writeFile(outsideFile, "outside");
+      await fs.symlink(outsideFile, path.join(tmpDir, "AGENTS.md"));
+
+      await expect(readMemoryFile(tmpDir, "AGENTS.md")).resolves.toBeNull();
+      await fs.rm(outsideFile, { force: true });
+    });
+
     it("reads HEARTBEAT.md when requested", async () => {
       await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "heartbeat data");
 

@@ -38,6 +38,20 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 4. **Memory use.** Each `pa mcp-server` process loads the embedding model (about 314 MB). Prefer the shared HTTP MCP server
    (see task 4) when the daemon runs.
 
+## Security and resource implementation gates
+
+- Generate configuration only on explicit opt-in and never overwrite existing `.mcp.json` or `.claude/settings.json`.
+  Do not copy credentials or another user's MCP configuration; configuration may contain environment-variable references only.
+- Do not translate PA's `security.allowedCommands` mechanically into Claude Code auto-approval. Start with Bash prompts for
+  mutations and external side effects; any allowlist must be narrow, read-only and workspace-scoped.
+- Authorize PA MCP tools explicitly by tool name and risk class. Read-only calls may be allowed deliberately; `exec`,
+  `cron_create`/`cron_update`/`cron_remove`, and other state-changing tools must remain confirmation-gated.
+- `claude-context` reads only the fixed root context files, distinguishes a missing file from a read error, and enforces a
+  documented aggregate output limit so a bad local file cannot exhaust the hook/session context.
+- Before advertising parity, either use the existing localhost HTTP MCP server when available or make stdio MCP initialize
+  the embedding service lazily. A new Claude session must not silently add a ~314 MB model load on this VPS.
+- The shared endpoint stays bound to `127.0.0.1`; test both this binding and failure behaviour when its port is occupied.
+
 ## Tasks
 
 ### 1. `pa claude-context` command
@@ -59,19 +73,21 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 ### 3. Workspace config templates and docs
 
 - Add `src/templates/claude-code/` with `.mcp.json` and `.claude/settings.json` examples:
-  - MCP server `pa` -> `pa mcp-server`, plus user servers.
+  - MCP server `pa` -> `pa mcp-server`; preserve user-managed servers without merging or copying secrets.
   - SessionStart hook -> `pa claude-context --hook-json`.
-  - Permissions: deny reads/writes outside workspace and `additionalReadDirs`/`additionalWriteDirs`; Bash allowlist from
-    `security.allowedCommands`.
+  - Permissions: deny reads/writes outside workspace and `additionalReadDirs`/`additionalWriteDirs`; default Bash and
+    state-changing MCP calls to confirmation. Do not use PA's command allowlist as a blanket auto-allow rule.
 - Option: `pa init --claude-code` copies the templates into the workspace without overwriting existing files.
 - Add a "Claude Code companion mode" section to README.md with the gap list above.
 - Update the Czech AGENTS.md note "files are given in your system message": say they can also come from the SessionStart hook.
 
-### 4. HTTP MCP option (optional)
+### 4. HTTP MCP and model-resource handling
 
 - Today the shared HTTP MCP server starts only for `backend: "codex"`. Add config `mcp.httpServer.enabled` to start it for
   any backend. `.mcp.json` can then use `{"type":"http","url":"http://127.0.0.1:47392/mcp"}` and avoid one model load per session.
-- Check the endpoint path and add a bind-to-localhost test.
+- If the endpoint is unavailable, document the stdio resource cost or make embedding initialization lazy before making the
+  stdio template the default.
+- Check the endpoint path, bind-to-localhost behaviour, and occupied-port failure.
 
 ### 5. Verification (E2E)
 

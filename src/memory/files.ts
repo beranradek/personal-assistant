@@ -41,9 +41,21 @@ export async function readMemoryFile(
   workspaceDir: string,
   filename: string,
 ): Promise<string | null> {
-  try {
-    return await fs.readFile(path.join(workspaceDir, filename), "utf-8");
-  } catch {
+  const filePath = path.resolve(workspaceDir, filename);
+  const workspacePath = path.resolve(workspaceDir);
+  if (path.relative(workspacePath, filePath).startsWith(`..${path.sep}`) || path.relative(workspacePath, filePath) === "..") {
     return null;
   }
+
+  try {
+    if (!(await fs.lstat(filePath)).isFile()) return null;
+    return await fs.readFile(filePath, "utf-8");
+  } catch (error: unknown) {
+    if (isMissingFileError(error)) return null;
+    throw error;
+  }
+}
+
+function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

@@ -155,6 +155,13 @@ describe("createStdioMcpServer", () => {
       });
     });
 
+    it("rejects an excessive maxResults without calling search", async () => {
+      const result = await callTool("memory_search", { query: "jan", maxResults: 101 });
+
+      expect(deps.search).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+    });
+
     it("dispatches memory_lint when provided", async () => {
       deps = makeDeps({ lintMemory: vi.fn().mockResolvedValue({ filesScanned: 2, issues: [] }) });
       handlers.clear();

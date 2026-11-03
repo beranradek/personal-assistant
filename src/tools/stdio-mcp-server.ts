@@ -21,9 +21,8 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
 import type { SearchResult } from "../core/types.js";
-import type { MemorySearchFilters } from "../memory/metadata.js";
+import { MemorySearchInputSchema, type MemorySearchFilters } from "../memory/metadata.js";
 import type { MemoryLintResult } from "../memory/linter.js";
 import type { AssistantServerDeps } from "./assistant-server.js";
 import {
@@ -210,13 +209,16 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
 
     switch (name) {
       case "memory_search": {
-        const query = args?.query as string;
-        const maxResults = args?.maxResults as number | undefined;
-        const type = args?.type as string | undefined;
-        const tags = args?.tags as string[] | undefined;
-        const results = await deps.search(query, maxResults, {
-          ...(type ? { type } : {}),
-          ...(tags?.length ? { tags } : {}),
+        const input = MemorySearchInputSchema.safeParse(args ?? {});
+        if (!input.success) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid memory_search input" }) }],
+            isError: true,
+          };
+        }
+        const results = await deps.search(input.data.query, input.data.maxResults, {
+          ...(input.data.type ? { type: input.data.type } : {}),
+          ...(input.data.tags?.length ? { tags: input.data.tags } : {}),
         });
         return {
           content: [

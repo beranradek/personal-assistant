@@ -78,4 +78,32 @@ describe("lintMemoryKnowledgeBase", () => {
 
     expect(result.issues).toEqual([]);
   });
+
+  it("does not follow a workspace symlink to a file outside the workspace", async () => {
+    const outsideFile = path.join(path.dirname(workspaceDir), "outside.md");
+    await fs.writeFile(outsideFile, "# Outside");
+    await fs.symlink(outsideFile, path.join(workspaceDir, "linked.md"));
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "index.md"),
+      "---\ntype: Index\ntitle: Knowledge base\n---\n[Outside](../linked.md)\n",
+    );
+
+    const result = await lintMemoryKnowledgeBase(workspaceDir);
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({ code: "broken-link", path: "memory/index.md" }),
+    ]);
+  });
+
+  it("reports malformed percent encoding as a broken link instead of throwing", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "index.md"),
+      "---\ntype: Index\ntitle: Knowledge base\n---\n[Broken](%E0%A4%A.md)\n",
+    );
+
+    await expect(lintMemoryKnowledgeBase(workspaceDir)).resolves.toEqual({
+      filesScanned: 1,
+      issues: [expect.objectContaining({ code: "broken-link", path: "memory/index.md" })],
+    });
+  });
 });

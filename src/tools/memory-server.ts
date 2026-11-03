@@ -1,7 +1,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { SearchResult } from "../core/types.js";
-import type { MemorySearchFilters } from "../memory/metadata.js";
+import { MemorySearchInputSchema, type MemorySearchFilters } from "../memory/metadata.js";
 import type { MemoryLintResult } from "../memory/linter.js";
 import {
   EpisodeInitiatorSchema,
@@ -65,13 +65,10 @@ export function createMemoryServer(deps: {
       "memory_search",
       "Search long-term memory for past decisions, preferences, and context. Tip: overly broad multi-word queries can yield no results; try shortening to 1–3 key terms.",
       {
-        query: z.string().describe("Search query"),
-        maxResults: z
-          .number()
-          .optional()
-          .describe("Max results (default 6)"),
-        type: z.string().optional().describe("Exact OKF page type filter, case-insensitive"),
-        tags: z.array(z.string()).optional().describe("Require every listed OKF tag, case-insensitive"),
+        query: MemorySearchInputSchema.shape.query.describe("Search query"),
+        maxResults: MemorySearchInputSchema.shape.maxResults.describe("Max results (default 6, max 100)"),
+        type: MemorySearchInputSchema.shape.type.describe("Exact OKF page type filter, case-insensitive"),
+        tags: MemorySearchInputSchema.shape.tags.describe("Require every listed OKF tag, case-insensitive"),
       },
       async (args) => {
         const results = await deps.search(args.query, args.maxResults, {
