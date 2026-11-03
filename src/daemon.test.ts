@@ -488,6 +488,17 @@ describe("daemon", () => {
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
   });
 
+  it("starts shared HTTP MCP server for Claude when explicitly enabled", async () => {
+    const config = makeConfig({
+      mcp: { httpServer: { enabled: true } },
+    } as Partial<Config>);
+    setupMocks(config);
+
+    await startDaemon("/app");
+
+    expect(startHttpMcpServer).toHaveBeenCalledWith(expect.any(Object), config.codex.httpMcpPort);
+  });
+
   it("falls back to stdio MCP when shared HTTP MCP server startup fails", async () => {
     const config = makeConfig({
       agent: { backend: "codex", model: null, maxTurns: 200 },

@@ -42,6 +42,8 @@ function makeDeps(
       .mockResolvedValue({ success: true, output: "done" }),
     getProcessSession: vi.fn().mockReturnValue(undefined),
     listProcessSessions: vi.fn().mockReturnValue([]),
+    handleHabitCheck: vi.fn().mockResolvedValue({ success: true, message: "Habit checked" }),
+    handleHabitStatus: vi.fn().mockResolvedValue({ pillars: [] }),
     ...overrides,
   };
 }
@@ -95,6 +97,8 @@ describe("createStdioMcpServer", () => {
         "cron_remove",
         "exec",
         "process",
+        "habit_check",
+        "habit_status",
       ]);
     });
 
@@ -106,6 +110,31 @@ describe("createStdioMcpServer", () => {
         expect(tool).toHaveProperty("inputSchema");
         expect(tool.inputSchema.type).toBe("object");
       }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // habits
+  // -----------------------------------------------------------------------
+  describe("habit tools", () => {
+    it("dispatches habit_check and habit_status to supplied handlers", async () => {
+      await callTool("habit_check", { label: "Walk", done: true });
+      await callTool("habit_status");
+
+      expect(deps.handleHabitCheck).toHaveBeenCalledWith("Walk", true);
+      expect(deps.handleHabitStatus).toHaveBeenCalledOnce();
+    });
+
+    it("returns the disabled-config response from habit handlers", async () => {
+      deps = makeDeps({
+        handleHabitStatus: vi.fn().mockResolvedValue({ error: "Habits tracking is disabled in config" }),
+      });
+      handlers.clear();
+      createStdioMcpServer(deps);
+
+      const result = await callTool("habit_status");
+
+      expect(JSON.parse(result.content[0].text)).toEqual({ error: "Habits tracking is disabled in config" });
     });
   });
 

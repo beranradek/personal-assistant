@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pa claude-context --hook-json"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "mcp__pa__memory_search",
+      "mcp__pa__memory_lint",
+      "mcp__pa__episode_recent",
+      "mcp__pa__episode_search",
+      "mcp__pa__episode_stats",
+      "mcp__pa__cron_list",
+      "mcp__pa__habit_status",
+      "mcp__pa__process"
+    ],
+    "deny": [
+      "Read(../**)",
+      "Edit(../**)"
+    ],
+    "ask": [
+      "Bash(*)",
+      "mcp__pa__exec",
+      "mcp__pa__habit_check",
+      "mcp__pa__episode_write",
+      "mcp__pa__cron_create",
+      "mcp__pa__cron_update",
+      "mcp__pa__cron_remove"
+    ]
+  }
+}

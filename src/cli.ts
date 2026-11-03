@@ -15,6 +15,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 import { resolveConfigDir, loadConfig, DEFAULTS } from "./core/config.js";
 import { collectMemoryFiles } from "./memory/collect-files.js";
 import { ensureWorkspace } from "./core/workspace.js";
@@ -23,10 +24,12 @@ import { startDaemon } from "./daemon.js";
 import { createLogger } from "./core/logger.js";
 import { runDailyReflection } from "./memory/daily-reflection.js";
 import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
+import { buildClaudeContext, formatSessionStartHookOutput } from "./claude/context.js";
+import { installClaudeCodeTemplates } from "./claude/templates.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -55,6 +58,8 @@ Commands:
   daemon                Start headless daemon mode
   init                  Create default settings.json in config directory
   mcp-server            Start stdio MCP server (for Codex backend integration)
+  claude-context        Print safe SessionStart context for Claude Code
+  claude                Start Claude Code in workspace-restricted companion mode
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
   episode-eval          Run the built-in episodic memory evaluation fixture corpus [--json] [--output <path>]
@@ -66,29 +71,76 @@ Environment:
   PA_CONFIG             Config directory path (overridden by --config flag)`);
 }
 
-async function runInit(configDir: string): Promise<void> {
+async function runInit(configDir: string, options: { claudeCode: boolean }): Promise<void> {
   const settingsPath = path.join(configDir, "settings.json");
+  let settingsAlreadyExist = false;
 
   try {
     await fs.access(settingsPath);
+    settingsAlreadyExist = true;
     console.log(`Settings file already exists: ${settingsPath}`);
     console.log("Edit it to customize your configuration.");
-    return;
+    if (!options.claudeCode) return;
   } catch {
     // File doesn't exist, continue
   }
 
-  await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(settingsPath, JSON.stringify(DEFAULTS, null, 2) + "\n", {
-    mode: 0o600,
-  });
-  console.log(`Created default settings: ${settingsPath}`);
-  console.log("Edit this file to customize your configuration.");
+  if (!settingsAlreadyExist) {
+    await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(settingsPath, JSON.stringify(DEFAULTS, null, 2) + "\n", {
+      mode: 0o600,
+    });
+    console.log(`Created default settings: ${settingsPath}`);
+    console.log("Edit this file to customize your configuration.");
+  }
 
   // Also ensure workspace directories exist
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
   console.log(`Workspace initialized: ${config.security.workspace}`);
+  if (options.claudeCode) {
+    const result = await installClaudeCodeTemplates(config.security.workspace);
+    console.log(`Claude Code templates created: ${result.created.join(", ") || "none"}`);
+    if (result.skipped.length > 0) console.log(`Claude Code templates preserved: ${result.skipped.join(", ")}`);
+  }
+}
+
+async function runClaudeContext(configDir: string, hookJson: boolean): Promise<void> {
+  const config = loadConfig(configDir);
+  const context = await buildClaudeContext(config.security.workspace);
+  console.log(hookJson ? formatSessionStartHookOutput(context) : context);
+}
+
+export function buildClaudeCompanionArgs(workspaceDir: string, args: string[]): string[] {
+  return [
+    "--restricted",
+    "--tools", "default",
+    "--settings", path.join(workspaceDir, ".claude", "settings.json"),
+    "--mcp-config", path.join(workspaceDir, ".mcp.json"),
+    ...args,
+  ];
+}
+
+export function buildClaudeCompanionEnvironment(configDir: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...env, PA_CONFIG: configDir };
+}
+
+async function runClaudeCompanion(configDir: string, rawArgs: string[]): Promise<void> {
+  const config = loadConfig(configDir);
+  const commandIndex = rawArgs.indexOf("claude");
+  const companionArgs = rawArgs.slice(commandIndex + 1).filter((arg, index, values) =>
+    arg !== "--config" && values[index - 1] !== "--config",
+  );
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    const child = spawn(process.env["CLAUDE_PATH"] || "claude", buildClaudeCompanionArgs(config.security.workspace, companionArgs), {
+      cwd: config.security.workspace,
+      stdio: "inherit",
+      env: buildClaudeCompanionEnvironment(configDir),
+    });
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+  if (exitCode !== 0) process.exitCode = exitCode ?? 1;
 }
 
 async function startMcpServer(configDir: string): Promise<void> {
@@ -101,6 +153,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     { lintMemoryKnowledgeBase },
     { createCronToolManager },
     { handleExec },
+    { loadHabits, markHabit },
     { getSession, listSessions },
     { createStdioMcpServer, runStdioServer },
   ] = await Promise.all([
@@ -111,6 +164,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     import("./memory/linter.js"),
     import("./cron/tool.js"),
     import("./exec/tool.js"),
+    import("./heartbeat/habits.js"),
     import("./exec/process-registry.js"),
     import("./tools/stdio-mcp-server.js"),
   ]);
@@ -164,6 +218,17 @@ async function startMcpServer(configDir: string): Promise<void> {
     handleExec: (options) => handleExec(options, config),
     getProcessSession: getSession,
     listProcessSessions: listSessions,
+    handleHabitCheck: async (label, done) => {
+      if (!config.habits.enabled) return { success: false, message: "Habits tracking is disabled in config" };
+      await markHabit(config.security.workspace, label, done);
+      return { success: true, message: `Habit "${label}" marked as ${done ? "done" : "undone"}` };
+    },
+    handleHabitStatus: async () => {
+      if (!config.habits.enabled) return { error: "Habits tracking is disabled in config" };
+      const habits = await loadHabits(config.security.workspace);
+      if (!habits) return { error: "HABITS.md not found in workspace" };
+      return { pillars: habits.pillars.map((pillar) => ({ label: pillar.label, type: pillar.type, done: habits.checklist[pillar.label] === true })) };
+    },
   });
 
   // Clean shutdown
@@ -299,7 +364,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "init":
-      await runInit(configDir);
+      await runInit(configDir, { claudeCode: args.includes("--claude-code") });
       break;
     case "terminal":
       await runTerminal(configDir);
@@ -309,6 +374,12 @@ async function main(): Promise<void> {
       break;
     case "mcp-server":
       await startMcpServer(configDir);
+      break;
+    case "claude-context":
+      await runClaudeContext(configDir, args.includes("--hook-json"));
+      break;
+    case "claude":
+      await runClaudeCompanion(configDir, args);
       break;
     case "reflect": {
       const targetDate = parseReflectDate(process.argv);

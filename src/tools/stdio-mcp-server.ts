@@ -41,6 +41,8 @@ export interface StdioMcpServerDeps {
   handleExec: AssistantServerDeps["handleExec"];
   getProcessSession: AssistantServerDeps["getProcessSession"];
   listProcessSessions: AssistantServerDeps["listProcessSessions"];
+  handleHabitCheck?: AssistantServerDeps["handleHabitCheck"];
+  handleHabitStatus?: AssistantServerDeps["handleHabitStatus"];
   episodeDeps?: EpisodeMcpDeps;
 }
 
@@ -181,6 +183,25 @@ Schedule is one of:
       required: ["action"],
     },
   },
+  {
+    name: "habit_check",
+    description: "Mark a named habit done or undone. This changes HABITS.md.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        label: { type: "string", description: "Habit label" },
+        done: { type: "boolean", description: "Whether the habit is done" },
+      },
+      required: ["label", "done"],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "habit_status",
+    description: "Read the current habit checklist status.",
+    inputSchema: { type: "object" as const, properties: {} },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
 ];
 
 /**
@@ -194,9 +215,13 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
   );
 
   const toolDefinitions = [
-    ...(deps.lintMemory
-      ? BASE_TOOL_DEFINITIONS
-      : BASE_TOOL_DEFINITIONS.filter((definition) => definition.name !== "memory_lint")),
+    ...BASE_TOOL_DEFINITIONS.filter((definition) => {
+      if (definition.name === "memory_lint") return Boolean(deps.lintMemory);
+      if (definition.name === "habit_check" || definition.name === "habit_status") {
+        return Boolean(deps.handleHabitCheck && deps.handleHabitStatus);
+      }
+      return true;
+    }),
     ...(deps.episodeDeps ? EPISODE_TOOL_DEFINITIONS : []),
   ];
 
@@ -317,6 +342,18 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
             },
           ],
         };
+      }
+      case "habit_check": {
+        if (!deps.handleHabitCheck || typeof args?.label !== "string" || typeof args?.done !== "boolean") {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid habit_check input" }) }], isError: true };
+        }
+        return { content: [{ type: "text" as const, text: JSON.stringify(await deps.handleHabitCheck(args.label, args.done), null, 2) }] };
+      }
+      case "habit_status": {
+        if (!deps.handleHabitStatus) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Habit tracking is unavailable" }) }], isError: true };
+        }
+        return { content: [{ type: "text" as const, text: JSON.stringify(await deps.handleHabitStatus(), null, 2) }] };
       }
       case "episode_recent":
         return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps!);

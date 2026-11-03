@@ -1,7 +1,7 @@
 # Claude Code Companion Mode - Plan
 
 **Date:** 2026-11-03
-**Status:** Active
+**Status:** Implemented — 2026-11-03
 
 ## Goal
 
@@ -101,3 +101,10 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 
 - Running PA security hooks inside plain Claude Code (needs a Claude Code plugin; revisit later).
 - Session sync between Claude Code and PA session JSONL.
+
+## Delivery note
+
+- Use `pa claude` for the companion session. It supplies the generated settings and MCP config explicitly and starts
+  Claude Code in its workspace-confining `--restricted` mode; launching bare `claude` is not the secure companion path.
+- The generated stdio MCP configuration is an explicit fallback when the localhost HTTP endpoint is unavailable. It is
+  not the default because it starts an embedding model for that session.

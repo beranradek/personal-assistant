@@ -163,6 +163,26 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 - Slack adapter (bidirectional chat): `docs/settings/slack_configuration.md`
 - GitHub Webhook adapter: `docs/settings/github_webhook_configuration.md`
 
+### Claude Code companion mode
+
+Run `pa init --claude-code` once from a configured installation to create non-overwriting companion templates in the
+workspace. The generated `.mcp.json` connects to PA's local HTTP MCP service and `.claude/settings.json` injects the
+four root context files through `pa claude-context --hook-json` at session start. Enable the service for a Claude-backed
+daemon with `"mcp": { "httpServer": { "enabled": true } }`; it remains bound to `127.0.0.1`.
+If that port is occupied, use the generated `.mcp-stdio-fallback.json` as the explicit replacement for `.mcp.json` after
+resolving the port conflict. This fallback is functional but intentionally opt-in: each Claude session starts one PA MCP
+process and its embedding model.
+
+Start companion sessions with `pa claude`, not a bare `claude`: it passes the generated configuration explicitly and uses
+Claude Code's `--restricted` mode to confine file tools to the workspace. The templates auto-allow only explicitly
+read-only PA MCP tools. `exec`, habit edits, episode writes, cron mutations and Bash remain subject to Claude Code
+confirmation. Do not add `--dangerously-skip-permissions`, copy tokens into the generated files, or replace an existing
+user-managed `.mcp.json`.
+
+Companion sessions share PA's memory, cron, process, habit and integration CLI capabilities, but they do not share PA
+chat sessions, compaction, audit/reflection lifecycle, or PA's internal Bash/path security hooks. Cron jobs still require
+the daemon to be running to fire.
+
 ### Key Sections
 
 **security** - Command allowlist, workspace path, allowed directories:

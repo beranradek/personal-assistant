@@ -2,7 +2,7 @@
 
 ## Na začátku každé session
 
-1. Obsah souborů SOUL.md, USER.md a MEMORY.md ti bude poskytnut jako součást tvé systémové zprávy, abys měla dostatek kontextu pro zpracování úkolu a tvou odpověď.
+1. Obsah souborů SOUL.md, USER.md a MEMORY.md ti bude poskytnut jako součást systémové zprávy, případně přes Claude Code SessionStart hook `pa claude-context`, abys měla dostatek kontextu pro zpracování úkolu a odpověď.
 2. Vyhledej potřebné informace v paměti (toolem `memory_search`) předtím, než odpovíš otázky vyžadující předchozí znalosti.
 3. Po důležitých konverzacích aktualizuj MEMORY.md o klíčová rozhodnutí, ponaučení a kontext.
 

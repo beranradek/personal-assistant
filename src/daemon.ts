@@ -179,32 +179,30 @@ async function createDaemonCoreFromConfig(args: {
     storePath: cronStorePath,
   });
 
+  const handleHabitCheck = async (pillarLabel: string, done: boolean) => {
+    if (!args.config.habits.enabled) {
+      return { success: false, message: "Habits tracking is disabled in config" };
+    }
+    await markHabit(args.config.security.workspace, pillarLabel, done);
+    return { success: true, message: `Habit "${pillarLabel}" marked as ${done ? "done" : "undone"}` };
+  };
+
+  const handleHabitStatus = async () => {
+    if (!args.config.habits.enabled) return { error: "Habits tracking is disabled in config" };
+    const data = await loadHabits(args.config.security.workspace);
+    if (!data) return { error: "HABITS.md not found in workspace" };
+    return {
+      pillars: data.pillars.map((p) => ({ label: p.label, type: p.type, done: data.checklist[p.label] === true })),
+    };
+  };
+
   const assistantServer = createAssistantServerImpl({
     handleCronAction: cronManager.handleAction,
     handleExec: (options) => handleExec(options, args.config),
     getProcessSession: getSession,
     listProcessSessions: listSessions,
-    handleHabitCheck: async (pillarLabel, done) => {
-      if (!args.config.habits.enabled) {
-        return { success: false, message: "Habits tracking is disabled in config" };
-      }
-      await markHabit(args.config.security.workspace, pillarLabel, done);
-      return { success: true, message: `Habit "${pillarLabel}" marked as ${done ? "done" : "undone"}` };
-    },
-    handleHabitStatus: async () => {
-      if (!args.config.habits.enabled) {
-        return { error: "Habits tracking is disabled in config" };
-      }
-      const data = await loadHabits(args.config.security.workspace);
-      if (!data) return { error: "HABITS.md not found in workspace" };
-      return {
-        pillars: data.pillars.map((p) => ({
-          label: p.label,
-          type: p.type,
-          done: data.checklist[p.label] === true,
-        })),
-      };
-    },
+    handleHabitCheck,
+    handleHabitStatus,
   });
 
   const mcpServers: Record<string, unknown> = {
@@ -225,7 +223,7 @@ async function createDaemonCoreFromConfig(args: {
   // spawning their own `pa mcp-server` stdio process (which leaks orphans that
   // accumulate the 314 MB embedding model in memory).
   let httpMcpServer: HttpMcpServerHandle | undefined;
-  if (args.config.agent.backend === "codex") {
+  if (args.config.agent.backend === "codex" || args.config.mcp?.httpServer?.enabled === true) {
     const mcpDeps: StdioMcpServerDeps = {
       search: searchMemory,
       lintMemory: () => import("./memory/linter.js").then(({ lintMemoryKnowledgeBase }) => lintMemoryKnowledgeBase(args.config.security.workspace)),
@@ -233,6 +231,8 @@ async function createDaemonCoreFromConfig(args: {
       handleExec: (options) => handleExec(options, args.config),
       getProcessSession: getSession,
       listProcessSessions: listSessions,
+      handleHabitCheck,
+      handleHabitStatus,
       ...(listEpisodes ? {
         episodeDeps: { listEpisodes, insertEpisode, searchEpisodesVector, redact },
       } : {}),

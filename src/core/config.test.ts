@@ -170,6 +170,7 @@ describe("config", () => {
       expect(config.reflection.episodeSignals.maxRecentEpisodes).toBe(200);
       expect(config.reflection.episodeSignals.maxTopItems).toBe(3);
       expect(config.mcpServers).toEqual({});
+      expect(config.mcp.httpServer.enabled).toBe(false);
       // Codex backend defaults
       expect(config.agent.backend).toBe("claude");
       expect(config.codex.sandboxMode).toBe("workspace-write");

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseCommand, parseEpisodeEvalJson, parseEpisodeEvalOutputPath, parseReflectDate, runEpisodeEval } from "./cli.js";
+import { buildClaudeCompanionArgs, buildClaudeCompanionEnvironment, parseCommand, parseEpisodeEvalJson, parseEpisodeEvalOutputPath, parseReflectDate, runEpisodeEval } from "./cli.js";
 import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 
 describe("cli", () => {
@@ -50,6 +50,27 @@ describe("cli", () => {
     it('parses "episode-eval" subcommand', () => {
       const result = parseCommand(["node", "cli.js", "episode-eval"]);
       expect(result).toBe("episode-eval");
+    });
+
+    it('parses "claude-context" subcommand', () => {
+      expect(parseCommand(["node", "cli.js", "claude-context", "--hook-json"])).toBe("claude-context");
+    });
+
+    it('parses "claude" companion subcommand', () => {
+      expect(parseCommand(["node", "cli.js", "claude"])).toBe("claude");
+    });
+  });
+
+  it("builds a restricted Claude Code invocation with explicit companion config", () => {
+    expect(buildClaudeCompanionArgs("/workspace", ["--model", "sonnet"])).toEqual([
+      "--restricted", "--tools", "default", "--settings", "/workspace/.claude/settings.json",
+      "--mcp-config", "/workspace/.mcp.json", "--model", "sonnet",
+    ]);
+  });
+
+  it("passes the selected PA config directory to hooks and MCP children", () => {
+    expect(buildClaudeCompanionEnvironment("/custom/pa", { KEEP: "yes", PA_CONFIG: "/old" })).toEqual({
+      KEEP: "yes", PA_CONFIG: "/custom/pa",
     });
   });
 

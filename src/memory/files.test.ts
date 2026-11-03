@@ -91,6 +91,10 @@ describe("memory file reader", () => {
       expect(result).toBe("");
     });
 
+    it("rejects an invalid aggregate byte limit", async () => {
+      await expect(readMemoryFiles(tmpDir, { maxBytes: 0 })).rejects.toThrow("maxBytes must be a positive safe integer");
+    });
+
     it("reads files in correct order: AGENTS, SOUL, USER, MEMORY, HEARTBEAT", async () => {
       // Create files in reverse order to ensure implementation uses defined order, not fs order
       await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "5");

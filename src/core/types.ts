@@ -187,6 +187,13 @@ export const MemoryConfigSchema = z.object({
 
 export const McpServerConfigSchema = z.record(z.string(), z.unknown());
 
+export const McpConfigSchema = z.object({
+  httpServer: z.object({
+    /** Start PA's localhost HTTP MCP service even when the active backend is not Codex. */
+    enabled: z.boolean().default(false),
+  }).default(() => ({ enabled: false })),
+});
+
 export const ReflectionConfigSchema = z.object({
   enabled: z.boolean().default(true),
   schedule: z.string().default("0 7 * * *"),
@@ -271,6 +278,7 @@ export const ConfigSchema = z.object({
   agent: AgentConfigSchema,
   session: SessionConfigSchema,
   memory: MemoryConfigSchema,
+  mcp: McpConfigSchema.default(() => ({ httpServer: { enabled: false } })),
   mcpServers: McpServerConfigSchema,
   codex: CodexConfigSchema,
   reflection: ReflectionConfigSchema.default(() => ReflectionConfigSchema.parse({})),

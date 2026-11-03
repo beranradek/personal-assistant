@@ -138,6 +138,9 @@ export const DEFAULTS: Config = {
     ttlHours: 24,
     autoScan: false,
   },
+  mcp: {
+    httpServer: { enabled: false },
+  },
   mcpServers: {},
   codex: {
     codexPath: null,
