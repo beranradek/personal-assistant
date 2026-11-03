@@ -227,6 +227,8 @@ describe("createMemoryServer", () => {
     const inputSchema = mockTool.mock.calls[0][2] as Record<string, unknown>;
     expect(inputSchema).toHaveProperty("query");
     expect(inputSchema).toHaveProperty("maxResults");
+    expect(inputSchema).toHaveProperty("type");
+    expect(inputSchema).toHaveProperty("tags");
   });
 
   it("memory_search tool has a description mentioning long-term memory", () => {
@@ -250,7 +252,7 @@ describe("createMemoryServer", () => {
     await handler({ query: "dark mode preference", maxResults: 3 }, {});
 
     expect(search).toHaveBeenCalledOnce();
-    expect(search).toHaveBeenCalledWith("dark mode preference", 3);
+    expect(search).toHaveBeenCalledWith("dark mode preference", 3, {});
   });
 
   it("tool handler passes undefined maxResults when not provided", async () => {
@@ -264,7 +266,34 @@ describe("createMemoryServer", () => {
 
     await handler({ query: "architecture decisions" }, {});
 
-    expect(search).toHaveBeenCalledWith("architecture decisions", undefined);
+    expect(search).toHaveBeenCalledWith("architecture decisions", undefined, {});
+  });
+
+  it("passes OKF metadata filters to memory search", async () => {
+    const search = mockSearch();
+    createMemoryServer({ search });
+
+    const handler = mockTool.mock.calls[0][3] as (
+      args: { query: string; type?: string; tags?: string[] },
+      extra: unknown,
+    ) => Promise<unknown>;
+    await handler({ query: "architecture", type: "Project", tags: ["work"] }, {});
+
+    expect(search).toHaveBeenCalledWith("architecture", undefined, {
+      type: "Project",
+      tags: ["work"],
+    });
+  });
+
+  it("registers memory_lint when a linter dependency is provided", async () => {
+    const lintMemory = vi.fn().mockResolvedValue({ filesScanned: 1, issues: [] });
+    createMemoryServer({ search: mockSearch(), lintMemory });
+
+    const lintCall = mockTool.mock.calls.find((call) => call[0] === "memory_lint");
+    expect(lintCall).toBeDefined();
+    const result = await lintCall![3]({}, {});
+    expect(lintMemory).toHaveBeenCalledOnce();
+    expect(JSON.parse(result.content[0].text)).toEqual({ filesScanned: 1, issues: [] });
   });
 
   it("tool handler returns formatted results with content array", async () => {

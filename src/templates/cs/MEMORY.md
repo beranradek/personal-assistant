@@ -2,8 +2,10 @@
 
 Tento soubor je indexován pro sémantické/hybridní vyhledávání.
 Slouží k ukládání důležitých faktů, rozhodnutí a ponaučení.
-Informace z tohoto souboru a ze všech dalších markdown souborů ukládaných v podadresáři `memory/` jsou dostupné pomocí toolu `memory_search`,
+Informace z tohoto souboru a ze všech Markdown souborů rekurzivně uložených v podadresáři `memory/` jsou dostupné pomocí toolu `memory_search`,
 kdykoliv budeš potřebovat pro odpověď dohledat více kontextu.
+
+Tento soubor ponechávej jako stručný provozní rozcestník; podrobnosti patří do OKF-lite stránek v `memory/`. Znalostní bázi ověřuj nástrojem `memory_lint`.
 
 ## Rozhodnutí
 

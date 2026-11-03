@@ -33,6 +33,7 @@ function makeDeps(
 ): StdioMcpServerDeps {
   return {
     search: vi.fn().mockResolvedValue([]),
+    lintMemory: vi.fn().mockResolvedValue({ filesScanned: 0, issues: [] }),
     handleCronAction: vi
       .fn()
       .mockResolvedValue({ success: true, message: "ok" }),
@@ -87,6 +88,7 @@ describe("createStdioMcpServer", () => {
       const names = result.tools.map((t: { name: string }) => t.name);
       expect(names).toEqual([
         "memory_search",
+        "memory_lint",
         "cron_list",
         "cron_create",
         "cron_update",
@@ -132,7 +134,7 @@ describe("createStdioMcpServer", () => {
         maxResults: 3,
       });
 
-      expect(deps.search).toHaveBeenCalledWith("hello", 3);
+      expect(deps.search).toHaveBeenCalledWith("hello", 3, {});
       expect(result.content).toHaveLength(1);
       expect(result.content[0].type).toBe("text");
       const parsed = JSON.parse(result.content[0].text);
@@ -141,7 +143,26 @@ describe("createStdioMcpServer", () => {
 
     it("passes undefined maxResults when not provided", async () => {
       await callTool("memory_search", { query: "test" });
-      expect(deps.search).toHaveBeenCalledWith("test", undefined);
+      expect(deps.search).toHaveBeenCalledWith("test", undefined, {});
+    });
+
+    it("passes type and tag filters to search", async () => {
+      await callTool("memory_search", { query: "jan", type: "Person", tags: ["work"] });
+
+      expect(deps.search).toHaveBeenCalledWith("jan", undefined, {
+        type: "Person",
+        tags: ["work"],
+      });
+    });
+
+    it("dispatches memory_lint when provided", async () => {
+      deps = makeDeps({ lintMemory: vi.fn().mockResolvedValue({ filesScanned: 2, issues: [] }) });
+      handlers.clear();
+      createStdioMcpServer(deps);
+
+      const result = await callTool("memory_lint");
+      expect(deps.lintMemory).toHaveBeenCalledOnce();
+      expect(JSON.parse(result.content[0].text)).toEqual({ filesScanned: 2, issues: [] });
     });
   });
 

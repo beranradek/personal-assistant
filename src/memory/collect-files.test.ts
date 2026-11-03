@@ -35,6 +35,17 @@ describe("collectMemoryFiles", () => {
     expect(result).not.toContain(path.join(memoryDir, "not-markdown.txt"));
   });
 
+  it("discovers .md files recursively in the memory knowledge base", async () => {
+    const nestedDir = path.join(tmpDir, "memory", "people", "engineering");
+    await fs.mkdir(nestedDir, { recursive: true });
+    const nestedPage = path.join(nestedDir, "jane.md");
+    await fs.writeFile(nestedPage, "# Jane");
+
+    const result = collectMemoryFiles(tmpDir, []);
+
+    expect(result).toContain(nestedPage);
+  });
+
   it("includes extraPaths resolved relative to workspaceDir when not absolute", async () => {
     const result = collectMemoryFiles(tmpDir, ["skills/tool.md"]);
 

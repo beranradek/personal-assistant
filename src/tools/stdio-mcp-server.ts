@@ -23,6 +23,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { SearchResult } from "../core/types.js";
+import type { MemorySearchFilters } from "../memory/metadata.js";
+import type { MemoryLintResult } from "../memory/linter.js";
 import type { AssistantServerDeps } from "./assistant-server.js";
 import {
   EPISODE_TOOL_DEFINITIONS,
@@ -34,13 +36,26 @@ import {
 } from "./episode-mcp-tools.js";
 
 export interface StdioMcpServerDeps {
-  search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
+  search: (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
+  lintMemory?: () => Promise<MemoryLintResult>;
   handleCronAction: AssistantServerDeps["handleCronAction"];
   handleExec: AssistantServerDeps["handleExec"];
   getProcessSession: AssistantServerDeps["getProcessSession"];
   listProcessSessions: AssistantServerDeps["listProcessSessions"];
   episodeDeps?: EpisodeMcpDeps;
 }
+
+const MEMORY_LINT_TOOL_DEFINITION = {
+  name: "memory_lint",
+  description: "Check Markdown memory pages for invalid YAML frontmatter, broken relative links and anchors, and duplicate typed entities.",
+  inputSchema: { type: "object" as const, properties: {} },
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+};
 
 const BASE_TOOL_DEFINITIONS = [
   {
@@ -55,10 +70,13 @@ const BASE_TOOL_DEFINITIONS = [
           type: "number",
           description: "Max results (default 6)",
         },
+        type: { type: "string", description: "Exact OKF page type filter, case-insensitive" },
+        tags: { type: "array", items: { type: "string" }, description: "Require every listed OKF tag, case-insensitive" },
       },
       required: ["query"],
     },
   },
+  MEMORY_LINT_TOOL_DEFINITION,
   {
     name: "cron_list",
     description: "List all scheduled reminders and jobs without changing them.",
@@ -176,9 +194,12 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
     { capabilities: { tools: {} } },
   );
 
-  const toolDefinitions = deps.episodeDeps
-    ? [...BASE_TOOL_DEFINITIONS, ...EPISODE_TOOL_DEFINITIONS]
-    : BASE_TOOL_DEFINITIONS;
+  const toolDefinitions = [
+    ...(deps.lintMemory
+      ? BASE_TOOL_DEFINITIONS
+      : BASE_TOOL_DEFINITIONS.filter((definition) => definition.name !== "memory_lint")),
+    ...(deps.episodeDeps ? EPISODE_TOOL_DEFINITIONS : []),
+  ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: toolDefinitions,
@@ -191,11 +212,27 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
       case "memory_search": {
         const query = args?.query as string;
         const maxResults = args?.maxResults as number | undefined;
-        const results = await deps.search(query, maxResults);
+        const type = args?.type as string | undefined;
+        const tags = args?.tags as string[] | undefined;
+        const results = await deps.search(query, maxResults, {
+          ...(type ? { type } : {}),
+          ...(tags?.length ? { tags } : {}),
+        });
         return {
           content: [
             { type: "text" as const, text: JSON.stringify(results, null, 2) },
           ],
+        };
+      }
+      case "memory_lint": {
+        if (!deps.lintMemory) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ error: "Memory linter is unavailable" }) }],
+            isError: true,
+          };
+        }
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(await deps.lintMemory(), null, 2) }],
         };
       }
       case "cron_list": {

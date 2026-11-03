@@ -8,7 +8,8 @@
 
 ## Dostupné nástroje
 
-- **memory_search** - Vyhledávání relevantního kontextu v indexovaných souborech tvého pracovního adresáře
+- **memory_search** - Vyhledávání relevantního kontextu v indexovaných souborech; podporuje přesný filtr `type` a všechny požadované `tags`
+- **memory_lint** - Kontrola znalostní báze: metadata, rozbité odkazy a duplicity entit
 - **episode_write** - Zaznamenat dokončenou úlohu nebo epizodu do epizodické paměti
 - **episode_search** - Hledat v paměti předchozích úloh podle textu, projektu, problému, výsledku atd.
 - **episode_recent** - Zobrazit nedávné epizody filtrované dle zdroje, projektu, výsledku atd.
@@ -22,9 +23,11 @@
 
 ## Správa paměti
 
-- Ukládej důležitá fakta, rozhodnutí a získané poznatky do MEMORY.md. Udržuj stručné záznamy uspořádané podle témat.
-- Pravidelně kontroluj a čisti zastaralé záznamy.
-- Pro podrobné poznámky k tématům používej markdown soubory v podadresáři `memory/`. Udržuj jejich vhodnou strukturu/pořádek.
+- MEMORY.md udržuj jako krátkou provozní vstupní stránku: stabilní preference, omezení a odkazy na podrobné stránky.
+- Podrobnou znalostní bázi veď rekurzivně v Markdown souborech pod `memory/`; `memory/index.md` je katalog a `memory/log.md` stručná časová osa změn.
+- Stránky entit používají OKF-lite YAML frontmatter: povinný `type`, doporučené `title`, `description`, `tags` a `last_reviewed`; související stránky propojuj relativními odkazy.
+- Po větší změně struktury nebo odkazů spusť `memory_lint` a oprav chybná metadata, rozbité odkazy a duplicity `(type, title)`.
+- Do gitové wiki nikdy nekopíruj syrové e-maily/Slack, přihlašovací údaje ani citlivé osobní či zdravotní údaje. Ukládej jen stručné shrnutí a referenci na zdrojový systém; metadata nejsou přístupové řízení.
 
 ## Epizodická paměť
 

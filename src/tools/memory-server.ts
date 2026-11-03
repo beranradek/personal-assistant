@@ -1,6 +1,8 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import type { SearchResult } from "../core/types.js";
+import type { MemorySearchFilters } from "../memory/metadata.js";
+import type { MemoryLintResult } from "../memory/linter.js";
 import {
   EpisodeInitiatorSchema,
   EpisodeOutcomeSchema,
@@ -49,7 +51,8 @@ function toJsonContent(value: unknown) {
  * `episode_write` is enabled when `insertEpisode` is provided.
  */
 export function createMemoryServer(deps: {
-  search: (query: string, maxResults?: number) => Promise<SearchResult[]>;
+  search: (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
+  lintMemory?: () => Promise<MemoryLintResult>;
   listEpisodes?: (filters?: EpisodeListFilters) => EpisodeRecord[];
   insertEpisode?: (episode: EpisodeRecord) => void | Promise<void>;
   searchEpisodesVector?: (query: string, maxResults?: number) => Promise<EpisodeRecord[]>;
@@ -67,13 +70,29 @@ export function createMemoryServer(deps: {
           .number()
           .optional()
           .describe("Max results (default 6)"),
+        type: z.string().optional().describe("Exact OKF page type filter, case-insensitive"),
+        tags: z.array(z.string()).optional().describe("Require every listed OKF tag, case-insensitive"),
       },
       async (args) => {
-        const results = await deps.search(args.query, args.maxResults);
+        const results = await deps.search(args.query, args.maxResults, {
+          ...(args.type ? { type: args.type } : {}),
+          ...(args.tags?.length ? { tags: args.tags } : {}),
+        });
         return toJsonContent(results);
       },
     ),
   );
+
+  if (deps.lintMemory) {
+    tools.push(
+      tool(
+        "memory_lint",
+        "Check the Markdown memory knowledge base for invalid YAML frontmatter, broken relative links and anchors, and duplicate typed entities.",
+        {},
+        async () => toJsonContent(await deps.lintMemory!()),
+      ),
+    );
+  }
 
   if (deps.listEpisodes) {
     const episodeDeps: EpisodeMcpDeps = {

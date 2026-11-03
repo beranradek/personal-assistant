@@ -97,4 +97,33 @@ describe("createRobustMemorySearch", () => {
     const results = await search("png");
     expect(results).toEqual([]);
   });
+
+  it("filters fallback results by OKF-lite type and all requested tags", async () => {
+    const peopleDir = path.join(workspaceDir, "memory", "people");
+    await fs.promises.mkdir(peopleDir);
+    const personPath = path.join(peopleDir, "jane.md");
+    fs.writeFileSync(
+      personPath,
+      "---\ntype: Person\ntags: [work, engineering]\n---\nJane works on memory architecture.\n",
+    );
+    fs.writeFileSync(
+      path.join(workspaceDir, "memory", "project.md"),
+      "---\ntype: Project\ntags: [work]\n---\nMemory architecture project.\n",
+    );
+
+    const search = createRobustMemorySearch({
+      workspaceDir,
+      extraPaths: [],
+      store,
+      embedder,
+      config: { vectorWeight: 0.7, keywordWeight: 0.3, minScore: 0.35, maxResults: 6 },
+    });
+
+    const results = await search("memory architecture", undefined, {
+      type: "person",
+      tags: ["work", "engineering"],
+    });
+    expect(results).toHaveLength(1);
+    expect(results[0]?.path).toBe(personPath);
+  });
 });

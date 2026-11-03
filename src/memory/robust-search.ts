@@ -5,6 +5,11 @@ import type { SearchResult } from "../core/types.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { VectorStore } from "./vector-store.js";
 import { readTextFileSafely } from "./text-file.js";
+import {
+  matchesMemoryFilters,
+  parseMemoryMetadata,
+  type MemorySearchFilters,
+} from "./metadata.js";
 
 function stripDiacritics(input: string): string {
   return input.normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -25,6 +30,7 @@ async function grepLikeFallbackSearch(
   query: string,
   filePaths: string[],
   maxResults: number,
+  filters: MemorySearchFilters,
 ): Promise<SearchResult[]> {
   const tokens = extractTokens(query);
   if (tokens.length === 0) return [];
@@ -44,6 +50,9 @@ async function grepLikeFallbackSearch(
       continue;
     }
     const { content } = file;
+    if (!matchesMemoryFilters(parseMemoryMetadata(content).metadata, filters)) {
+      continue;
+    }
 
     const lines = content.split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
@@ -94,6 +103,30 @@ async function grepLikeFallbackSearch(
   return results;
 }
 
+function hasFilters(filters: MemorySearchFilters): boolean {
+  return Boolean(filters.type || filters.tags?.length);
+}
+
+async function filterIndexedResults(
+  results: SearchResult[],
+  filters: MemorySearchFilters,
+): Promise<SearchResult[]> {
+  if (!hasFilters(filters)) return results;
+
+  const matchesByPath = new Map<string, boolean>();
+  const filtered: SearchResult[] = [];
+  for (const result of results) {
+    let matches = matchesByPath.get(result.path);
+    if (matches === undefined) {
+      const file = await readTextFileSafely(result.path);
+      matches = file.ok && matchesMemoryFilters(parseMemoryMetadata(file.content).metadata, filters);
+      matchesByPath.set(result.path, matches);
+    }
+    if (matches) filtered.push(result);
+  }
+  return filtered;
+}
+
 export function createRobustMemorySearch(deps: {
   workspaceDir: string;
   extraPaths: string[];
@@ -101,19 +134,30 @@ export function createRobustMemorySearch(deps: {
   embedder: EmbeddingProvider;
   config: HybridSearchConfig;
 }) {
-  return async (query: string, maxResults?: number): Promise<SearchResult[]> => {
+  return async (
+    query: string,
+    maxResults?: number,
+    filters: MemorySearchFilters = {},
+  ): Promise<SearchResult[]> => {
+    const resultLimit = maxResults ?? deps.config.maxResults;
+    const candidateLimit = hasFilters(filters) ? resultLimit * 8 : resultLimit;
     const results = await hybridSearch(query, deps.store, deps.embedder, {
       ...deps.config,
-      maxResults: maxResults ?? deps.config.maxResults,
+      maxResults: candidateLimit,
     });
 
-    if (results.length > 0) return results;
+    const indexedResults = await filterIndexedResults(results, filters);
+    if (indexedResults.length >= resultLimit || (indexedResults.length > 0 && results.length > 0 && !hasFilters(filters))) {
+      return indexedResults.slice(0, resultLimit);
+    }
 
     const files = collectMemoryFiles(deps.workspaceDir, deps.extraPaths);
-    return grepLikeFallbackSearch(
+    const fallbackResults = await grepLikeFallbackSearch(
       query,
       files,
-      maxResults ?? deps.config.maxResults,
+      resultLimit,
+      filters,
     );
+    return fallbackResults.length > 0 ? fallbackResults : indexedResults.slice(0, resultLimit);
   };
 }

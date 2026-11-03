@@ -8,7 +8,7 @@ The assistant has five distinct memory layers, each with a different scope, writ
 
 | Layer | What it stores | Written by | Read via | Database / File |
 |-------|---------------|-----------|---------|-----------------|
-| Semantic memory | Facts, preferences, workflows | Agent (Bash/Write/Edit) | `memory_search` | `vectors.db` + workspace `.md` files |
+| Semantic memory | Facts, preferences, workflows | Agent (Bash/Write/Edit) | `memory_search`, `memory_lint` | `vectors.db` + workspace Markdown knowledge graph |
 | Episodic memory | Completed task records | Agent (`episode_write`) | `episode_search`, `episode_recent`, `episode_stats` | `episodes.db` |
 | Daily audit log | Per-turn interaction trace | System (automatic) | Reflection pipeline | `workspace/daily/YYYY-MM-DD.jsonl` |
 | Conversation history | SDK message history | System (automatic) | Loaded at turn start | `data/sessions/<key>.jsonl` |
@@ -30,10 +30,30 @@ Files live under `~/.personal-assistant/workspace/`:
 | `USER.md` | User profile, communication preferences, schedule |
 | `SOUL.md` | Agent personality and behavior rules |
 | `AGENTS.md` | Tool guidance, workspace conventions |
-| `memory/` | Additional topic files (created by the agent) |
+| `memory/` | Recursive OKF-lite Markdown knowledge graph (created and maintained by the agent) |
 | `.claude/skills/` | Reusable workflow descriptions (skills) |
 
-All markdown files in `workspace/` and any configured `extraPaths` are chunked and indexed into `vectors.db` on startup and whenever the file watcher detects changes.
+`MEMORY.md`, every Markdown file recursively below `memory/`, and configured `extraPaths` are chunked and indexed into `vectors.db` on startup and whenever the file watcher detects changes. Other root-level workspace Markdown files are not implicitly indexed.
+
+### OKF-lite knowledge graph
+
+Each entity page may start with YAML frontmatter. `type` is required for a managed entity; `title`, `description`, `tags`, and `last_reviewed` are recommended.
+
+```md
+---
+type: Person
+title: Jane Doe
+tags: [colleague, engineering]
+last_reviewed: 2026-11-03
+---
+
+# Jane Doe
+
+## Current context
+...
+```
+
+Use relative Markdown links to connect pages. Keep `memory/index.md` as a navigable catalogue and `memory/log.md` as an append-only change timeline. Store raw mail, Slack history, credentials, and sensitive personal or health information outside this git-backed wiki; pages may hold only concise summaries and a source-system reference. `sensitivity` metadata is descriptive, never access control.
 
 ### Use cases
 
@@ -51,9 +71,11 @@ After writing, the indexer re-embeds the changed chunks automatically. The searc
 
 ```
 memory_search({ query: "deploy heroku", maxResults: 5 })
+memory_search({ query: "Jane", type: "Person", tags: ["colleague"] })
+memory_lint({})
 ```
 
-Uses hybrid scoring: cosine similarity (vectors) + BM25-style keyword match, weighted by `memory.search.hybridWeights` in settings. Results include a recency boost. Returns file path, text chunk, and score.
+Uses hybrid scoring: cosine similarity (vectors) + BM25-style keyword match, weighted by `memory.search.hybridWeights` in settings. Results include a recency boost. `type` and `tags` filters are case-insensitive; every requested tag must be present. `memory_lint` reports malformed YAML, broken relative links/anchors, and duplicate `(type, title)` entities.
 
 ### Consolidation
 

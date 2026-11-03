@@ -47,6 +47,26 @@ export interface DailyLogIndexingOptions {
   dailyLogRetentionDays: number;
 }
 
+function collectMarkdownFilesRecursively(directory: string): string[] {
+  const result: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return result;
+  }
+
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      result.push(...collectMarkdownFilesRecursively(entryPath));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      result.push(entryPath);
+    }
+  }
+  return result;
+}
+
 /**
  * Collect all memory-related file paths for indexing.
  *
@@ -66,18 +86,9 @@ export function collectMemoryFiles(
   // 1. Always include MEMORY.md
   paths.push(path.join(workspaceDir, "MEMORY.md"));
 
-  // 2. Auto-discover .md files in memory/ subdirectory
+  // 2. Auto-discover .md files in the recursive memory knowledge base.
   const memorySubdir = path.join(workspaceDir, "memory");
-  try {
-    const entries = fs.readdirSync(memorySubdir);
-    for (const entry of entries) {
-      if (entry.endsWith(".md")) {
-        paths.push(path.join(memorySubdir, entry));
-      }
-    }
-  } catch {
-    // memory/ directory does not exist — silently skip
-  }
+  paths.push(...collectMarkdownFilesRecursively(memorySubdir));
 
   // 3. Include extraPaths, resolving relative paths against workspaceDir
   for (const p of extraPaths) {

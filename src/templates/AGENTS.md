@@ -8,7 +8,8 @@
 
 ## Available Tools
 
-- **memory_search** - Search indexed workspace files for relevant context
+- **memory_search** - Search indexed workspace files for relevant context; optional exact `type` and all-tag filters
+- **memory_lint** - Check the memory knowledge graph for malformed metadata, broken links, and duplicate entities
 - **episode_write** - Record a completed task/job episode into episodic memory
 - **episode_search** - Search past task episodes by text, project, issue, outcome, etc.
 - **episode_recent** - List recent episodes filtered by source, project, outcome, etc.
@@ -22,9 +23,11 @@
 
 ## Memory Management
 
-- Store important facts, decisions, and lessons learned in MEMORY.md. Keep entries concise and organized by topic.
-- Periodically review and clean up outdated entries.
-- Use `memory/` subdirectory for detailed topic-specific notes. Maintain appropriate structure and order.
+- Keep MEMORY.md as a short operational gateway: stable preferences, constraints, and links to detailed pages.
+- Maintain detailed knowledge in the recursive `memory/` Markdown graph. Use `memory/index.md` as a catalogue and `memory/log.md` as an append-only timeline.
+- Entity pages use OKF-lite YAML frontmatter: required `type`; recommended `title`, `description`, `tags`, and `last_reviewed`. Link related pages relatively.
+- Before a structural migration or after editing links, run `memory_lint`. Resolve malformed metadata, broken links, and duplicate `(type, title)` entities.
+- Never copy raw email/Slack text, credentials, or sensitive personal/health information into this git-backed wiki. Store only concise summaries and references to the source system. Metadata is not access control.
 
 ## Episodic Memory
 

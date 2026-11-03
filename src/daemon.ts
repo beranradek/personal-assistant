@@ -228,6 +228,7 @@ async function createDaemonCoreFromConfig(args: {
   if (args.config.agent.backend === "codex") {
     const mcpDeps: StdioMcpServerDeps = {
       search: searchMemory,
+      lintMemory: () => import("./memory/linter.js").then(({ lintMemoryKnowledgeBase }) => lintMemoryKnowledgeBase(args.config.security.workspace)),
       handleCronAction: cronManager.handleAction,
       handleExec: (options) => handleExec(options, args.config),
       getProcessSession: getSession,

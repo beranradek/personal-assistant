@@ -98,6 +98,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     { createVectorStore },
     { createIndexer },
     { createRobustMemorySearch },
+    { lintMemoryKnowledgeBase },
     { createCronToolManager },
     { handleExec },
     { getSession, listSessions },
@@ -107,6 +108,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     import("./memory/vector-store.js"),
     import("./memory/indexer.js"),
     import("./memory/robust-search.js"),
+    import("./memory/linter.js"),
     import("./cron/tool.js"),
     import("./exec/tool.js"),
     import("./exec/process-registry.js"),
@@ -157,6 +159,7 @@ async function startMcpServer(configDir: string): Promise<void> {
   // Create and start the stdio MCP server
   const server = createStdioMcpServer({
     search: searchMemory,
+    lintMemory: () => lintMemoryKnowledgeBase(config.security.workspace),
     handleCronAction: cronManager.handleAction,
     handleExec: (options) => handleExec(options, config),
     getProcessSession: getSession,

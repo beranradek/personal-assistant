@@ -9,8 +9,10 @@ import { initializeEpisodeMemoryRuntime } from "./episodes/runtime-probes.js";
 import type { EpisodeStore } from "./episodes/store.js";
 import type { EpisodeRecord, EpisodeListFilters } from "./episodes/types.js";
 import { createMemoryServer } from "../tools/memory-server.js";
+import { lintMemoryKnowledgeBase } from "./linter.js";
+import type { MemorySearchFilters } from "./metadata.js";
 
-type MemorySearchFn = (query: string, maxResults?: number) => Promise<SearchResult[]>;
+type MemorySearchFn = (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
 type RedactFn = (text: string) => string;
 
 type StartupMemoryDeps = {
@@ -114,6 +116,7 @@ export async function initializeStartupMemoryServices(args: {
 
   const memoryServer = createMemoryServerImpl({
     search: searchMemory,
+    lintMemory: () => lintMemoryKnowledgeBase(args.config.security.workspace),
     redact,
     ...episodeRuntime.memoryServerDeps,
     ...(insertEpisodeWithEmbedding ? { insertEpisode: insertEpisodeWithEmbedding } : {}),
