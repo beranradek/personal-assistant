@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { validatePath } from "./path-validator.js";
+import { splitShellSegments } from "./allowed-commands.js";
 
 export interface ScriptContentPolicy {
   enabled: boolean;
@@ -51,19 +52,7 @@ function getPolicy(
 // ---------------------------------------------------------------------------
 
 function extractSegments(commandString: string): string[] {
-  const segments: string[] = [];
-  const chainedParts = commandString.split(/\s*(?:&&|\|\|)\s*/);
-  for (const part of chainedParts) {
-    const semiParts = part.split(/\s*;\s*/);
-    for (const semi of semiParts) {
-      const pipeParts = semi.split(/\s*\|\s*/);
-      for (const pipe of pipeParts) {
-        const trimmed = pipe.trim();
-        if (trimmed) segments.push(trimmed);
-      }
-    }
-  }
-  return segments;
+  return splitShellSegments(commandString);
 }
 
 function shellTokenize(input: string): string[] | null {

@@ -19,7 +19,9 @@ vi.mock("node:child_process", () => ({
 // Mock security modules
 // ---------------------------------------------------------------------------
 
-vi.mock("../security/allowed-commands.js", () => ({
+vi.mock("../security/allowed-commands.js", async (importOriginal) => ({
+  // Pure helper: keep real implementation
+  splitShellSegments: (await importOriginal<typeof import("../security/allowed-commands.js")>()).splitShellSegments,
   containsSudo: vi.fn(),
   extractCommands: vi.fn(),
   validateCommand: vi.fn(),

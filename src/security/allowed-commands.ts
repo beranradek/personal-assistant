@@ -126,7 +126,9 @@ const OUTPUT_FLAG_COMMANDS: Record<string, string[]> = {
 /**
  * Split a string into shell-like tokens.
  *
- * Handles single and double quoting. This is intentionally simple -- it
+ * Handles single and double quoting and backslash escapes (must stay in sync
+ * with `splitShellSegments`, otherwise a quoted `\"` could hide a command by
+ * making a segment look malformed). This is intentionally simple -- it
  * does not handle every edge case of POSIX shell quoting, but covers the
  * common patterns we need for security validation.
  *
@@ -154,6 +156,12 @@ function shellTokenize(input: string): string[] | null {
     }
 
     if (inDouble) {
+      if (ch === "\\" && i + 1 < input.length && '"\\$`'.includes(input[i + 1])) {
+        // Inside double quotes backslash only escapes " \ $ `
+        current += input[i + 1];
+        i += 2;
+        continue;
+      }
       if (ch === '"') {
         inDouble = false;
       } else {
@@ -164,7 +172,11 @@ function shellTokenize(input: string): string[] | null {
     }
 
     // Outside quotes
-    if (ch === "'") {
+    if (ch === "\\" && i + 1 < input.length) {
+      // Backslash escapes the next char (kept literal, never a separator or quote)
+      current += input[i + 1];
+      i += 2;
+    } else if (ch === "'") {
       inSingle = true;
       i++;
     } else if (ch === '"') {
@@ -264,6 +276,84 @@ function stripSubstitutions(input: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// splitShellSegments
+// ---------------------------------------------------------------------------
+
+/** Naive (quote-unaware) splitter on `&&`, `||`, `;`, `|`. Used as fail-safe for malformed input. */
+function naiveSplitSegments(input: string): string[] {
+  return input
+    .split(/\s*(?:&&|\|\|)\s*/)
+    .flatMap((part) => part.split(/\s*;\s*/))
+    .flatMap((part) => part.split(/\s*\|\s*/))
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Split a shell command string into command segments on `&&`, `||`, `;` and `|`.
+ *
+ * Quote-aware: separators inside single or double quotes, or escaped with a
+ * backslash (e.g. `grep "a\|b"`, `grep 'a;b'`, `grep a\|b`), do not split.
+ * If quotes are unclosed the input is malformed - fall back to naive splitting
+ * so that every possible command is still seen (fail-safe: block, not allow).
+ *
+ * @returns Trimmed, non-empty segments
+ */
+export function splitShellSegments(input: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+
+  const flush = () => {
+    const t = current.trim();
+    if (t) segments.push(t);
+    current = "";
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      current += ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < input.length) {
+      // Backslash escapes the next char (outside single quotes)
+      current += ch + input[i + 1];
+      i++;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '"') inDouble = false;
+      current += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      current += ch;
+    } else if (ch === '"') {
+      inDouble = true;
+      current += ch;
+    } else if (ch === ";" || ch === "|") {
+      flush();
+    } else if (ch === "&" && input[i + 1] === "&") {
+      flush();
+      i++;
+    } else {
+      current += ch;
+    }
+  }
+
+  if (inSingle || inDouble) {
+    return naiveSplitSegments(input);
+  }
+  flush();
+  return segments;
+}
+
+// ---------------------------------------------------------------------------
 // extractCommands
 // ---------------------------------------------------------------------------
 
@@ -292,136 +382,118 @@ export function extractCommands(commandString: string): string[] {
   //    so that e.g. "$(whoami)" doesn't get treated as a command token.
   const stripped = stripSubstitutions(trimmed);
 
-  // 3. Split on ;, &&, || to get segments
-  const segments = stripped.split(/\s*(?:&&|\|\|)\s*/);
+  // 3. Split into command segments (quote-aware) on ;, &&, ||, |
+  for (const pipeSeg of splitShellSegments(stripped)) {
+    const s = pipeSeg.trim();
+    if (!s) continue;
 
-  const allSegments: string[] = [];
-  for (const seg of segments) {
-    const subSegs = seg.split(/\s*;\s*/);
-    for (const sub of subSegs) {
-      const s = sub.trim();
-      if (s) {
-        allSegments.push(s);
-      }
-    }
-  }
+    // Tokenize the segment
+    const tokens = shellTokenize(s);
+    if (!tokens || tokens.length === 0) continue;
 
-  // 3. Process each segment: split on | for pipes
-  for (const segment of allSegments) {
-    const pipeSegments = segment.split(/\s*\|\s*/);
+    // Walk through tokens to find the command
+    let expectCommand = true;
+    let skipNextAsVariable = false;
 
-    for (const pipeSeg of pipeSegments) {
-      const s = pipeSeg.trim();
-      if (!s) continue;
+    for (let ti = 0; ti < tokens.length; ti++) {
+      let token = tokens[ti];
 
-      // Tokenize the segment
-      const tokens = shellTokenize(s);
-      if (!tokens || tokens.length === 0) continue;
-
-      // Walk through tokens to find the command
-      let expectCommand = true;
-      let skipNextAsVariable = false;
-
-      for (let ti = 0; ti < tokens.length; ti++) {
-        let token = tokens[ti];
-
-        // Handle trailing semicolons (sometimes not split cleanly)
-        const hasTrailingSemicolon = token.endsWith(";");
-        if (hasTrailingSemicolon) {
-          token = token.slice(0, -1);
-          if (!token) {
-            expectCommand = true;
-            continue;
-          }
-        }
-
-        // Skip variable names after 'for'/'select'
-        if (skipNextAsVariable) {
-          skipNextAsVariable = false;
-          expectCommand = false;
-          if (hasTrailingSemicolon) {
-            expectCommand = true;
-          }
+      // Handle trailing semicolons (sometimes not split cleanly)
+      const hasTrailingSemicolon = token.endsWith(";");
+      if (hasTrailingSemicolon) {
+        token = token.slice(0, -1);
+        if (!token) {
+          expectCommand = true;
           continue;
         }
+      }
 
-        // Shell operators indicate new command follows
+      // Skip variable names after 'for'/'select'
+      if (skipNextAsVariable) {
+        skipNextAsVariable = false;
+        expectCommand = false;
+        if (hasTrailingSemicolon) {
+          expectCommand = true;
+        }
+        continue;
+      }
+
+      // Shell operators indicate new command follows
+      if (
+        token === "|" ||
+        token === "||" ||
+        token === "&&" ||
+        token === "&" ||
+        token === ";"
+      ) {
+        expectCommand = true;
+        continue;
+      }
+
+      // 'for' and 'select' -- next token is a variable name
+      // 'function' -- next token is the function name, not a command
+      if (token === "for" || token === "select" || token === "function") {
+        skipNextAsVariable = true;
+        continue;
+      }
+
+      // Skip shell keywords
+      if (SHELL_KEYWORDS.has(token)) {
+        // Keywords like 'do', 'then', 'else', '{' signal a new command follows
         if (
-          token === "|" ||
-          token === "||" ||
-          token === "&&" ||
-          token === "&" ||
-          token === ";"
+          token === "do" ||
+          token === "then" ||
+          token === "else" ||
+          token === "elif" ||
+          token === "{" ||
+          token === "!"
         ) {
           expectCommand = true;
-          continue;
         }
-
-        // 'for' and 'select' -- next token is a variable name
-        // 'function' -- next token is the function name, not a command
-        if (token === "for" || token === "select" || token === "function") {
-          skipNextAsVariable = true;
-          continue;
-        }
-
-        // Skip shell keywords
-        if (SHELL_KEYWORDS.has(token)) {
-          // Keywords like 'do', 'then', 'else', '{' signal a new command follows
-          if (
-            token === "do" ||
-            token === "then" ||
-            token === "else" ||
-            token === "elif" ||
-            token === "{" ||
-            token === "!"
-          ) {
-            expectCommand = true;
-          }
-          if (hasTrailingSemicolon) {
-            expectCommand = true;
-          }
-          continue;
-        }
-
-        // Skip flags/options
-        if (token.startsWith("-")) {
-          if (hasTrailingSemicolon) {
-            expectCommand = true;
-          }
-          continue;
-        }
-
-        // Skip variable assignments (VAR=value)
-        if (token.includes("=") && !token.startsWith("=")) {
-          // Make sure it looks like a variable assignment (word chars before =)
-          const eqIndex = token.indexOf("=");
-          const beforeEq = token.slice(0, eqIndex);
-          if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(beforeEq)) {
-            if (hasTrailingSemicolon) {
-              expectCommand = true;
-            }
-            continue;
-          }
-        }
-
-        if (expectCommand) {
-          // Extract basename (handle /usr/bin/python -> python)
-          const cmd = path.basename(token);
-          if (cmd) {
-            commands.push(cmd);
-          }
-          // When the command is "sudo", the next non-flag token is
-          // the actual command — keep expectCommand true so it gets
-          // extracted (and validated) as well.
-          if (cmd === "sudo") {
-            continue; // stay in expectCommand mode
-          }
-          expectCommand = false;
-        }
-
         if (hasTrailingSemicolon) {
           expectCommand = true;
         }
+        continue;
+      }
+
+      // Skip flags/options
+      if (token.startsWith("-")) {
+        if (hasTrailingSemicolon) {
+          expectCommand = true;
+        }
+        continue;
+      }
+
+      // Skip variable assignments (VAR=value)
+      if (token.includes("=") && !token.startsWith("=")) {
+        // Make sure it looks like a variable assignment (word chars before =)
+        const eqIndex = token.indexOf("=");
+        const beforeEq = token.slice(0, eqIndex);
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(beforeEq)) {
+          if (hasTrailingSemicolon) {
+            expectCommand = true;
+          }
+          continue;
+        }
+      }
+
+      if (expectCommand) {
+        // Extract basename (handle /usr/bin/python -> python)
+        const cmd = path.basename(token);
+        if (cmd) {
+          commands.push(cmd);
+        }
+        // When the command is "sudo", the next non-flag token is
+        // the actual command — keep expectCommand true so it gets
+        // extracted (and validated) as well.
+        if (cmd === "sudo") {
+          continue; // stay in expectCommand mode
+        }
+        expectCommand = false;
+      }
+
+      if (hasTrailingSemicolon) {
+        expectCommand = true;
       }
     }
   }
@@ -513,48 +585,34 @@ function extractCommandsFromInner(inner: string): string[] {
 
   const commands: string[] = [];
 
-  // Split on ;, &&, ||
-  const segments = trimmed.split(/\s*(?:&&|\|\|)\s*/);
-  const allSegments: string[] = [];
-  for (const seg of segments) {
-    const subSegs = seg.split(/\s*;\s*/);
-    for (const sub of subSegs) {
-      const s = sub.trim();
-      if (s) allSegments.push(s);
-    }
-  }
+  for (const pipeSeg of splitShellSegments(trimmed)) {
+    const s = pipeSeg.trim();
+    if (!s) continue;
 
-  for (const segment of allSegments) {
-    const pipeSegments = segment.split(/\s*\|\s*/);
-    for (const pipeSeg of pipeSegments) {
-      const s = pipeSeg.trim();
-      if (!s) continue;
+    const tokens = shellTokenize(s);
+    if (!tokens || tokens.length === 0) continue;
 
-      const tokens = shellTokenize(s);
-      if (!tokens || tokens.length === 0) continue;
-
-      // Find the first non-keyword, non-assignment, non-flag token
-      let skipNextAsVariable = false;
-      for (const token of tokens) {
-        if (skipNextAsVariable) {
-          skipNextAsVariable = false;
-          continue;
-        }
-        if (token === "for" || token === "select") {
-          skipNextAsVariable = true;
-          continue;
-        }
-        if (SHELL_KEYWORDS.has(token)) continue;
-        if (token.startsWith("-")) continue;
-        if (token.includes("=") && !token.startsWith("=")) {
-          const eqIndex = token.indexOf("=");
-          const beforeEq = token.slice(0, eqIndex);
-          if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(beforeEq)) continue;
-        }
-
-        commands.push(path.basename(token));
-        break; // Only get the first command per pipe segment
+    // Find the first non-keyword, non-assignment, non-flag token
+    let skipNextAsVariable = false;
+    for (const token of tokens) {
+      if (skipNextAsVariable) {
+        skipNextAsVariable = false;
+        continue;
       }
+      if (token === "for" || token === "select") {
+        skipNextAsVariable = true;
+        continue;
+      }
+      if (SHELL_KEYWORDS.has(token)) continue;
+      if (token.startsWith("-")) continue;
+      if (token.includes("=") && !token.startsWith("=")) {
+        const eqIndex = token.indexOf("=");
+        const beforeEq = token.slice(0, eqIndex);
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(beforeEq)) continue;
+      }
+
+      commands.push(path.basename(token));
+      break; // Only get the first command per pipe segment
     }
   }
 

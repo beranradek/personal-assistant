@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import {
   containsSudo,
   extractCommands,
+  splitShellSegments,
   validateCommand,
   extractFilePathsFromCommand,
   validateRmCommand,
@@ -23,25 +24,7 @@ const log = createLogger("exec");
 // ---------------------------------------------------------------------------
 
 function extractSegments(commandString: string): string[] {
-  const segments: string[] = [];
-
-  // Split on ;, &&, ||
-  const chainedParts = commandString.split(/\s*(?:&&|\|\|)\s*/);
-  for (const part of chainedParts) {
-    const semiParts = part.split(/\s*;\s*/);
-    for (const semi of semiParts) {
-      // Split on | for pipes
-      const pipeParts = semi.split(/\s*\|\s*/);
-      for (const pipe of pipeParts) {
-        const trimmed = pipe.trim();
-        if (trimmed) {
-          segments.push(trimmed);
-        }
-      }
-    }
-  }
-
-  return segments;
+  return splitShellSegments(commandString);
 }
 
 function getBaseCommand(segment: string): string | null {

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   containsSudo,
   extractCommands,
+  splitShellSegments,
   validateCommand,
   validateRmCommand,
   validateKillCommand,
@@ -175,6 +176,39 @@ describe("extractCommands", () => {
 // ---------------------------------------------------------------------------
 // validateCommand
 // ---------------------------------------------------------------------------
+
+describe("quote-aware segment splitting", () => {
+  it("does not split on \\| inside double quotes (grep alternation)", () => {
+    expect(extractCommands('grep -n "policyLinks\\|describe(\\|  it(" file.ts | head -30')).toEqual(["grep", "head"]);
+  });
+
+  it("does not split on | or ; or && inside quotes", () => {
+    expect(extractCommands("grep -E 'a|b;c&&d' f")).toEqual(["grep"]);
+    expect(extractCommands('echo "a || b" && ls')).toEqual(["echo", "ls"]);
+  });
+
+  it("does not split on backslash-escaped pipe outside quotes", () => {
+    expect(extractCommands("grep a\\|b file")).toEqual(["grep"]);
+  });
+
+  it("still splits real operators after quoted text", () => {
+    expect(extractCommands('echo "x|y"; rm foo | cat')).toEqual(["echo", "rm", "cat"]);
+  });
+
+  it("falls back to naive splitting on unclosed quotes (fail-safe)", () => {
+    expect(extractCommands('echo "a | rm foo')).toContain("rm");
+  });
+
+  it("does not hide a command behind an escaped quote (tokenizer matches splitter)", () => {
+    expect(extractCommands('evilcmd "a\\" b"')).toEqual(["evilcmd"]);
+    expect(extractCommands("evilcmd a\\ b")).toEqual(["evilcmd"]);
+    expect(extractCommands('echo "a\\" ; rm x "')).toEqual(["echo"]);
+  });
+
+  it("splitShellSegments returns trimmed segments", () => {
+    expect(splitShellSegments(' a | b ;; c && "d|e" ')).toEqual(["a", "b", "c", '"d|e"']);
+  });
+});
 
 describe("validateCommand", () => {
   const allowlist = new Set(["ls", "cat", "echo", "grep", "node"]);
