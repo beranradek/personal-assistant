@@ -155,6 +155,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 ### Setup guides
 
 - OpenAI Codex agent backend (alternative to Claude Code): `docs/settings/openai_codex_agent.md`
+- Claude Code companion mode (installation and direct launch): `docs/settings/claude_code_companion.md`
 - Google integrations (Gmail + Calendar): `docs/settings/google_integrations.md`
   - Gmail unreads: categorized unread email overview with multi-account support
 - Slack integration (unread messages feed): `docs/settings/slack_integration.md`
@@ -164,6 +165,9 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 - GitHub Webhook adapter: `docs/settings/github_webhook_configuration.md`
 
 ### Claude Code companion mode
+
+For the concise setup, direct-launch, and security-boundary guide, see
+[`docs/settings/claude_code_companion.md`](docs/settings/claude_code_companion.md).
 
 Run `pa init --claude-code` once from a configured installation to create non-overwriting companion templates in the
 workspace. The generated `.mcp.json` connects to PA's local HTTP MCP service and `.claude/settings.json` injects the
