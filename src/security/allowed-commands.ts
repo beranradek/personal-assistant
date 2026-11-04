@@ -135,7 +135,7 @@ const OUTPUT_FLAG_COMMANDS: Record<string, string[]> = {
  * Returns `null` if the input is malformed (e.g. unclosed quotes) to
  * signal fail-safe blocking.
  */
-function shellTokenize(input: string): string[] | null {
+export function shellTokenize(input: string): string[] | null {
   const tokens: string[] = [];
   let current = "";
   let inSingle = false;

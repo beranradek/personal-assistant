@@ -74,6 +74,15 @@ describe("validateScriptContentFromShellCommand", () => {
     }
   });
 
+  it("does not treat a quoted | as a pipe into bash", async () => {
+    const result = await validateScriptContentFromShellCommand(
+      'grep -n "bash\\|sh" notes.txt',
+      { workspaceDir, security: security as unknown as Record<string, unknown> },
+    );
+
+    expect(result.allowed).toBe(true);
+  });
+
   it("scans inline -c content and blocks sensitive reads", async () => {
     const result = await validateScriptContentFromShellCommand(
       'bash -c "cat /etc/shadow"',

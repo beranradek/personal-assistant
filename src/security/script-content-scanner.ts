@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { validatePath } from "./path-validator.js";
-import { splitShellSegments } from "./allowed-commands.js";
+import { shellTokenize, splitShellSegments } from "./allowed-commands.js";
 
 export interface ScriptContentPolicy {
   enabled: boolean;
@@ -48,62 +48,11 @@ function getPolicy(
 }
 
 // ---------------------------------------------------------------------------
-// Tokenization + segmentation (simple, fail-safe)
+// Segmentation (shared quote-aware helpers from allowed-commands.ts)
 // ---------------------------------------------------------------------------
 
 function extractSegments(commandString: string): string[] {
   return splitShellSegments(commandString);
-}
-
-function shellTokenize(input: string): string[] | null {
-  const tokens: string[] = [];
-  let current = "";
-  let inSingle = false;
-  let inDouble = false;
-  let i = 0;
-
-  while (i < input.length) {
-    const ch = input[i];
-
-    if (inSingle) {
-      if (ch === "'") inSingle = false;
-      else current += ch;
-      i++;
-      continue;
-    }
-
-    if (inDouble) {
-      if (ch === '"') inDouble = false;
-      else current += ch;
-      i++;
-      continue;
-    }
-
-    if (ch === "'") {
-      inSingle = true;
-      i++;
-      continue;
-    }
-    if (ch === '"') {
-      inDouble = true;
-      i++;
-      continue;
-    }
-    if (ch === " " || ch === "\t") {
-      if (current.length > 0) {
-        tokens.push(current);
-        current = "";
-      }
-      i++;
-      continue;
-    }
-    current += ch;
-    i++;
-  }
-
-  if (inSingle || inDouble) return null;
-  if (current.length > 0) tokens.push(current);
-  return tokens;
 }
 
 function basenameMaybe(cmd: string): string {
