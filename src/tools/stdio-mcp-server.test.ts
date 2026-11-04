@@ -138,6 +138,57 @@ describe("createStdioMcpServer", () => {
     });
   });
 
+  describe("integration tools", () => {
+    it("exposes PA credential proxies when all integration handlers are available", async () => {
+      deps = makeDeps({
+        handleIntegList: vi.fn().mockResolvedValue({ integrations: [] }),
+        handleIntegGmail: vi.fn().mockResolvedValue({ messages: [] }),
+        handleIntegCalendar: vi.fn().mockResolvedValue({ events: [] }),
+        handleIntegSlack: vi.fn().mockResolvedValue({ channels: [] }),
+      });
+      handlers.clear();
+      createStdioMcpServer(deps);
+
+      const result = await getListHandler()({});
+      expect(result.tools.map((tool: { name: string }) => tool.name)).toContain("integ_slack");
+
+      await callTool("integ_gmail", { action: "unreads", max: 10 });
+      await callTool("integ_calendar_rsvp", { eventId: "evt", responseStatus: "accepted" });
+      await callTool("integ_slack", { action: "messages", channelId: "chan", limit: 10 });
+
+      expect(deps.handleIntegGmail).toHaveBeenCalledWith({ action: "unreads", max: 10 });
+      expect(deps.handleIntegCalendar).toHaveBeenCalledWith({ action: "rsvp", eventId: "evt", responseStatus: "accepted" });
+      expect(deps.handleIntegSlack).toHaveBeenCalledWith({ action: "messages", channelId: "chan", limit: 10 });
+    });
+
+    it("does not route a crafted calendar RSVP through the auto-approved read tool", async () => {
+      deps = makeDeps({
+        handleIntegList: vi.fn(), handleIntegGmail: vi.fn(), handleIntegCalendar: vi.fn(), handleIntegSlack: vi.fn(),
+      });
+      handlers.clear();
+      createStdioMcpServer(deps);
+
+      const result = await callTool("integ_calendar", { action: "rsvp", eventId: "evt", responseStatus: "accepted" });
+      expect(result.isError).toBe(true);
+      expect(deps.handleIntegCalendar).not.toHaveBeenCalled();
+    });
+
+    it("converts integration proxy validation errors into an MCP error", async () => {
+      deps = makeDeps({
+        handleIntegList: vi.fn(),
+        handleIntegGmail: vi.fn().mockRejectedValue(new Error("messageId is required")),
+        handleIntegCalendar: vi.fn(),
+        handleIntegSlack: vi.fn(),
+      });
+      handlers.clear();
+      createStdioMcpServer(deps);
+
+      const result = await callTool("integ_gmail", { action: "read" });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual({ error: "messageId is required" });
+    });
+  });
+
   // -----------------------------------------------------------------------
   // memory_search
   // -----------------------------------------------------------------------

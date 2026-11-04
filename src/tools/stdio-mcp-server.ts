@@ -33,6 +33,7 @@ import {
   handleEpisodeWrite,
   type EpisodeMcpDeps,
 } from "./episode-mcp-tools.js";
+import type { CalendarRequest, GmailRequest, SlackRequest } from "../integ-api/mcp-proxy.js";
 
 export interface StdioMcpServerDeps {
   search: (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
@@ -44,6 +45,10 @@ export interface StdioMcpServerDeps {
   handleHabitCheck?: AssistantServerDeps["handleHabitCheck"];
   handleHabitStatus?: AssistantServerDeps["handleHabitStatus"];
   episodeDeps?: EpisodeMcpDeps;
+  handleIntegList?: () => Promise<unknown>;
+  handleIntegGmail?: (args: GmailRequest) => Promise<unknown>;
+  handleIntegCalendar?: (args: CalendarRequest) => Promise<unknown>;
+  handleIntegSlack?: (args: SlackRequest) => Promise<unknown>;
 }
 
 const MEMORY_LINT_TOOL_DEFINITION = {
@@ -204,6 +209,39 @@ Schedule is one of:
   },
 ];
 
+const INTEG_TOOL_DEFINITIONS = [
+  {
+    name: "integ_list",
+    description: "List configured PA integrations and their status. Credentials remain inside PA.",
+    inputSchema: { type: "object" as const, properties: {} },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "integ_gmail",
+    description: "Read Gmail through PA's local credential proxy.",
+    inputSchema: { type: "object" as const, properties: { action: { type: "string", enum: ["list", "read", "labels", "search", "unreads"] }, query: { type: "string" }, max: { type: "number" }, labelIds: { type: "string" }, messageId: { type: "string" } }, required: ["action"] },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "integ_calendar",
+    description: "Read calendar data through PA's local credential proxy.",
+    inputSchema: { type: "object" as const, properties: { action: { type: "string", enum: ["today", "week", "event", "free_busy"] }, eventId: { type: "string" }, timeMin: { type: "string" }, timeMax: { type: "string" } }, required: ["action"] },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "integ_calendar_rsvp",
+    description: "Change a calendar RSVP through PA's local credential proxy. This notifies or changes an external service and requires explicit user confirmation.",
+    inputSchema: { type: "object" as const, properties: { eventId: { type: "string" }, responseStatus: { type: "string", enum: ["accepted", "declined", "tentative"] }, sendUpdates: { type: "string", enum: ["none", "all", "externalOnly"] } }, required: ["eventId", "responseStatus"] },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  {
+    name: "integ_slack",
+    description: "Read Slack messages through PA's local credential proxy.",
+    inputSchema: { type: "object" as const, properties: { action: { type: "string", enum: ["unreads", "messages", "channels"] }, workspace: { type: "string" }, channelId: { type: "string" }, limit: { type: "number" } }, required: ["action"] },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+];
+
 /**
  * Create a standalone MCP server exposing PA tools.
  * Connect to a StdioServerTransport to serve over stdio.
@@ -223,6 +261,7 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
       return true;
     }),
     ...(deps.episodeDeps ? EPISODE_TOOL_DEFINITIONS : []),
+    ...(deps.handleIntegList && deps.handleIntegGmail && deps.handleIntegCalendar && deps.handleIntegSlack ? INTEG_TOOL_DEFINITIONS : []),
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -355,6 +394,36 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
         }
         return { content: [{ type: "text" as const, text: JSON.stringify(await deps.handleHabitStatus(), null, 2) }] };
       }
+      case "integ_list": {
+        if (!deps.handleIntegList) return unavailable("Integration proxy");
+        return success(await deps.handleIntegList());
+      }
+      case "integ_gmail": {
+        if (!deps.handleIntegGmail) return unavailable("Gmail integration");
+        const handler = deps.handleIntegGmail;
+        return proxyResult(() => handler((args ?? {}) as GmailRequest));
+      }
+      case "integ_calendar": {
+        if (!deps.handleIntegCalendar) return unavailable("Calendar integration");
+        const handler = deps.handleIntegCalendar;
+        if ((args ?? {}).action === "rsvp") return unavailable("Calendar RSVP requires integ_calendar_rsvp");
+        return proxyResult(() => handler((args ?? {}) as CalendarRequest));
+      }
+      case "integ_calendar_rsvp": {
+        if (!deps.handleIntegCalendar) return unavailable("Calendar integration");
+        const handler = deps.handleIntegCalendar;
+        const responseStatus = args?.responseStatus;
+        const eventId = args?.eventId;
+        if (typeof eventId !== "string" || (responseStatus !== "accepted" && responseStatus !== "declined" && responseStatus !== "tentative")) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid integ_calendar_rsvp input" }) }], isError: true };
+        }
+        return proxyResult(() => handler({ action: "rsvp", eventId, responseStatus, ...(typeof args?.sendUpdates === "string" ? { sendUpdates: args.sendUpdates as CalendarRequest["sendUpdates"] } : {}) }));
+      }
+      case "integ_slack": {
+        if (!deps.handleIntegSlack) return unavailable("Slack integration");
+        const handler = deps.handleIntegSlack;
+        return proxyResult(() => handler((args ?? {}) as SlackRequest));
+      }
       case "episode_recent":
         return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps!);
       case "episode_search":
@@ -377,6 +446,22 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
   });
 
   return server;
+}
+
+function success(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+}
+
+function unavailable(name: string) {
+  return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${name} is unavailable` }) }], isError: true };
+}
+
+async function proxyResult(operation: () => Promise<unknown>) {
+  try {
+    return success(await operation());
+  } catch (error) {
+    return { content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : "Integration proxy failed" }) }], isError: true };
+  }
 }
 
 /**

@@ -6,6 +6,7 @@ const TEMPLATES = [
   { source: "claude-code/.mcp-stdio-fallback.json", target: ".mcp-stdio-fallback.json" },
   { source: "claude-code/settings.json", target: ".claude/settings.json" },
 ] as const;
+const COMPANION_SETTINGS_FILE = path.join("claude-code", "settings.json");
 
 export interface ClaudeCodeTemplateInstallResult {
   created: string[];
@@ -13,7 +14,7 @@ export interface ClaudeCodeTemplateInstallResult {
 }
 
 /** Copy opt-in Claude Code companion templates without altering user configuration. */
-export async function installClaudeCodeTemplates(workspaceDir: string): Promise<ClaudeCodeTemplateInstallResult> {
+export async function installClaudeCodeTemplates(workspaceDir: string, configDir?: string): Promise<ClaudeCodeTemplateInstallResult> {
   const created: string[] = [];
   const skipped: string[] = [];
 
@@ -32,7 +33,28 @@ export async function installClaudeCodeTemplates(workspaceDir: string): Promise<
     created.push(template.target);
   }
 
+  // Keep the launcher-owned policy outside the project tree. The workspace
+  // copy supports direct Claude Code usage, while `pa claude` prefers this
+  // separate file as a tamper-deterrent layer.
+  if (configDir) {
+    const destination = path.join(configDir, COMPANION_SETTINGS_FILE);
+    try {
+      await fs.lstat(destination);
+      skipped.push(COMPANION_SETTINGS_FILE);
+    } catch (error: unknown) {
+      if (!isMissingFileError(error)) throw error;
+      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      await fs.copyFile(new URL("../templates/claude-code/settings.json", import.meta.url), destination);
+      await fs.chmod(destination, 0o600);
+      created.push(COMPANION_SETTINGS_FILE);
+    }
+  }
+
   return { created, skipped };
+}
+
+export function claudeCompanionSettingsPath(configDir: string): string {
+  return path.join(configDir, COMPANION_SETTINGS_FILE);
 }
 
 function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {

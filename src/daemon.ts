@@ -31,6 +31,7 @@ import { buildAgentOptions } from "./core/agent-runner.js";
 import { createBackend } from "./backends/factory.js";
 import { initializeStartupMemoryServices } from "./memory/startup-services.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
+import { createIntegServer } from "./tools/integ-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
@@ -53,6 +54,7 @@ import { migrateLegacySessionsToUnified } from "./session/unified.js";
 import type { AgentBackend } from "./backends/interface.js";
 import { startHttpMcpServer, type HttpMcpServerHandle } from "./tools/http-mcp-server.js";
 import type { StdioMcpServerDeps } from "./tools/stdio-mcp-server.js";
+import { createIntegMcpProxy } from "./integ-api/mcp-proxy.js";
 
 const log = createLogger("daemon");
 
@@ -63,6 +65,7 @@ type DaemonCoreDeps = {
   readMemoryFiles?: typeof readMemoryFiles;
   createCronToolManager?: typeof createCronToolManager;
   createAssistantServer?: typeof createAssistantServer;
+  createIntegServer?: typeof createIntegServer;
   createMessageQueue?: typeof createMessageQueue;
   createRouter?: typeof createRouter;
   buildAgentOptions?: typeof buildAgentOptions;
@@ -100,6 +103,7 @@ async function createDaemonCoreFromConfig(args: {
   const readMemoryFilesImpl = args.deps?.readMemoryFiles ?? readMemoryFiles;
   const createCronToolManagerImpl = args.deps?.createCronToolManager ?? createCronToolManager;
   const createAssistantServerImpl = args.deps?.createAssistantServer ?? createAssistantServer;
+  const createIntegServerImpl = args.deps?.createIntegServer ?? createIntegServer;
   const createMessageQueueImpl = args.deps?.createMessageQueue ?? createMessageQueue;
   const createRouterImpl = args.deps?.createRouter ?? createRouter;
   const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
@@ -204,11 +208,13 @@ async function createDaemonCoreFromConfig(args: {
     handleHabitCheck,
     handleHabitStatus,
   });
+  const integServer = createIntegServerImpl(args.config.integApi);
 
   const mcpServers: Record<string, unknown> = {
     ...args.config.mcpServers,
     memory: memoryServer,
     assistant: assistantServer,
+    integrations: integServer,
   };
 
   const agentOptions = buildAgentOptionsImpl(
@@ -224,6 +230,7 @@ async function createDaemonCoreFromConfig(args: {
   // accumulate the 314 MB embedding model in memory).
   let httpMcpServer: HttpMcpServerHandle | undefined;
   if (args.config.agent.backend === "codex" || args.config.mcp?.httpServer?.enabled === true) {
+    const integProxy = createIntegMcpProxy(args.config.integApi);
     const mcpDeps: StdioMcpServerDeps = {
       search: searchMemory,
       lintMemory: () => import("./memory/linter.js").then(({ lintMemoryKnowledgeBase }) => lintMemoryKnowledgeBase(args.config.security.workspace)),
@@ -233,6 +240,10 @@ async function createDaemonCoreFromConfig(args: {
       listProcessSessions: listSessions,
       handleHabitCheck,
       handleHabitStatus,
+      handleIntegList: integProxy.list,
+      handleIntegGmail: integProxy.gmail,
+      handleIntegCalendar: integProxy.calendar,
+      handleIntegSlack: integProxy.slack,
       ...(listEpisodes ? {
         episodeDeps: { listEpisodes, insertEpisode, searchEpisodesVector, redact },
       } : {}),
