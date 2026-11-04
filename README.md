@@ -150,7 +150,7 @@ Headless mode with adapters and heartbeats (periodic checking of reminders, proc
 
 ## Configuration
 
-Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it to customize your setup. The file is loaded at startup and not hot-reloaded. Override the location with `--config <path>` or the `PA_CONFIG` env var.
+Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it to customize your setup. The file is loaded at startup and not hot-reloaded. Override the location with `--config <path>` or the `PA_CONFIG` env var. `PA_CONFIG` contains only the path to the directory holding `settings.json` (for example `PA_CONFIG=/srv/pa-config`); it is not a JSON value and must not contain credentials.
 
 ### Setup guides
 
@@ -173,15 +173,25 @@ If that port is occupied, use the generated `.mcp-stdio-fallback.json` as the ex
 resolving the port conflict. This fallback is functional but intentionally opt-in: each Claude session starts one PA MCP
 process and its embedding model.
 
-Start companion sessions with `pa claude`, not a bare `claude`: it passes the generated configuration explicitly and uses
-Claude Code's `--restricted` mode to confine file tools to the workspace. The templates auto-allow only explicitly
-read-only PA MCP tools. `exec`, habit edits, episode writes, cron mutations and Bash remain subject to Claude Code
-confirmation. Do not add `--dangerously-skip-permissions`, copy tokens into the generated files, or replace an existing
-user-managed `.mcp.json`.
+`pa claude` is the recommended launcher: it exports `PA_CONFIG`, uses Claude Code's `--restricted` mode, and adds
+only PA's configured read/write directories to that restricted session. `pa init --claude-code` also copies its launcher
+settings to `$PA_CONFIG/claude-code/settings.json` with owner-only permissions, outside the project tree. It automatically permits PA MCP mutations because
+the MCP handlers enforce PA validation. Its `PreToolUse` hook also runs the same PA command allowlist and path policy for
+`Bash`, `Read`, `Write`, `Edit`, `Glob`, and `Grep`; rejected calls fail closed without a Claude dialog.
 
-Companion sessions share PA's memory, cron, process, habit and integration CLI capabilities, but they do not share PA
-chat sessions, compaction, audit/reflection lifecycle, or PA's internal Bash/path security hooks. Cron jobs still require
-the daemon to be running to fire.
+Bare Claude Code is supported too after templates are installed: run `cd <workspace>` followed by
+`PA_CONFIG=/path/to/pa-config claude`. The environment variable makes the SessionStart and security hooks load the same
+`settings.json`; use `pa claude` when you also want `--restricted` as a second containment layer. Gmail, Calendar, and
+Slack are exposed as PA MCP proxy tools, so neither tokens nor `pa integapi` shell commands are needed in a Claude session.
+Calendar RSVP remains an external side effect: the agent must obtain the user's explicit instruction before calling it.
+Do not add `--dangerously-skip-permissions`, copy tokens into generated files, or replace an existing user-managed
+`.mcp.json`. Claude Code itself may still require a person for protected configuration and Git settings files in restricted
+mode; PA does not bypass that product safeguard. A direct bare session uses a project hook, so it is a compatible workflow,
+not a security boundary against a hostile prompt. `pa claude` adds useful containment and protects its settings from ordinary
+project edits, but remains defense-in-depth rather than a complete OS sandbox for arbitrary allowlisted interpreters.
+
+Companion sessions share PA's memory, cron, process, habit and integration capabilities, but they do not share PA chat
+sessions, compaction, audit/reflection lifecycle. Cron jobs still require the daemon to be running to fire.
 
 ### Key Sections
 

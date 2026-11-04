@@ -9,6 +9,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Write|Edit|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pa claude-security-hook"
+          }
+        ]
+      }
     ]
   },
   "permissions": {
@@ -20,20 +31,23 @@
       "mcp__pa__episode_stats",
       "mcp__pa__cron_list",
       "mcp__pa__habit_status",
-      "mcp__pa__process"
-    ],
-    "deny": [
-      "Read(../**)",
-      "Edit(../**)"
-    ],
-    "ask": [
-      "Bash(*)",
+      "mcp__pa__process",
       "mcp__pa__exec",
       "mcp__pa__habit_check",
       "mcp__pa__episode_write",
       "mcp__pa__cron_create",
       "mcp__pa__cron_update",
-      "mcp__pa__cron_remove"
+      "mcp__pa__cron_remove",
+      "mcp__pa__integ_list",
+      "mcp__pa__integ_gmail",
+      "mcp__pa__integ_calendar",
+      "mcp__pa__integ_slack",
+      "Bash(*)",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep"
     ]
   }
 }

@@ -50,6 +50,10 @@ vi.mock("./tools/assistant-server.js", () => ({
   createAssistantServer: vi.fn(),
 }));
 
+vi.mock("./tools/integ-server.js", () => ({
+  createIntegServer: vi.fn(),
+}));
+
 vi.mock("./tools/http-mcp-server.js", () => ({
   startHttpMcpServer: vi.fn(),
 }));
@@ -159,6 +163,7 @@ import { createEpisodeStore } from "./memory/episodes/store.js";
 import { createIndexer } from "./memory/indexer.js";
 import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
+import { createIntegServer } from "./tools/integ-server.js";
 import { startHttpMcpServer } from "./tools/http-mcp-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
@@ -384,6 +389,7 @@ function setupMocks(config: Config) {
   });
   vi.mocked(createMemoryServer).mockReturnValue({} as any);
   vi.mocked(createAssistantServer).mockReturnValue({} as any);
+  vi.mocked(createIntegServer).mockReturnValue({} as any);
   vi.mocked(startHttpMcpServer).mockResolvedValue(mockHttpMcpServer);
   vi.mocked(createMessageQueue).mockReturnValue(mockQueue as any);
   vi.mocked(createRouter).mockReturnValue(mockRouter);
@@ -455,6 +461,7 @@ describe("daemon", () => {
     expect(createBackend).toHaveBeenCalledWith(config, expect.any(Object), expect.objectContaining({ configDir: expect.any(String), redact: expect.any(Function) }));
     expect(createMemoryServer).toHaveBeenCalled();
     expect(createAssistantServer).toHaveBeenCalled();
+    expect(createIntegServer).toHaveBeenCalledWith(config.integApi);
     expect(mockQueue.processLoop).toHaveBeenCalledWith(mockBackend, config, expect.any(Object));
   });
 

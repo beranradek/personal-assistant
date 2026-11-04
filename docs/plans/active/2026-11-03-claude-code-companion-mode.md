@@ -16,7 +16,7 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 - The `memory` and `assistant` MCP servers are in-process SDK servers. Plain Claude Code cannot use them.
 - `pa mcp-server` (`src/tools/stdio-mcp-server.ts`) is a stdio MCP server made for the Codex backend. It exposes
   `memory_search`, `episode_*`, `cron_*`, `exec`, `process`. It does not expose habit tools.
-- Gmail, Calendar and Slack lookups use the `pa integapi` CLI (needs the integ-api server, which the daemon forks).
+- Gmail, Calendar and Slack use PA MCP proxy tools (the integ-api service and credentials remain local to PA).
 
 ## Capability mapping
 
@@ -26,13 +26,15 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 | Skills | `.claude/skills` in workspace (works today) |
 | memory_search, episode_*, cron_*, exec, process | `pa mcp-server` via workspace `.mcp.json` |
 | Habit tools | `pa mcp-server` (to add) |
-| Integrations | `pa integapi ...` via Bash |
+| Integrations | PA MCP proxy tools (`integ_gmail`, `integ_calendar`, `integ_slack`) |
 | User MCP servers (context7, chrome-devtools) | workspace `.mcp.json` |
 
 ## Known gaps (accepted or to document)
 
-1. **Security.** The Bash allowlist hook, file path hook and sandbox are PA code. They do not apply. Replace them with
-   Claude Code permissions and sandbox settings in workspace `.claude/settings.json`.
+1. **Security.** Addressed as defense-in-depth on 2026-11-04: a generated `PreToolUse` command hook delegates Bash and
+   file-tool decisions to PA's existing allowlist and path validators. `pa claude` additionally uses `--restricted`,
+   passes only configured directories via `--add-dir`, and loads launcher settings outside the workspace. Bare `claude`
+   uses the same project hook when started with `PA_CONFIG=<config-dir>` but is not an OS isolation boundary.
 2. **Cron execution.** Jobs are only fired by the daemon. Jobs made in plain Claude Code run only if the daemon runs.
 3. **No PA sessions, compaction, audit log or reflection.** Claude Code has its own sessions.
 4. **Memory use.** Each `pa mcp-server` process loads the embedding model (about 314 MB). Prefer the shared HTTP MCP server
@@ -94,17 +96,17 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 - Fresh `claude` session in the workspace: confirm the context is present (ask for a fact from USER.md).
 - Call `memory_search`, `episode_recent`, `habit_status`, `cron_list` through MCP.
 - Create a cron job in plain Claude Code. Confirm the daemon fires it.
-- Run `pa integapi calendar today` through Bash.
+- Call `integ_calendar` through MCP.
 - Confirm no orphan `pa mcp-server` processes after the session ends.
 
 ## Out of scope
 
-- Running PA security hooks inside plain Claude Code (needs a Claude Code plugin; revisit later).
 - Session sync between Claude Code and PA session JSONL.
 
 ## Delivery note
 
-- Use `pa claude` for the companion session. It supplies the generated settings and MCP config explicitly and starts
-  Claude Code in its workspace-confining `--restricted` mode; launching bare `claude` is not the secure companion path.
+- `pa claude` supplies generated settings/MCP config and starts Claude Code in `--restricted` mode. Bare `claude` is also
+  supported when the caller exports `PA_CONFIG=<config-dir>` and starts in the initialized workspace; that path relies on
+  the same PA PreToolUse policy but does not add Claude's restricted containment layer.
 - The generated stdio MCP configuration is an explicit fallback when the localhost HTTP endpoint is unavailable. It is
   not the default because it starts an embedding model for that session.

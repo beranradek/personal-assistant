@@ -25,11 +25,12 @@ import { createLogger } from "./core/logger.js";
 import { runDailyReflection } from "./memory/daily-reflection.js";
 import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 import { buildClaudeContext, formatSessionStartHookOutput } from "./claude/context.js";
-import { installClaudeCodeTemplates } from "./claude/templates.js";
+import { evaluateClaudePreToolUse } from "./claude/security-hook.js";
+import { claudeCompanionSettingsPath, installClaudeCodeTemplates } from "./claude/templates.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude-security-hook", "claude"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /**
@@ -59,6 +60,7 @@ Commands:
   init                  Create default settings.json in config directory
   mcp-server            Start stdio MCP server (for Codex backend integration)
   claude-context        Print safe SessionStart context for Claude Code
+  claude-security-hook  Apply PA's PreToolUse security policy for Claude Code
   claude                Start Claude Code in workspace-restricted companion mode
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
@@ -99,7 +101,7 @@ async function runInit(configDir: string, options: { claudeCode: boolean }): Pro
   await ensureWorkspace(config);
   console.log(`Workspace initialized: ${config.security.workspace}`);
   if (options.claudeCode) {
-    const result = await installClaudeCodeTemplates(config.security.workspace);
+    const result = await installClaudeCodeTemplates(config.security.workspace, configDir);
     console.log(`Claude Code templates created: ${result.created.join(", ") || "none"}`);
     if (result.skipped.length > 0) console.log(`Claude Code templates preserved: ${result.skipped.join(", ")}`);
   }
@@ -111,11 +113,41 @@ async function runClaudeContext(configDir: string, hookJson: boolean): Promise<v
   console.log(hookJson ? formatSessionStartHookOutput(context) : context);
 }
 
-export function buildClaudeCompanionArgs(workspaceDir: string, args: string[]): string[] {
+async function readHookInput(): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 1_000_000) throw new Error("Claude hook input exceeds 1 MB");
+    chunks.push(buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function runClaudeSecurityHook(configDir: string): Promise<void> {
+  try {
+    const config = loadConfig(configDir);
+    console.log(JSON.stringify(await evaluateClaudePreToolUse(await readHookInput(), config)));
+  } catch {
+    // Hook stderr is visible to Claude Code; never expose configuration details here.
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "PA security hook could not validate this tool call",
+      },
+    }));
+  }
+}
+
+export function buildClaudeCompanionArgs(workspaceDir: string, args: string[], additionalDirs: string[] = [], settingsPath = path.join(workspaceDir, ".claude", "settings.json")): string[] {
+  const safeDirs = [...new Set(additionalDirs.map((dir) => path.resolve(dir)))].filter((dir) => dir !== path.resolve(workspaceDir));
   return [
     "--restricted",
     "--tools", "default",
-    "--settings", path.join(workspaceDir, ".claude", "settings.json"),
+    ...(safeDirs.length > 0 ? ["--add-dir", ...safeDirs] : []),
+    "--settings", settingsPath,
     "--mcp-config", path.join(workspaceDir, ".mcp.json"),
     ...args,
   ];
@@ -131,8 +163,19 @@ async function runClaudeCompanion(configDir: string, rawArgs: string[]): Promise
   const companionArgs = rawArgs.slice(commandIndex + 1).filter((arg, index, values) =>
     arg !== "--config" && values[index - 1] !== "--config",
   );
+  const launcherSettingsPath = claudeCompanionSettingsPath(configDir);
+  try {
+    await fs.access(launcherSettingsPath);
+  } catch {
+    throw new Error(`Claude companion settings are missing. Run: pa --config ${path.join(configDir, "settings.json")} init --claude-code`);
+  }
   const exitCode = await new Promise<number | null>((resolve, reject) => {
-    const child = spawn(process.env["CLAUDE_PATH"] || "claude", buildClaudeCompanionArgs(config.security.workspace, companionArgs), {
+    const extraDirs = [
+      config.security.dataDir,
+      ...config.security.additionalReadDirs,
+      ...config.security.additionalWriteDirs,
+    ];
+    const child = spawn(process.env["CLAUDE_PATH"] || "claude", buildClaudeCompanionArgs(config.security.workspace, companionArgs, extraDirs, launcherSettingsPath), {
       cwd: config.security.workspace,
       stdio: "inherit",
       env: buildClaudeCompanionEnvironment(configDir),
@@ -156,6 +199,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     { loadHabits, markHabit },
     { getSession, listSessions },
     { createStdioMcpServer, runStdioServer },
+    { createIntegMcpProxy },
   ] = await Promise.all([
     import("./memory/embeddings.js"),
     import("./memory/vector-store.js"),
@@ -167,6 +211,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     import("./heartbeat/habits.js"),
     import("./exec/process-registry.js"),
     import("./tools/stdio-mcp-server.js"),
+    import("./integ-api/mcp-proxy.js"),
   ]);
 
   const config = loadConfig(configDir);
@@ -209,6 +254,7 @@ async function startMcpServer(configDir: string): Promise<void> {
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");
   const cronManager = createCronToolManager({ storePath: cronStorePath });
   await cronManager.rearmTimer();
+  const integProxy = createIntegMcpProxy(config.integApi);
 
   // Create and start the stdio MCP server
   const server = createStdioMcpServer({
@@ -229,6 +275,10 @@ async function startMcpServer(configDir: string): Promise<void> {
       if (!habits) return { error: "HABITS.md not found in workspace" };
       return { pillars: habits.pillars.map((pillar) => ({ label: pillar.label, type: pillar.type, done: habits.checklist[pillar.label] === true })) };
     },
+    handleIntegList: integProxy.list,
+    handleIntegGmail: integProxy.gmail,
+    handleIntegCalendar: integProxy.calendar,
+    handleIntegSlack: integProxy.slack,
   });
 
   // Clean shutdown
@@ -377,6 +427,9 @@ async function main(): Promise<void> {
       break;
     case "claude-context":
       await runClaudeContext(configDir, args.includes("--hook-json"));
+      break;
+    case "claude-security-hook":
+      await runClaudeSecurityHook(configDir);
       break;
     case "claude":
       await runClaudeCompanion(configDir, args);

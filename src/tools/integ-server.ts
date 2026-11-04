@@ -1,23 +1,10 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { createIntegMcpProxy } from "../integ-api/mcp-proxy.js";
 
 export interface IntegServerConfig {
   bind?: string;
   port: number;
-}
-
-function baseUrl(cfg: IntegServerConfig): string {
-  const bind = (cfg.bind ?? "127.0.0.1").trim() || "127.0.0.1";
-  return `http://${bind}:${cfg.port}`;
-}
-
-async function fetchJson(url: string): Promise<unknown> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`integ-api request failed (${res.status}): ${body}`);
-  }
-  return res.json();
 }
 
 function errorResult(message: string) {
@@ -28,14 +15,14 @@ function errorResult(message: string) {
 }
 
 export function createIntegServer(cfg: IntegServerConfig) {
-  const root = baseUrl(cfg);
+  const proxy = createIntegMcpProxy(cfg);
 
   return createSdkMcpServer({
     name: "integrations",
     version: "1.0.0",
     tools: [
       tool("integ_list", "List available integrations and their status.", {}, async () => {
-        const data = await fetchJson(`${root}/integ-api/integrations`);
+        const data = await proxy.list();
         return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
       }),
 
@@ -50,75 +37,86 @@ export function createIntegServer(cfg: IntegServerConfig) {
           messageId: z.string().optional(),
         },
         async (args) => {
-          const u = new URL(`${root}/gmail/messages`);
-
           if (args.action === "labels") {
-            const data = await fetchJson(`${root}/gmail/labels`);
+            const data = await proxy.gmail(args);
             return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
           }
 
           if (args.action === "read") {
             if (!args.messageId) return errorResult("messageId is required for action=read");
-            const data = await fetchJson(`${root}/gmail/messages/${encodeURIComponent(args.messageId)}`);
+            const data = await proxy.gmail(args);
             return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
           }
 
           if (args.action === "search") {
             if (!args.query) return errorResult("query is required for action=search");
-            const searchUrl = new URL(`${root}/gmail/search`);
-            searchUrl.searchParams.set("q", args.query);
-            if (args.max != null) searchUrl.searchParams.set("max", String(args.max));
-            const data = await fetchJson(searchUrl.toString());
+            const data = await proxy.gmail(args);
             return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
           }
 
-          // list
-          if (args.query) u.searchParams.set("query", args.query);
-          if (args.max != null) u.searchParams.set("max", String(args.max));
-          if (args.labelIds) u.searchParams.set("labelIds", args.labelIds);
-          const data = await fetchJson(u.toString());
+          const data = await proxy.gmail(args);
           return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
         },
       ),
 
       tool(
         "integ_calendar",
-        "Calendar integration helper (today, week, event, free_busy).",
+        "Calendar integration helper (today, week, event, free_busy, rsvp). Obtain explicit user confirmation before rsvp because it changes an external calendar.",
         {
-          action: z.enum(["today", "week", "event", "free_busy"]),
+          action: z.enum(["today", "week", "event", "free_busy", "rsvp"]),
           eventId: z.string().optional(),
           timeMin: z.string().optional(),
           timeMax: z.string().optional(),
+          responseStatus: z.enum(["accepted", "declined", "tentative"]).optional(),
+          sendUpdates: z.enum(["none", "all", "externalOnly"]).optional(),
         },
         async (args) => {
           if (args.action === "today") {
-            const data = await fetchJson(`${root}/calendar/today`);
+            const data = await proxy.calendar(args);
             return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
           }
 
           if (args.action === "week") {
-            const data = await fetchJson(`${root}/calendar/week`);
+            const data = await proxy.calendar(args);
             return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
           }
 
           if (args.action === "event") {
             if (!args.eventId) return errorResult("eventId is required for action=event");
-            const data = await fetchJson(`${root}/calendar/event/${encodeURIComponent(args.eventId)}`);
+            const data = await proxy.calendar(args);
             return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
           }
 
-          // free_busy
+          if (args.action === "rsvp") {
+            if (!args.eventId) return errorResult("eventId is required for action=rsvp");
+            if (!args.responseStatus) return errorResult("responseStatus is required for action=rsvp");
+            const data = await proxy.calendar(args);
+            return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+          }
+
           if (!args.timeMin || !args.timeMax) {
             return errorResult("timeMin and timeMax are required for action=free_busy");
           }
-          const fb = new URL(`${root}/calendar/free-busy`);
-          fb.searchParams.set("timeMin", args.timeMin);
-          fb.searchParams.set("timeMax", args.timeMax);
-          const data = await fetchJson(fb.toString());
+          const data = await proxy.calendar(args);
+          return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+        },
+      ),
+
+      tool(
+        "integ_slack",
+        "Slack integration helper (unreads, messages, channels).",
+        {
+          action: z.enum(["unreads", "messages", "channels"]),
+          workspace: z.string().optional(),
+          channelId: z.string().optional(),
+          limit: z.number().int().positive().optional(),
+        },
+        async (args) => {
+          if (args.action === "messages" && !args.channelId) return errorResult("channelId is required for action=messages");
+          const data = await proxy.slack(args);
           return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
         },
       ),
     ],
   });
 }
-

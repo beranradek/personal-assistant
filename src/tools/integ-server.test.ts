@@ -105,12 +105,24 @@ describe("createIntegServer", () => {
     expect(rMissingTimes.isError).toBe(true);
 
     await handler({ action: "free_busy", timeMin: "2026-01-01T00:00:00Z", timeMax: "2026-01-01T01:00:00Z" });
+    await handler({ action: "rsvp", eventId: "evt/1", responseStatus: "accepted" });
 
     const urls = vi.mocked(fetch as any).mock.calls.map((c) => c[0]);
     expect(urls).toContain("http://127.0.0.1:19100/calendar/today");
     expect(urls).toContain("http://127.0.0.1:19100/calendar/week");
     expect(urls).toContain("http://127.0.0.1:19100/calendar/event/evt%2F1");
     expect(urls).toContain("http://127.0.0.1:19100/calendar/free-busy?timeMin=2026-01-01T00%3A00%3A00Z&timeMax=2026-01-01T01%3A00%3A00Z");
+    expect(urls).toContain("http://127.0.0.1:19100/calendar/event/evt%2F1/rsvp");
+  });
+
+  it("integ_slack uses the PA proxy and validates message channel IDs", async () => {
+    createIntegServer({ port: 19100, bind: "127.0.0.1" });
+    const { handler } = findTool("integ_slack");
+
+    const missing = await handler({ action: "messages" });
+    expect(missing.isError).toBe(true);
+    await handler({ action: "messages", channelId: "channel/1", workspace: "work", limit: 10 });
+
+    expect(vi.mocked(fetch as any).mock.calls.map((call) => call[0])).toContain("http://127.0.0.1:19100/slack/messages/channel%2F1?workspace=work&limit=10");
   });
 });
-

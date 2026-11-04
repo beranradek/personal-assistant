@@ -56,6 +56,10 @@ describe("cli", () => {
       expect(parseCommand(["node", "cli.js", "claude-context", "--hook-json"])).toBe("claude-context");
     });
 
+    it('parses "claude-security-hook" subcommand', () => {
+      expect(parseCommand(["node", "cli.js", "claude-security-hook"])).toBe("claude-security-hook");
+    });
+
     it('parses "claude" companion subcommand', () => {
       expect(parseCommand(["node", "cli.js", "claude"])).toBe("claude");
     });
@@ -72,6 +76,18 @@ describe("cli", () => {
     expect(buildClaudeCompanionEnvironment("/custom/pa", { KEEP: "yes", PA_CONFIG: "/old" })).toEqual({
       KEEP: "yes", PA_CONFIG: "/custom/pa",
     });
+  });
+
+  it("adds PA-configured directories to restricted Claude Code access", () => {
+    expect(buildClaudeCompanionArgs("/workspace", [], ["/readable", "/writable", "/readable", "/workspace"])).toEqual([
+      "--restricted", "--tools", "default", "--add-dir", "/readable", "/writable",
+      "--settings", "/workspace/.claude/settings.json", "--mcp-config", "/workspace/.mcp.json",
+    ]);
+  });
+
+  it("uses launcher-owned settings when supplied", () => {
+    expect(buildClaudeCompanionArgs("/workspace", [], [], "/pa-config/claude-code/settings.json"))
+      .toContain("/pa-config/claude-code/settings.json");
   });
 
   describe("parseReflectDate", () => {
