@@ -2,7 +2,7 @@ import { describe, expect, it, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildClaudeContext, formatSessionStartHookOutput } from "./context.js";
+import { buildClaudeContext, DEFAULT_CLAUDE_CONTEXT_MAX_BYTES, formatSessionStartHookOutput } from "./context.js";
 
 const tempDirs: string[] = [];
 
@@ -17,25 +17,50 @@ afterEach(async () => {
 });
 
 describe("Claude Code context", () => {
-  it("reads the fixed root context files without HEARTBEAT.md", async () => {
+  it("injects SOUL.md and tells the agent to read the large files itself", async () => {
     const directory = await workspace();
-    await fs.writeFile(path.join(directory, "AGENTS.md"), "agents");
+    await fs.writeFile(path.join(directory, "AGENTS.md"), "agents rules");
+    await fs.writeFile(path.join(directory, "SOUL.md"), "Jsi Amy");
     await fs.writeFile(path.join(directory, "MEMORY.md"), "memory");
     await fs.writeFile(path.join(directory, "HEARTBEAT.md"), "heartbeat");
 
-    await expect(buildClaudeContext(directory)).resolves.toBe("agents\n\n---\n\nmemory");
+    const result = await buildClaudeContext(directory);
+
+    expect(result).toContain("Jsi Amy");
+    expect(result).toContain(`- ${path.join(directory, "AGENTS.md")}`);
+    expect(result).toContain(`- ${path.join(directory, "MEMORY.md")}`);
+    expect(result).not.toContain("USER.md");
+    expect(result).not.toContain("agents rules");
+    expect(result).not.toContain("heartbeat");
   });
 
-  it("caps aggregate output instead of loading unbounded context", async () => {
+  it("keeps the persona visible when other context files are large", async () => {
     const directory = await workspace();
-    await fs.writeFile(path.join(directory, "AGENTS.md"), "a".repeat(100));
-    await fs.writeFile(path.join(directory, "SOUL.md"), "b".repeat(100));
+    for (const name of ["AGENTS.md", "USER.md", "MEMORY.md"]) await fs.writeFile(path.join(directory, name), "x".repeat(50_000));
+    await fs.writeFile(path.join(directory, "SOUL.md"), "Jsi Amy");
 
-    const result = await buildClaudeContext(directory, 150);
+    const result = await buildClaudeContext(directory);
 
-    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(150);
-    expect(result).toContain("a");
-    expect(result).toContain("Context truncated");
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(DEFAULT_CLAUDE_CONTEXT_MAX_BYTES);
+    expect(result).toContain("Jsi Amy");
+  });
+
+  it("caps output and marks a truncated persona", async () => {
+    const directory = await workspace();
+    await fs.writeFile(path.join(directory, "SOUL.md"), "ž".repeat(5000));
+
+    const result = await buildClaudeContext(directory, 400);
+
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(400);
+    expect(result).toContain("[SOUL.md truncated]");
+    expect(result).not.toContain("\uFFFD");
+  });
+
+  it("works when workspace has no context files", async () => {
+    const directory = await workspace();
+    const result = await buildClaudeContext(directory);
+    expect(result).toContain("Personal assistant session start.");
+    expect(result).not.toContain("Read tool");
   });
 
   it("formats valid SessionStart hook JSON", () => {
