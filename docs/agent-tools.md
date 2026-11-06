@@ -38,7 +38,8 @@ read-only operation while keeping mutations explicit.
 
 Disabled by default. With `tmuxAgents.enabled=true` the assistant can run project coding agents in tmux sessions that this
 server owns. Claude backend: in-process server `tmuxagents` (`mcp__tmuxagents__agent_session_*`). Claude Code companion and Codex:
-`mcp__pa__agent_session_*` through the HTTP MCP server. Setup and security notes: `docs/settings/tmux_agents.md`.
+`mcp__pa__agent_session_*` through the HTTP MCP server. Setup, configuration, security and the `pa agents-view` screen layout:
+`docs/settings/tmux_agents.md`.
 
 | Tool | Description |
 |------|-------------|
