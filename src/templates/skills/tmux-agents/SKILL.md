@@ -25,7 +25,9 @@ that agent sessions are disabled, point to `docs/settings/tmux_agents.md`, and s
 
 ## Workflow
 
-1. `agent_session_list`: reuse a running session for the same project instead of starting a new one.
+1. `agent_session_list`: reuse a running session for the same project instead of starting a new one. The result has
+   `allowedRoots`: the only directories where an agent may start. Pick the project directory under one of them. Never guess a path;
+   if the project is not under any root, tell the user.
 2. `agent_session_start` with `permissionMode: "default"`. Read `state` and `hint` in the result.
 3. `agent_session_status`: wait for `idle`.
 4. `agent_session_send` one short, self-contained task. Name the project directory and the expected result.
@@ -71,5 +73,5 @@ A graceful `agent_session_stop` is refused with `UNKNOWN_STATE` in the same way;
 
 The result of a failed call has `ok: false` and `error.code`. Common codes: `BUSY` (wait or interrupt), `WAITING_PERMISSION`,
 `WAITING_TRUST` (ask the user), `UNKNOWN_STATE` (read the screen, see above), `ROOT_NOT_ALLOWED` and `ROOT_NOT_TRUSTED`
-(the directory is not allowed in settings: tell the user), `TOO_MANY_SESSIONS` (stop a session first), `RATE_LIMITED`
-(wait a moment), `NOT_FOUND` (the session ended: use `agent_session_list`).
+(the directory is not allowed in settings: compare it with `allowedRoots`, then tell the user), `TOO_MANY_SESSIONS`
+(stop a session first), `RATE_LIMITED` (wait a moment), `NOT_FOUND` (the session ended: use `agent_session_list`).

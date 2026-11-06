@@ -555,7 +555,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
           state: r.state,
           ...(r.lastInputAt ? { lastInputAt: r.lastInputAt } : {}),
         }));
-      return { sessions, ...(snapshot.corrupt ? { corrupt: true as const } : {}) };
+      return { sessions, allowedRoots: [...cfg.allowedRoots], ...(snapshot.corrupt ? { corrupt: true as const } : {}) };
     },
 
     async status({ session }) {

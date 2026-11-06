@@ -35,7 +35,7 @@ Add to `~/.personal-assistant/settings.json`, then restart the daemon:
 | `enabled` | `false` | Register the tools |
 | `tmuxBinary` | `"tmux"` | tmux executable |
 | `socketPath` | `""` | `""` = `<security.dataDir>/tmux-agents/tmux.sock`; otherwise an absolute path, below about 100 characters |
-| `allowedRoots` | `[]` | Directories where agents may start. A start outside them is refused (`ROOT_NOT_ALLOWED`) |
+| `allowedRoots` | `[]` | Where agents may start. Elsewhere: `ROOT_NOT_ALLOWED` (lists them). Also in `agent_session_list` |
 | `trustedRoots` | `[]` | Entries of `allowedRoots` that may lie under a directory the assistant can write (see below) |
 | `enabledKinds` | `["claude"]` | Agent kinds that may start. Only `claude` exists |
 | `allowPermissionBypass` | `false` | Allow `permissionMode: "bypass"` (also needs `confirmBypass: true` in the call) |

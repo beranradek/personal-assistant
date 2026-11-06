@@ -57,7 +57,10 @@ export function resolveAllowedDirectory(
     const root = realpathOrUndefined(allowed);
     if (root !== undefined && isWithinDir(cwd, root)) return { cwd, root };
   }
-  throw new TmuxAgentError("ROOT_NOT_ALLOWED", "Directory is not inside tmuxAgents.allowedRoots");
+  throw new TmuxAgentError(
+    "ROOT_NOT_ALLOWED",
+    `Directory is not inside tmuxAgents.allowedRoots (${allowedRoots.length > 0 ? allowedRoots.join(", ") : "none configured"})`,
+  );
 }
 
 /**

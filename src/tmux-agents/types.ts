@@ -122,7 +122,7 @@ export interface ReconcileSummary {
 
 export interface TmuxAgentService {
   start(input: StartInput): Promise<StartResult>;
-  list(input: ListInput): Promise<{ sessions: SessionSummary[]; corrupt?: true }>;
+  list(input: ListInput): Promise<{ sessions: SessionSummary[]; allowedRoots: string[]; corrupt?: true }>;
   status(input: StatusInput): Promise<StatusResult>;
   read(input: ReadInput): Promise<ReadResult>;
   send(input: SendInput): Promise<SendResult>;

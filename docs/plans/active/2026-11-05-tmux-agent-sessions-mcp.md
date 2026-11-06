@@ -358,7 +358,9 @@ Result shapes (short):
   screen and returns the detected state; on `waiting_trust` the `hint` says: report to the user and recommend `attach`
 - `recover`: `{ ok, oldSession, session (new), method: "force-restart", attachCommand }`; documented as a forced restart, work in the
   old session is lost
-- `list`: `{ ok, sessions: [{ session, project, kind, cwd, permissionMode, createdAt, state: "running"|"stopped"|"lost", lastInputAt }] }`
+- `list`: `{ ok, sessions: [{ session, project, kind, cwd, permissionMode, createdAt, state: "running"|"stopped"|"lost", lastInputAt }],
+  allowedRoots: string[] }`. `allowedRoots` (2026-11-06) tells the assistant where `start` may run; the `ROOT_NOT_ALLOWED` error for a
+  directory outside the roots also lists them
 - `status`: `{ ok, session, alive, state: "busy"|"idle"|"waiting_permission"|"waiting_trust"|"unknown", signal,
   confidence: "high"|"medium"|"low", evidence: string[], detector: "claude@1", capturedAt }`
 - `read`: `{ ok, session, untrusted: true, redacted: boolean, truncated: boolean, lines: number, output }`

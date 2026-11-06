@@ -98,7 +98,7 @@ export const TMUX_TOOLS: readonly TmuxToolDefinition[] = [
     name: "start",
     description:
       "Start a coding agent (kind 'claude') in a tmux session for a project directory. The directory must be inside " +
-      "tmuxAgents.allowedRoots. Ask the user BEFORE using permissionMode 'bypass' (no approval prompts, full user rights). " +
+      "tmuxAgents.allowedRoots (see allowedRoots in agent_session_list; never guess a path). Ask the user BEFORE using permissionMode 'bypass' (no approval prompts, full user rights). " +
       "If the result state is waiting_trust, report it to the user and recommend agent_session_attach: never confirm it yourself.",
     shape: startShape,
     annotations: ACTS,
@@ -106,7 +106,9 @@ export const TMUX_TOOLS: readonly TmuxToolDefinition[] = [
   }),
   defineTool({
     name: "list",
-    description: "List agent sessions started by this server (never foreign tmux sessions).",
+    description:
+      "List agent sessions started by this server (never foreign tmux sessions). The result also has allowedRoots: the " +
+      "directories where agent_session_start may start an agent.",
     shape: listShape,
     annotations: READ_ONLY,
     handler: (service, input) => service.list(input),

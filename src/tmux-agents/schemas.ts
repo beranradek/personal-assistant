@@ -15,7 +15,7 @@ export const MAX_TEXT_CHARS = 20_000;
 
 export const startShape = {
   project: Project.describe("Project label: a-z, 0-9, dashes, at most 32 characters"),
-  directory: z.string().min(1).max(512).describe("Absolute path of the project directory (inside tmuxAgents.allowedRoots)"),
+  directory: z.string().min(1).max(512).describe("Absolute path of the project directory (inside one of allowedRoots from agent_session_list)"),
   kind: KindId.default("claude").describe("Agent kind; only 'claude' is built in"),
   permissionMode: z.enum(PERMISSION_MODES).default("default").describe("'bypass' needs settings AND confirmBypass: ask the user first"),
   confirmBypass: z.literal(true).optional().describe("Only after the user confirmed bypass mode"),

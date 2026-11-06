@@ -43,7 +43,7 @@ server owns. Claude backend: in-process server `tmuxagents` (`mcp__tmuxagents__a
 | Tool | Description |
 |------|-------------|
 | `agent_session_start` | Start an agent (kind `claude`) in an allowed project directory. Bypass mode needs settings and confirmation. |
-| `agent_session_list` | List sessions started by this server. Read-only. |
+| `agent_session_list` | List sessions of this server, plus `allowedRoots` (where `start` may run). Read-only. |
 | `agent_session_status` | Alive, and busy, idle, waiting_permission, waiting_trust or unknown (heuristic with confidence). Read-only. |
 | `agent_session_read` | Last screen lines, redacted, marked as untrusted data. Read-only. |
 | `agent_session_send` | Type a message, press Enter, optionally wait until idle. No line may start with `!`, `#`, `/`. |

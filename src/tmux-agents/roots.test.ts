@@ -47,6 +47,26 @@ describe("roots", () => {
       expect(result).toEqual({ cwd: path.join(root, "proj"), root });
     });
 
+    it("lists the allowed roots in the error when the directory is outside them", () => {
+      const outside = path.join(tmp, "outside");
+      fs.mkdirSync(outside, { recursive: true });
+      const message = (() => {
+        try {
+          resolveAllowedDirectory(outside, [root, "/another/root"]);
+        } catch (err) {
+          return err instanceof Error ? err.message : "";
+        }
+        return "";
+      })();
+      expect(message).toContain("not inside tmuxAgents.allowedRoots");
+      expect(message).toContain(root);
+      expect(message).toContain("/another/root");
+    });
+
+    it("keeps the other ROOT_NOT_ALLOWED messages free of the roots list", () => {
+      expect(() => resolveAllowedDirectory("relative/dir", [root])).toThrow(/absolute path \(no ~ expansion\)$/);
+    });
+
     it("accepts the root itself", () => {
       expect(resolveAllowedDirectory(root, [root]).cwd).toBe(root);
     });

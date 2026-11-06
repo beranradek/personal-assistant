@@ -371,6 +371,11 @@ describe("TmuxAgentService", () => {
       expect(all.sessions).toEqual([expect.objectContaining({ session: name, state: "stopped" })]);
     });
 
+    it("returns the configured allowedRoots with the list", async () => {
+      const service = make();
+      expect((await service.list({ includeStopped: false })).allowedRoots).toEqual([root]);
+    });
+
     it("marks vanished sessions as lost when listing", async () => {
       const service = make();
       const { name, fake } = await started(service);
