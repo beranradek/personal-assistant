@@ -267,6 +267,31 @@ describe("extractNewOutput (real conversation shapes)", () => {
     expect(extractNewOutput("", after, MSG1).text).toBe("● Odpověď.");
   });
 
+  it("a short message never matches an older, longer echo once its own echo scrolled out (tail fallback instead)", () => {
+    const old = ["❯ ok thanks", "", "● Gern geschehen.", ""];
+    const lines = Array.from({ length: 50 }, (_, i) => `řádek ${i}`);
+    const after = screen(BANNER, old, lines, box());
+    const result = extractNewOutput("", after, "ok");
+    expect(result.method).not.toBe("echo");
+    expect(result.text).not.toContain("Gern geschehen");
+  });
+
+  it("a short message matches its own echo exactly, also with trailing spaces", () => {
+    const after = screen(BANNER, ["❯ ok thanks", "", "● Stará.", "", `❯ ok${" ".repeat(30)}`, "", "● Nová.", ""], box());
+    expect(extractNewOutput("", after, "ok")).toEqual({ text: "● Nová.", method: "echo" });
+  });
+
+  it("a long multi-line paste that Claude shows as `[Pasted text #1 +12 lines]` is found by the placeholder", () => {
+    const sent = Array.from({ length: 13 }, (_, i) => `řádek ${i} zprávy`).join("\n");
+    const after = screen(BANNER, turn1, ["❯ [Pasted text #1 +12 lines]", "", "● Přijato.", ""], box());
+    expect(extractNewOutput("", after, sent)).toEqual({ text: "● Přijato.", method: "echo" });
+  });
+
+  it("the paste placeholder is not taken for a single-line message", () => {
+    const after = screen(BANNER, ["❯ [Pasted text #1 +12 lines]", "", "● Stará odpověď.", ""], box());
+    expect(extractNewOutput("", after, "jednořádková zpráva").text).not.toBe("● Stará odpověď.");
+  });
+
   it("no reply yet: empty text", () => {
     const after = screen(BANNER, [`❯ ${MSG1}`, ""], box());
     expect(extractNewOutput("", after, MSG1)).toEqual({ text: "", method: "echo" });

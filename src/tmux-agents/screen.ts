@@ -107,16 +107,29 @@ function stripChrome(lines: string[]): string[] {
   return lines;
 }
 
-/** Index of the line after the echoed message that was sent last, or -1 when the echo is not on the screen. */
+/** Claude Code shows a large paste as `❯ [Pasted text #1 +12 lines]` instead of the text. */
+const CLAUDE_PASTE_PLACEHOLDER = /^\s*❯\s+\[Pasted text\b[^\]]*\]\s*$/;
+
+/**
+ * Index of the line after the echoed message that was sent last, or -1 when the echo is not on the screen.
+ * The echo is the `❯ <first line>` line. A short first line must match completely, a long one by its first 50 characters; so a
+ * short message such as "ok" never matches an older `❯ ok thanks` once its own echo has scrolled out of the captured window.
+ */
 function replyStart(lines: string[], sentText: string): number {
   const sent = sentText.trim().split("\n");
-  const needle = sent[0]!.trim().slice(0, ECHO_NEEDLE_CHARS);
+  const first = sent[0]!.trim();
+  const needle = first.slice(0, ECHO_NEEDLE_CHARS);
   if (!needle) return -1;
+  const exact = first.length <= ECHO_NEEDLE_CHARS;
+  const multiLine = sent.length > 1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (!CLAUDE_TEXT_PROMPT.test(lines[i]!) || !lines[i]!.includes(needle)) continue;
-    // A message with blank lines inside: skip as many lines as were sent. Otherwise the echo (possibly wrapped) ends at the first
-    // blank line.
-    if (sent.some((line) => line.trim() === "")) return Math.min(i + sent.length, lines.length);
+    const line = lines[i]!;
+    const shown = line.replace(/^\s*❯\s+/, "").trimEnd();
+    const isPlaceholder = multiLine && CLAUDE_PASTE_PLACEHOLDER.test(line);
+    if (!CLAUDE_TEXT_PROMPT.test(line) || !(isPlaceholder || (exact ? shown === needle : shown.startsWith(needle)))) continue;
+    // A message with blank lines inside: skip as many lines as were sent (the text is echoed in full, joined by `capture-pane -J`).
+    // Otherwise (and for a paste placeholder) the echo ends at the first blank line.
+    if (!isPlaceholder && sent.some((entry) => entry.trim() === "")) return Math.min(i + sent.length, lines.length);
     let end = i + 1;
     while (end < lines.length && lines[end]!.trim() !== "") end++;
     return end;
