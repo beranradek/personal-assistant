@@ -32,6 +32,16 @@ function isExecutableFile(file: string): boolean {
   }
 }
 
+/** First executable regular file `<dir>/<command>` for an absolute `dir` of `searchPath` (relative entries are skipped). */
+export function findExecutableOnPath(command: string, searchPath: string): string | undefined {
+  for (const dir of searchPath.split(path.delimiter)) {
+    if (!path.isAbsolute(dir)) continue;
+    const candidate = path.join(dir, command);
+    if (isExecutableFile(candidate)) return candidate;
+  }
+  return undefined;
+}
+
 /**
  * Resolve the program of an agent kind to an absolute path before a tmux session is created. A systemd user service often
  * has a short `PATH` (no `~/.local/bin`), so a bare `claude` would make the session die at once. Order:
@@ -63,11 +73,8 @@ export function createBinaryResolver(
       if (isExecutableFile(command)) return { file: command, source: "command" };
       throw new TmuxAgentError("AGENT_BINARY_NOT_FOUND", `Agent program is not an executable file: ${command}`);
     }
-    for (const dir of searchPath.split(path.delimiter)) {
-      if (!path.isAbsolute(dir)) continue;
-      const candidate = path.join(dir, command);
-      if (isExecutableFile(candidate)) return { file: candidate, source: "PATH" };
-    }
+    const onPath = findExecutableOnPath(command, searchPath);
+    if (onPath) return { file: onPath, source: "PATH" };
     for (const candidate of knownLocations(kindId)) {
       if (isExecutableFile(candidate)) return { file: candidate, source: "known location" };
     }

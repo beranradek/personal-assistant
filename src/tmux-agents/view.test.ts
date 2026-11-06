@@ -1,11 +1,13 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  AssistantExitedError,
   EMPTY_VIEW_STATE,
   USER_TMUX_SUBCOMMANDS,
   applyViewLayout,
+  preflightAssistantCommand,
   createAgentSessionLister,
   createRegisteredSessionLister,
   createUserTmux,
@@ -219,6 +221,46 @@ describe("listViewPanes", () => {
   });
 });
 
+describe("preflightAssistantCommand", () => {
+  let binDir: string;
+  beforeAll(() => {
+    binDir = fs.mkdtempSync(path.join(os.tmpdir(), "pa-preflight-"));
+    fs.writeFileSync(path.join(binDir, "mytool"), "#!/bin/sh\n", { mode: 0o755 });
+    fs.writeFileSync(path.join(binDir, "notexec"), "#!/bin/sh\n", { mode: 0o644 });
+  });
+  afterAll(() => fs.rmSync(binDir, { recursive: true, force: true }));
+
+  it("refuses a bare command that is not on PATH (alias-like) and explains the options", () => {
+    const env = { PATH: binDir };
+    expect(() => preflightAssistantCommand("clauded", env)).toThrow(/"clauded" was not found on PATH/);
+    expect(() => preflightAssistantCommand("clauded --flag x", env)).toThrow(/alias or a function/);
+    expect(() => preflightAssistantCommand("clauded", env)).toThrow(/--interactive-shell \(-i\).*full command.*script on PATH/s);
+  });
+
+  it("refuses a file on PATH that is not executable", () => {
+    expect(() => preflightAssistantCommand("notexec", { PATH: binDir })).toThrow(/not found on PATH/);
+  });
+
+  it("passes a command that is found on PATH, with arguments", () => {
+    expect(() => preflightAssistantCommand("mytool", { PATH: binDir })).not.toThrow();
+    expect(() => preflightAssistantCommand("  mytool --flag  x ", { PATH: binDir })).not.toThrow();
+  });
+
+  it("skips what it cannot judge: shell syntax, paths, assignments and shell builtins", () => {
+    const env = { PATH: binDir };
+    for (const command of [
+      "nothere | mytool", "nothere && mytool", "nothere; mytool", "cd /tmp && nothere", "$(nothere)", "echo `nothere`", "nothere > out",
+      "nothere \"quoted\"", "nothere 'quoted'", "~/bin/nothere", "./nothere", "/opt/x/nothere", "FOO=1 nothere", "exec nothere", "cd /tmp",
+    ]) {
+      expect(() => preflightAssistantCommand(command, env), command).not.toThrow();
+    }
+  });
+
+  it("treats a missing or empty PATH as not found", () => {
+    expect(() => preflightAssistantCommand("mytool", {})).toThrow(/not found on PATH/);
+  });
+});
+
 describe("openAgentsView", () => {
   const ctlArgv = (id: string) => ["node", "pa.js", "agents-view", "--watch", id];
   const baseOptions = { assistant: "pa claude", assistantCwd: "/home/u/proj", insideTmux: false, controllerArgv: ctlArgv };
@@ -378,6 +420,51 @@ describe("openAgentsView", () => {
     const user = fakeUser((args) => (args[0] === "has-session" ? fail() : args[0] === "new-session" ? fail("boom") : undefined));
     await expect(openAgentsView(user, baseOptions)).rejects.toThrow(/new-session failed: boom/);
   });
+
+  describe("an assistant command that exits at once", () => {
+    const gone = "no server running on /tmp/tmux-1000/default";
+
+    it("is reported clearly (not as a raw tmux error) when the window is gone while configuring", async () => {
+      const user = fakeUser((args) => {
+        if (args[0] === "has-session") return fail("can't find session");
+        if (args[0] === "new-session") return ok("@5|%9\n");
+        if (args[0] === "set-option" || args[0] === "list-panes") return fail(gone);
+        return undefined;
+      });
+      const err = await openAgentsView(user, baseOptions).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AssistantExitedError);
+      expect((err as Error).message).toMatch(/exited immediately.*--interactive-shell \(-i\)/s);
+      expect((err as Error).message).not.toMatch(/no server running|set-option/);
+      // the probe asked tmux whether the view window is still there
+      expect(user.calls).toContainEqual(["list-panes", "-t", "@5", "-F", "#{pane_id}"]);
+    });
+
+    it("removes the view and controller windows it created when the window vanishes before the layout", async () => {
+      const user = fakeUser((args) => {
+        if (args[0] === "has-session") return fail("can't find session");
+        if (args[0] === "new-session") return ok("@5|%9\n");
+        if (args[0] === "list-windows") return ok("@5|1|\n");
+        if (args[0] === "new-window") return ok("@6\n");
+        if (args[0] === "select-layout" || args[0] === "list-panes") return fail(gone);
+        return undefined;
+      });
+      await expect(openAgentsView(user, baseOptions)).rejects.toBeInstanceOf(AssistantExitedError);
+      expect(user.calls).toContainEqual(["kill-window", "-t", "@5"]);
+      expect(user.calls).toContainEqual(["kill-window", "-t", "@6"]);
+    });
+
+    it("keeps the original tmux error when the window is still there", async () => {
+      const user = fakeUser((args) => {
+        if (args[0] === "has-session") return fail("can't find session");
+        if (args[0] === "new-session") return ok("@5|%9\n");
+        if (args[0] === "set-option") return fail("bad option");
+        return undefined;
+      });
+      const err = await openAgentsView(user, baseOptions).catch((e: unknown) => e);
+      expect(err).not.toBeInstanceOf(AssistantExitedError);
+      expect((err as Error).message).toMatch(/set-option failed: bad option/);
+    });
+  });
 });
 
 describe("showAgentsView", () => {
@@ -399,6 +486,33 @@ describe("showAgentsView", () => {
     const user = fakeUser();
     await showAgentsView(user, { ...view, mode: "window" }, true);
     expect(user.calls.map((call) => call[0])).toEqual(["select-window"]);
+  });
+
+  describe("an assistant that exited after the view was created", () => {
+    const gone = "no server running on /tmp/tmux-1000/default";
+
+    it("is reported clearly when selecting the window fails and the window is gone", async () => {
+      const user = fakeUser((args) => (args[0] === "select-window" || args[0] === "list-panes" ? fail(gone) : undefined));
+      await expect(showAgentsView(user, view, false)).rejects.toBeInstanceOf(AssistantExitedError);
+      expect(user.attached).toEqual([]);
+    });
+
+    it("keeps the tmux error when selecting fails but the window is still there", async () => {
+      const user = fakeUser((args) => (args[0] === "select-window" ? fail("some other problem") : undefined));
+      await expect(showAgentsView(user, view, false)).rejects.toThrow(/select-window failed: some other problem/);
+    });
+
+    it("is reported clearly when attach fails and the window is gone", async () => {
+      const user = fakeUser((args) => (args[0] === "list-panes" ? fail(gone) : undefined));
+      user.attach = async () => 1;
+      await expect(showAgentsView(user, view, false)).rejects.toBeInstanceOf(AssistantExitedError);
+    });
+
+    it("passes a failing attach code on when the window is still there", async () => {
+      const user = fakeUser();
+      user.attach = async () => 3;
+      expect(await showAgentsView(user, view, false)).toBe(3);
+    });
   });
 });
 

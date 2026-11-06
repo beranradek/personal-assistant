@@ -1037,6 +1037,29 @@ Findings of the independent review of commits `b7c1c49` and `7abc7b1` and the fi
   (the user's view session name, not an agent session). `--watch` runs in its own function (`runWatch`).
 - **Not changed:** `creatorPid` and `instanceId` stay (the plan requires them as diagnostics).
 
+## Round 7: an assistant command that exits at once (2026-11-06)
+
+Real report: `pa agents-view --assistant "clauded"` (`clauded` is a shell alias) printed `tmux set-option failed: no server running on
+/tmp/tmux-1000/default`. Cause: tmux runs the command through a non-interactive shell, so the alias is "command not found", the only
+pane and window die, a NEW tmux server exits with its last window, and the configuration calls that follow find no server. Fix:
+
+- **Preflight** (`preflightAssistantCommand`, used by `view-cli.ts` unless `-i`): a SIMPLE command (no shell syntax) whose first word is a
+  bare word, no builtin and no `NAME=value` must be an executable on the `PATH` of the process (`findExecutableOnPath`, shared with
+  `binary.ts`); else the command refuses BEFORE any tmux call, naming `--interactive-shell`, the full command and a script on `PATH`.
+  It cannot judge pipes, quotes, paths and builtins, so those pass. A long running tmux server may have another `PATH`: the message names
+  the escape hatches.
+- **No misleading error.** `openAgentsView` wraps everything after the creation of the window: on a failure it first asks
+  `list-panes -t <window>`; a vanished window means the assistant exited (`AssistantExitedError`, one clear message), else the original
+  tmux error stays. It then removes every window it created (view and controller). `showAgentsView` does the same for `select-window` and
+  for a failing `attach` (the window can die between creation and attach). The exit status is not reported: tmux has already
+  dropped the pane, and a global or per-window `remain-on-exit` is not set (the view never changes options for this).
+- **No placeholder window.** A keep-alive placeholder window would avoid the vanishing server, but it adds a window, a kill step and a
+  new failure mode for a case that the preflight already catches; the clear error covers the rest.
+- Tests: preflight unit tests (alias-like word, found command with arguments, non-executable file, shell syntax, paths, assignments,
+  builtins, empty `PATH`), `openAgentsView` and `showAgentsView` with a vanished window (clear error, cleanup, original error kept when
+  the window is alive), CLI tests (refusal before any tmux call, `-i` skips, controller mode has no preflight), and an integration
+  test on real tmux 3.6 for `definitely-not-a-command-xyz` and `exit 3`.
+
 ## Review log (2026-11-05)
 
 An independent adversarial review found these problems; each is applied as listed.

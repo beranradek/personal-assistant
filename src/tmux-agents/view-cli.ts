@@ -11,6 +11,7 @@ import {
   createUserTmux,
   openAgentsView,
   parseAgentsViewArgs,
+  preflightAssistantCommand,
   resolveAssistantCwd,
   resolveInteractiveShell,
   runViewController,
@@ -120,11 +121,13 @@ export async function runAgentsView(
 
   if (parsed.watch !== undefined) return runWatch({ ...parsed, watch: parsed.watch }, config, user, listAgentSessions, deps);
 
+  const env = deps.env ?? process.env;
+  // An assistant word that is no program (an alias) would make the only pane die at once: refuse before anything is created.
+  if (!parsed.interactiveShell) preflightAssistantCommand(parsed.assistant, env);
   if (!agents.enabled) out("Note: tmuxAgents.enabled is false in settings, so no agent panes will appear.");
   // Fail early (in the foreground) when the agents socket directory is unusable; the controller runs hidden.
   await listAgentSessions();
 
-  const env = deps.env ?? process.env;
   const insideTmux = env["TMUX"] !== undefined;
   const assistantCwd = resolveAssistantCwd(parsed.assistantCwd, deps.cwd ?? process.cwd());
   const interactiveShell = parsed.interactiveShell ? resolveInteractiveShell(env) : undefined;

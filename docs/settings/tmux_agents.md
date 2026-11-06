@@ -187,6 +187,18 @@ do not reach the agent).
 - With bypass permissions (`--dangerously-skip-permissions`) there are no confirmation prompts, not even for `stop` and `recover`.
   Only the server-side guards remain (settings, roots, `confirmBypass`, input guard).
 
+### Troubleshooting: the assistant command
+
+- `The --assistant command "<word>" was not found on PATH ...`: the first word of a simple `--assistant` command is no program on the
+  `PATH` of your shell, so it is most likely an alias or a function. `pa agents-view` refuses BEFORE it creates anything. Fix it with
+  `--interactive-shell` (`-i`), the full command, or a script on `PATH` (see above). The check is skipped with `-i` and for commands
+  with shell syntax (pipes, quotes, `;`, `$`, redirects), a path, a leading `NAME=value` or a shell builtin. It uses the `PATH` of
+  your shell; a long running tmux server can have another one, so when the check is wrong for your setup use `-i` or the full path.
+- `The assistant command exited immediately, so there is no view`: the command started but ended at once (wrong command, wrong
+  arguments, a failing rc file, no login). tmux closes a window when its only pane ends, and a new tmux server exits with it, so
+  nothing is left (the command removes what it had created). Run the same command by hand in a terminal to see its error.
+  Earlier versions showed `tmux set-option failed: no server running ...` for this case.
+
 ## Claude Code companion
 
 The tools reach Claude Code as `mcp__pa__agent_session_*` through the localhost HTTP MCP server. Enable it first:

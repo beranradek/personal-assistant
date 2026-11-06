@@ -10,11 +10,13 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import { createTmuxRunner } from "./runner.js";
 import {
+  AssistantExitedError,
   createAgentSessionLister,
   createUserTmux,
   listViewPanes,
   openAgentsView,
   runViewController,
+  showAgentsView,
   type UserTmux,
   type ViewControllerEnd,
 } from "./view.js";
@@ -292,6 +294,46 @@ describe.skipIf(!tmuxAvailable)("agents view with --read-only (real tmux)", { ti
     expect(await h.agentScreen(SESSION_A)).not.toContain("typed-into-mirror");
   });
 });
+
+/**
+ * An assistant command that exits at once (an alias that the non-interactive tmux shell does not know, a failing command): the only
+ * window dies and the private tmux server exits, so later tmux calls say "no server running". The user must get the clear message.
+ */
+for (const [label, assistant] of [
+  ["a command that does not exist", "definitely-not-a-command-xyz"],
+  ["a command that fails at once", "exit 3"],
+] as const) {
+  describe.skipIf(!tmuxAvailable)(`agents view with an assistant that exits at once: ${label} (real tmux)`, { timeout: 60_000 }, () => {
+    let h: Harness;
+    beforeAll(() => {
+      h = new Harness();
+    });
+    afterAll(() => h.cleanup());
+
+    it("reports the exit clearly and leaves no window or server behind", async () => {
+      // The window may die before or after the configuration calls; both paths must give the same clear message.
+      const outcome = await openAgentsView(h.user, {
+        session: "viewtest",
+        assistant,
+        assistantCwd: h.base,
+        insideTmux: false,
+        controllerArgv: () => ["sleep", "600"],
+      }).then(
+        async (view) => {
+          await waitFor(async () => (await h.user.run(["list-panes", "-t", view.windowId])).code !== 0, "window gone");
+          return showAgentsView(h.user, view, false).then(() => new Error("no error"), (err: unknown) => err);
+        },
+        (err: unknown) => err,
+      );
+      expect(outcome).toBeInstanceOf(AssistantExitedError);
+      expect((outcome as Error).message).toMatch(/exited immediately.*--interactive-shell \(-i\)/s);
+      expect((outcome as Error).message).not.toMatch(/no server running|can't find/);
+      // nothing of the view is left: no windows tagged as view or controller (the server may be gone with them)
+      const left = (await h.userRaw("list-windows", "-a", "-F", "#{window_name}")).stdout ?? "";
+      expect(left).not.toMatch(/^amy$/m);
+    });
+  });
+}
 
 /** `--interactive-shell`: aliases from a TEMPORARY rc (private HOME/ZDOTDIR; the real rc files are never read). */
 for (const shellName of ["zsh", "bash"]) {

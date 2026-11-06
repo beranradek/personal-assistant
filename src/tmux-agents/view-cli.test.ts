@@ -28,17 +28,24 @@ function fakeUser(): UserTmux & { calls: string[][]; attached: string[] } {
 
 describe("runAgentsView", () => {
   let dir: string;
+  let binDir: string;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "pa-view-cli-"));
+    // the default assistant command is `pa claude`: a fake `pa` on the PATH that the preflight searches
+    binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir);
+    fs.writeFileSync(path.join(binDir, "pa"), "#!/bin/sh\n", { mode: 0o755 });
   });
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  // `cwd` is a getter: `dir` is created per test, and the spread reads it inside the test
+  // `cwd` and `env` are getters: `dir` is created per test, and the spread reads them inside the test
   const base = {
     isTty: true,
-    env: {},
+    get env(): NodeJS.ProcessEnv {
+      return { PATH: binDir };
+    },
     get cwd() {
       return dir;
     },
@@ -88,7 +95,7 @@ describe("runAgentsView", () => {
     const user = fakeUser();
     await runAgentsView(dir, ["--session", "work"], undefined, {
       ...base,
-      env: { TMUX: "/tmp/tmux-1000/default,1,0" },
+      env: { ...base.env, TMUX: "/tmp/tmux-1000/default,1,0" },
       user,
       listAgentSessions: async () => [],
       out: () => {},
@@ -143,6 +150,27 @@ describe("runAgentsView", () => {
     });
     expect(user.calls.find((call) => call[0] === "new-session")!.slice(-5)).toEqual(["--", "/bin/sh", "-i", "-c", "clauded"]);
     expect(lines.some((line) => line.includes("only with zsh and bash"))).toBe(true);
+  });
+
+  it("refuses an assistant command that is not on PATH (an alias) before any tmux call, and -i skips the check", async () => {
+    const user = fakeUser();
+    const run = runAgentsView(dir, ["--assistant", "clauded"], undefined, { ...base, user, listAgentSessions: async () => [], out: () => {} });
+    await expect(run).rejects.toThrow(/"clauded" was not found on PATH.*--interactive-shell/s);
+    expect(user.calls).toEqual([]);
+
+    const interactive = fakeUser();
+    await runAgentsView(dir, ["--no-attach", "-i", "--assistant", "clauded"], undefined, {
+      ...base, env: { ...base.env, SHELL: "/bin/sh" }, user: interactive, listAgentSessions: async () => [], out: () => {},
+    });
+    expect(interactive.calls.some((call) => call[0] === "new-session")).toBe(true);
+  });
+
+  it("does not run the preflight for the controller mode", async () => {
+    const gone: UserTmux = { ...fakeUser(), async run() { return { code: 1, stdout: "", stderr: "can't find window" }; } };
+    const code = await runAgentsView(dir, ["--watch", "@3", "--assistant", "clauded"], undefined, {
+      ...base, user: gone, env: { TMUX_PANE: "%1" }, listAgentSessions: async () => [], out: () => {}, onControllerError: () => {},
+    });
+    expect(code).toBe(0);
   });
 
   it("passes --read-only on to the controller window and not otherwise", async () => {

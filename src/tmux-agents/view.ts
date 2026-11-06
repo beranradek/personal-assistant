@@ -12,6 +12,7 @@
 import { execFile as nodeExecFile, spawn as nodeSpawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { findExecutableOnPath } from "./binary.js";
 import { SESSION_PATTERN } from "./names.js";
 import type { Registry } from "./registry.js";
 import type { TmuxRunner } from "./runner.js";
@@ -128,6 +129,48 @@ export function validateAssistantCommand(command: string): string {
     throw new Error("Invalid --assistant command (must not start with '-' or end with ';')");
   }
   return trimmed;
+}
+
+/** Shell syntax (quotes, pipes, expansions, redirects, globs, comments): such a command is not judged by the preflight. */
+const SHELL_SYNTAX = /[;|&$()`<>*?\\"'~{}!#]/;
+/** First words that are handled by the shell itself, so there is no program of that name to find. */
+const SHELL_BUILTINS = new Set([
+  "cd", "exec", "command", "builtin", "eval", "source", ".", "exit", "export", "unset", "alias", "type", "time", "set", "unalias", "trap",
+]);
+
+/**
+ * Refuse BEFORE anything is created when a simple `--assistant` command starts with a bare word that is not a program on `PATH`
+ * (typically a shell alias or function, which the non-interactive shell of tmux does not know): the pane would die at once and the
+ * tmux server with it. Commands with shell syntax, a path, a leading `NAME=value` or a shell builtin are not judged. Not used with
+ * `--interactive-shell`, where the rc files may define the word. The `PATH` is the one of this process; a long running tmux
+ * server may have another, so the escape hatches (`-i`, the full command, a script on `PATH`) are named in the message.
+ */
+export function preflightAssistantCommand(command: string, env: NodeJS.ProcessEnv): void {
+  const trimmed = command.trim();
+  if (trimmed === "" || SHELL_SYNTAX.test(trimmed)) return;
+  const first = trimmed.split(/\s+/)[0]!;
+  if (first.includes("/") || first.includes("=") || SHELL_BUILTINS.has(first)) return;
+  if (findExecutableOnPath(first, env["PATH"] ?? "")) return;
+  throw new Error(
+    `The --assistant command "${first}" was not found on PATH. It may be a shell alias or a function, which tmux does not load. ` +
+      `Use --interactive-shell (-i), the full command (for example "claude --dangerously-skip-permissions"), or a script on PATH.`,
+  );
+}
+
+/** The assistant pane died before the view was complete (the command is wrong, or it failed at once). */
+export class AssistantExitedError extends Error {
+  constructor() {
+    super(
+      "The assistant command exited immediately, so there is no view. Check the --assistant command and run it by hand. " +
+        "Aliases and functions are not available without --interactive-shell (-i).",
+    );
+    this.name = "AssistantExitedError";
+  }
+}
+
+/** True when the view window is gone (it died with its only pane, possibly together with the tmux server). */
+async function windowGone(user: UserTmux, windowId: string): Promise<boolean> {
+  return (await user.run(["list-panes", "-t", windowId, "-F", "#{pane_id}"])).code !== 0;
 }
 
 /**
@@ -305,7 +348,8 @@ async function configureViewWindow(user: UserTmux, windowId: string, mainPaneId:
   for (const step of steps) mustSucceed(await user.run(step), step[0]!);
   // A percentage needs tmux 3.3 or newer. Older tmux keeps its default main pane width: a note, not a failure.
   const width = await user.run(["set-option", "-w", "-t", windowId, "main-pane-width", MAIN_PANE_WIDTH]);
-  return width.code === 0 ? [] : [`tmux rejected main-pane-width ${MAIN_PANE_WIDTH} (needs tmux 3.3+): the assistant pane keeps the default width.`];
+  if (width.code === 0) return [];
+  return [`tmux rejected main-pane-width ${MAIN_PANE_WIDTH} (needs tmux 3.3+): the assistant pane keeps the default width.`];
 }
 
 interface WindowRef {
@@ -386,24 +430,24 @@ export async function openAgentsView(user: UserTmux, options: OpenViewOptions): 
 
   const created = mainPaneId !== undefined;
   const warnings: string[] = [];
-  if (mainPaneId !== undefined) {
-    try {
-      warnings.push(...(await configureViewWindow(user, windowId, mainPaneId)));
-    } catch (err) {
-      // A half configured window is never left behind (a rerun would otherwise reuse it).
-      await user.run(["kill-window", "-t", windowId]).catch(() => undefined);
-      throw err;
-    }
+  /** Windows created by this call: removed again when a later step fails, so a rerun starts clean (never a reused half view). */
+  const createdWindows: string[] = created ? [windowId] : [];
+  try {
+    if (mainPaneId !== undefined) warnings.push(...(await configureViewWindow(user, windowId, mainPaneId)));
+    const hasController = (await listWindows(user, sessionTarget)).some((window) => window.controllerOf === windowId);
+    if (!hasController) createdWindows.push(await startController(user, sessionTarget, windowId, options.controllerArgv(windowId)));
+    await applyViewLayout(user, windowId);
+    return { windowId, sessionTarget, created, mode, warnings };
+  } catch (err) {
+    // A failure on a window we created, and that is gone now, means that the assistant command exited at once: ask before cleaning up.
+    const exited = created && (await windowGone(user, windowId));
+    for (const id of createdWindows) await user.run(["kill-window", "-t", id]).catch(() => undefined);
+    throw exited ? new AssistantExitedError() : err;
   }
-
-  const hasController = (await listWindows(user, sessionTarget)).some((window) => window.controllerOf === windowId);
-  if (!hasController) await startController(user, sessionTarget, windowId, options.controllerArgv(windowId));
-  await applyViewLayout(user, windowId);
-  return { windowId, sessionTarget, created, mode, warnings };
 }
 
-/** Hidden controller window `amy-ctl-<n>`, tagged with the id of the view window it serves. */
-async function startController(user: UserTmux, sessionTarget: string, viewWindowId: string, argv: string[]): Promise<void> {
+/** Hidden controller window `amy-ctl-<n>`, tagged with the id of the view window it serves. Returns the id of the new window. */
+async function startController(user: UserTmux, sessionTarget: string, viewWindowId: string, argv: string[]): Promise<string> {
   const name = `${VIEW_CTL_WINDOW_PREFIX}${viewWindowId.slice(1)}`;
   const create = ["new-window", "-d", "-t", `${sessionTarget}:`, "-n", name, "-P", "-F", "#{window_id}", "--", ...argv];
   const controllerId = mustSucceed(await user.run(create), "new-window").trim();
@@ -413,17 +457,27 @@ async function startController(user: UserTmux, sessionTarget: string, viewWindow
     await user.run(["kill-window", "-t", controllerId]).catch(() => undefined);
     throw new Error(`tmux set-option failed: ${tagged.stderr.trim() || `exit ${tagged.code}`}`);
   }
+  return controllerId;
 }
 
-/** Show the view: select its window, then attach (outside tmux) or switch the client (inside tmux). */
+/**
+ * Show the view: select its window, then attach (outside tmux) or switch the client (inside tmux). An assistant that exits right
+ * after the view was created takes the window (and maybe the server) with it: that is reported as such, not as a raw tmux error.
+ */
 export async function showAgentsView(user: UserTmux, view: OpenedView, insideTmux: boolean): Promise<number> {
-  mustSucceed(await user.run(["select-window", "-t", view.windowId]), "select-window");
+  const selected = await user.run(["select-window", "-t", view.windowId]);
+  if (selected.code !== 0) {
+    if (await windowGone(user, view.windowId)) throw new AssistantExitedError();
+    mustSucceed(selected, "select-window");
+  }
   if (view.mode === "window") return 0;
   if (insideTmux) {
     mustSucceed(await user.run(["switch-client", "-t", view.sessionTarget]), "switch-client");
     return 0;
   }
-  return user.attach(view.sessionTarget);
+  const code = await user.attach(view.sessionTarget);
+  if (code !== 0 && (await windowGone(user, view.windowId))) throw new AssistantExitedError();
+  return code;
 }
 
 // ---------------------------------------------------------------------------
