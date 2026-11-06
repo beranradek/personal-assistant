@@ -40,6 +40,24 @@ export interface HttpMcpServerHandle {
   close(): Promise<void>;
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Defense against DNS rebinding and cross-site requests: the server has no authentication, so only requests that
+ * name a loopback `Host` with our port, and carry no `Origin` (non-browser clients) or a loopback `Origin`, are served.
+ */
+export function isAllowedRequest(headers: http.IncomingHttpHeaders, port: number): boolean {
+  const host = headers.host;
+  if (!host || !["127.0.0.1", "localhost"].some((name) => host === `${name}:${port}`)) return false;
+  const origin = headers.origin;
+  if (origin === undefined) return true;
+  try {
+    return LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export async function startHttpMcpServer(
   deps: StdioMcpServerDeps,
   port: number,
@@ -47,6 +65,8 @@ export async function startHttpMcpServer(
   const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
   const closingSessions = new Map<string, Promise<void>>();
   let shuttingDown = false;
+  // Known after listen(); the request handler only runs after that.
+  let assignedPort = port;
 
   function closeSession(sessionId: string): Promise<void> {
     const inFlight = closingSessions.get(sessionId);
@@ -81,6 +101,11 @@ export async function startHttpMcpServer(
 
   const httpServer = http.createServer(async (req, res) => {
     try {
+      if (!isAllowedRequest(req.headers, assignedPort)) {
+        writeJsonRpcError(res, 403, -32003, "Forbidden: unexpected Host or Origin");
+        return;
+      }
+
       if (shuttingDown) {
         writeJsonRpcError(res, 503, -32000, "MCP server shutting down");
         return;
@@ -145,7 +170,7 @@ export async function startHttpMcpServer(
     });
   });
 
-  const assignedPort = (httpServer.address() as { port: number }).port;
+  assignedPort = (httpServer.address() as { port: number }).port;
   log.info({ port: assignedPort }, "HTTP MCP server listening");
 
   return {

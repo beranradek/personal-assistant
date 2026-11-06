@@ -98,7 +98,7 @@ vi.mock("./stdio-mcp-server.js", () => ({
 // Import after mocks are set up
 // ---------------------------------------------------------------------------
 
-import { startHttpMcpServer, type HttpMcpServerHandle } from "./http-mcp-server.js";
+import { isAllowedRequest, startHttpMcpServer, type HttpMcpServerHandle } from "./http-mcp-server.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -121,6 +121,7 @@ function httpRequest(
     sessionId?: string;
     body?: string;
     protocolVersion?: string;
+    headers?: http.OutgoingHttpHeaders;
   } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
@@ -128,6 +129,7 @@ function httpRequest(
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
       "mcp-protocol-version": options.protocolVersion ?? "2025-03-26",
+      ...options.headers,
     };
     if (options.sessionId) headers["mcp-session-id"] = options.sessionId;
     const req = http.request(
@@ -458,5 +460,53 @@ describe("startHttpMcpServer", () => {
     resolveServerClose?.();
     await shutdownPromise;
     handle = undefined;
+  });
+
+  describe("Host and Origin check", () => {
+    it("rejects a foreign Host header with 403 and never creates a session", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0);
+      const res = await httpRequest(handle.port, { headers: { Host: "evil.example" } });
+      expect(res.status).toBe(403);
+      expect(res.body).toContain("Forbidden");
+      expect(mockTransports).toHaveLength(0);
+    });
+
+    it("rejects a loopback Host with a different port (DNS rebinding with a guessed port)", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0);
+      const res = await httpRequest(handle.port, { headers: { Host: `127.0.0.1:${handle.port + 1}` } });
+      expect(res.status).toBe(403);
+    });
+
+    it.each(["127.0.0.1", "localhost"])("accepts Host %s:<port>", async (name) => {
+      handle = await startHttpMcpServer(makeDeps(), 0);
+      const res = await httpRequest(handle.port, { headers: { Host: `${name}:${handle.port}` } });
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects an Origin that is not loopback", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0);
+      for (const origin of ["https://evil.example", "http://127.0.0.1.evil.example", "null", "not a url"]) {
+        const res = await httpRequest(handle.port, { headers: { Origin: origin } });
+        expect(res.status).toBe(403);
+      }
+    });
+
+    it("accepts a loopback Origin and no Origin at all", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0);
+      const withOrigin = await httpRequest(handle.port, { headers: { Origin: "http://localhost:3000" } });
+      expect(withOrigin.status).toBe(200);
+      const without = await httpRequest(handle.port);
+      expect(without.status).toBe(200);
+    });
+  });
+});
+
+describe("isAllowedRequest", () => {
+  it("accepts only loopback hosts with the given port", () => {
+    expect(isAllowedRequest({ host: "127.0.0.1:9" }, 9)).toBe(true);
+    expect(isAllowedRequest({ host: "localhost:9" }, 9)).toBe(true);
+    expect(isAllowedRequest({ host: "localhost" }, 9)).toBe(false);
+    expect(isAllowedRequest({}, 9)).toBe(false);
+    expect(isAllowedRequest({ host: "evil.example:9" }, 9)).toBe(false);
   });
 });

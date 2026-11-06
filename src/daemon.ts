@@ -57,6 +57,9 @@ import type { AgentBackend } from "./backends/interface.js";
 import { startHttpMcpServer, type HttpMcpServerHandle } from "./tools/http-mcp-server.js";
 import type { StdioMcpServerDeps } from "./tools/stdio-mcp-server.js";
 import { createIntegMcpProxy } from "./integ-api/mcp-proxy.js";
+import { createTmuxAgentsServer } from "./tools/tmux-agents-server.js";
+import { startTmuxAgentService } from "./tmux-agents/startup.js";
+import type { TmuxAgentService } from "./tmux-agents/types.js";
 
 const log = createLogger("daemon");
 
@@ -68,6 +71,8 @@ type DaemonCoreDeps = {
   createCronToolManager?: typeof createCronToolManager;
   createAssistantServer?: typeof createAssistantServer;
   createIntegServer?: typeof createIntegServer;
+  startTmuxAgentService?: typeof startTmuxAgentService;
+  createTmuxAgentsServer?: typeof createTmuxAgentsServer;
   createMessageQueue?: typeof createMessageQueue;
   createRouter?: typeof createRouter;
   buildAgentOptions?: typeof buildAgentOptions;
@@ -79,6 +84,8 @@ type DaemonCoreRuntime = {
   queue: ReturnType<typeof createMessageQueue>;
   router: ReturnType<typeof createRouter>;
   cronManager: ReturnType<typeof createCronToolManager>;
+  /** Present only when `tmuxAgents.enabled`. */
+  tmuxAgents?: TmuxAgentService;
   episodeStore?: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["episodeStore"];
   store: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["store"];
   embedder: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["embedder"];
@@ -104,6 +111,8 @@ async function createDaemonCoreFromConfig(args: {
   const createCronToolManagerImpl = args.deps?.createCronToolManager ?? createCronToolManager;
   const createAssistantServerImpl = args.deps?.createAssistantServer ?? createAssistantServer;
   const createIntegServerImpl = args.deps?.createIntegServer ?? createIntegServer;
+  const startTmuxAgentServiceImpl = args.deps?.startTmuxAgentService ?? startTmuxAgentService;
+  const createTmuxAgentsServerImpl = args.deps?.createTmuxAgentsServer ?? createTmuxAgentsServer;
   const createMessageQueueImpl = args.deps?.createMessageQueue ?? createMessageQueue;
   const createRouterImpl = args.deps?.createRouter ?? createRouter;
   const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
@@ -194,11 +203,15 @@ async function createDaemonCoreFromConfig(args: {
   });
   const integServer = createIntegServerImpl(args.config.integApi);
 
+  // Optional tmux agent sessions: with the feature disabled the service is undefined and no tools exist at all.
+  const tmuxAgents = await startTmuxAgentServiceImpl(args.config, { redact, caller: "daemon", reaper: true });
+
   const mcpServers: Record<string, unknown> = {
     ...args.config.mcpServers,
     memory: memoryServer,
     assistant: assistantServer,
     integrations: integServer,
+    ...(tmuxAgents ? { tmuxagents: createTmuxAgentsServerImpl(tmuxAgents) } : {}),
   };
 
   const agentOptions = buildAgentOptionsImpl(
@@ -228,6 +241,7 @@ async function createDaemonCoreFromConfig(args: {
       handleIntegGmail: integProxy.gmail,
       handleIntegCalendar: integProxy.calendar,
       handleIntegSlack: integProxy.slack,
+      ...(tmuxAgents ? { tmuxAgents } : {}),
       ...(listEpisodes ? {
         episodeDeps: { listEpisodes, insertEpisode, searchEpisodesVector, redact },
       } : {}),
@@ -251,6 +265,7 @@ async function createDaemonCoreFromConfig(args: {
       httpMcpPort: httpMcpServer?.port,
     });
   } catch (err) {
+    tmuxAgents?.close();
     if (httpMcpServer) {
       await httpMcpServer.close().catch(() => undefined);
     }
@@ -274,6 +289,7 @@ async function createDaemonCoreFromConfig(args: {
     queue,
     router,
     cronManager,
+    tmuxAgents,
     episodeStore,
     store,
     embedder,
@@ -322,6 +338,7 @@ export async function runDegradedDaemonStartupProbe(args: {
   runtime.queue.processLoop(runtime.backend, args.config, runtime.router);
   runtime.queue.stop();
   runtime.cronManager.stop();
+  runtime.tmuxAgents?.close();
   runtime.stopMemorySync();
   runtime.episodeStore?.close();
   runtime.store.close();
@@ -444,6 +461,7 @@ export async function startDaemon(configDir: string): Promise<void> {
     queue,
     router,
     cronManager,
+    tmuxAgents,
     episodeStore,
     getCurrentSyncPromise,
     stopMemorySync,
@@ -650,6 +668,9 @@ export async function startDaemon(configDir: string): Promise<void> {
 
     // Stop cron timer
     cronManager.stop();
+
+    // Stop the tmux agent reaper timer. Agent sessions are NOT killed: they outlive the daemon.
+    tmuxAgents?.close();
 
     // Stop memory reindex triggers before closing model-backed services so no
     // periodic or watcher-driven sync can race into disposed llama contexts.

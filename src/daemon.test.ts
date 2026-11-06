@@ -59,6 +59,14 @@ vi.mock("./tools/http-mcp-server.js", () => ({
   startHttpMcpServer: vi.fn(),
 }));
 
+vi.mock("./tmux-agents/startup.js", () => ({
+  startTmuxAgentService: vi.fn(),
+}));
+
+vi.mock("./tools/tmux-agents-server.js", () => ({
+  createTmuxAgentsServer: vi.fn(),
+}));
+
 vi.mock("./gateway/queue.js", () => ({
   createMessageQueue: vi.fn(),
 }));
@@ -166,6 +174,8 @@ import { createMemoryServer } from "./tools/memory-server.js";
 import { createAssistantServer } from "./tools/assistant-server.js";
 import { createIntegServer } from "./tools/integ-server.js";
 import { startHttpMcpServer } from "./tools/http-mcp-server.js";
+import { startTmuxAgentService } from "./tmux-agents/startup.js";
+import { createTmuxAgentsServer } from "./tools/tmux-agents-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
@@ -422,8 +432,10 @@ function setupMocks(config: Config) {
 describe("daemon", () => {
   let originalProcessOn: typeof process.on;
   let signalHandlers: Map<string, Function>;
+  let baselineRejectionListeners: Set<unknown>;
 
   beforeEach(() => {
+    baselineRejectionListeners = new Set(process.listeners("unhandledRejection"));
     vi.clearAllMocks();
     mockLogger.info.mockReset();
     mockLogger.error.mockReset();
@@ -441,6 +453,10 @@ describe("daemon", () => {
   afterEach(() => {
     // Restore process.on
     (process as any).on = originalProcessOn;
+    // startDaemon registers an unhandledRejection listener per call: do not let them pile up across tests
+    for (const listener of process.listeners("unhandledRejection")) {
+      if (!baselineRejectionListeners.has(listener)) process.off("unhandledRejection", listener as never);
+    }
   });
 
   // -----------------------------------------------------------------------
@@ -551,6 +567,67 @@ describe("daemon", () => {
       config.codex.httpMcpPort,
     );
     expect(mockHttpMcpServer.close).toHaveBeenCalledTimes(1);
+  });
+
+  describe("tmux agent sessions", () => {
+    const mcpServersOf = () => vi.mocked(buildAgentOptions).mock.calls[0]![3] as Record<string, unknown>;
+
+    it("registers no tmuxagents server and no HTTP tool deps when the feature is disabled", async () => {
+      const config = makeConfig({ mcp: { httpServer: { enabled: true } } } as Partial<Config>);
+      setupMocks(config);
+      vi.mocked(startTmuxAgentService).mockResolvedValue(undefined);
+
+      await startDaemon("/app");
+
+      expect(startTmuxAgentService).toHaveBeenCalledWith(config, expect.objectContaining({ caller: "daemon", reaper: true }));
+      expect(mcpServersOf()).not.toHaveProperty("tmuxagents");
+      expect(createTmuxAgentsServer).not.toHaveBeenCalled();
+      expect(vi.mocked(startHttpMcpServer).mock.calls[0]![0]).not.toHaveProperty("tmuxAgents");
+    });
+
+    it("registers the tmuxagents SDK server and the HTTP tool deps when the service exists", async () => {
+      const config = makeConfig({ mcp: { httpServer: { enabled: true } } } as Partial<Config>);
+      setupMocks(config);
+      const service = { close: vi.fn(), reconcile: vi.fn(), startReaper: vi.fn() };
+      const sdkServer = { name: "tmuxagents-server" };
+      vi.mocked(startTmuxAgentService).mockResolvedValue(service as never);
+      vi.mocked(createTmuxAgentsServer).mockReturnValue(sdkServer as never);
+
+      await startDaemon("/app");
+
+      expect(createTmuxAgentsServer).toHaveBeenCalledWith(service);
+      expect(mcpServersOf()["tmuxagents"]).toBe(sdkServer);
+      expect(vi.mocked(startHttpMcpServer).mock.calls[0]![0]).toHaveProperty("tmuxAgents", service);
+    });
+
+    it("shutdown closes the service (reaper timer) and kills no session", async () => {
+      const config = makeConfig();
+      setupMocks(config);
+      const service = { close: vi.fn(), kill: vi.fn(), stop: vi.fn() };
+      vi.mocked(startTmuxAgentService).mockResolvedValue(service as never);
+      vi.mocked(createTmuxAgentsServer).mockReturnValue({} as never);
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await startDaemon("/app");
+      await signalHandlers.get("SIGTERM")!();
+
+      expect(service.close).toHaveBeenCalledTimes(1);
+      expect(service.kill).not.toHaveBeenCalled();
+      expect(service.stop).not.toHaveBeenCalled();
+      exitSpy.mockRestore();
+    });
+
+    it("closes the service when backend creation fails", async () => {
+      const config = makeConfig();
+      setupMocks(config);
+      const service = { close: vi.fn() };
+      vi.mocked(startTmuxAgentService).mockResolvedValue(service as never);
+      vi.mocked(createTmuxAgentsServer).mockReturnValue({} as never);
+      vi.mocked(createBackend).mockRejectedValueOnce(new Error("backend failed"));
+
+      await expect(startDaemon("/app")).rejects.toThrow("backend failed");
+      expect(service.close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("continues startup when episodic store open fails", async () => {

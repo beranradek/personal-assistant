@@ -200,6 +200,8 @@ async function startMcpServer(configDir: string): Promise<void> {
     { getSession, listSessions },
     { createStdioMcpServer, runStdioServer },
     { createIntegMcpProxy },
+    { startTmuxAgentService },
+    { createRedactor, CONSERVATIVE_PATTERNS },
   ] = await Promise.all([
     import("./memory/embeddings.js"),
     import("./memory/vector-store.js"),
@@ -213,6 +215,8 @@ async function startMcpServer(configDir: string): Promise<void> {
     import("./exec/process-registry.js"),
     import("./tools/stdio-mcp-server.js"),
     import("./integ-api/mcp-proxy.js"),
+    import("./tmux-agents/startup.js"),
+    import("./security/content-redaction.js"),
   ]);
 
   const config = loadConfig(configDir);
@@ -260,6 +264,13 @@ async function startMcpServer(configDir: string): Promise<void> {
   await cronManager.rearmTimer();
   const integProxy = createIntegMcpProxy(config.integApi);
 
+  // Optional tmux agent sessions. No reaper here: the daemon owns the only reaper.
+  const tmuxAgents = await startTmuxAgentService(config, {
+    redact: createRedactor(CONSERVATIVE_PATTERNS),
+    caller: "mcp-server",
+    reaper: false,
+  });
+
   // Create and start the stdio MCP server
   const server = createStdioMcpServer({
     search: searchMemory,
@@ -283,11 +294,13 @@ async function startMcpServer(configDir: string): Promise<void> {
     handleIntegGmail: integProxy.gmail,
     handleIntegCalendar: integProxy.calendar,
     handleIntegSlack: integProxy.slack,
+    ...(tmuxAgents ? { tmuxAgents } : {}),
   });
 
   // Clean shutdown
   const cleanup = async () => {
     cronManager.stop();
+    tmuxAgents?.close();
     store.close();
     await embedder.close();
     process.exit(0);
