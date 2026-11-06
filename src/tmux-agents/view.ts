@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { SESSION_PATTERN } from "./names.js";
 import type { TmuxRunner } from "./runner.js";
+import { execTmux } from "./tmux-exec.js";
 
 /** The only tmux subcommands that the view may run on the user's tmux. */
 export const USER_TMUX_SUBCOMMANDS = [
@@ -42,14 +43,13 @@ export const DEFAULT_ASSISTANT_COMMAND = "pa claude";
 export const VIEW_POLL_MS = 2_000;
 /** The controller gives up after this many failing ticks in a row (tmux unreachable). */
 const MAX_CONSECUTIVE_FAILURES = 5;
-const TMUX_TIMEOUT_MS = 10_000;
-const MAX_BUFFER_BYTES = 1024 * 1024;
 const MAIN_PANE_WIDTH = "50%";
 /** Pane border label: the agent session name, or `assistant` for the main pane. */
 const PANE_BORDER_FORMAT = " #{?@pa_agent,#{@pa_agent},assistant} ";
 /** `new-session`/`new-window` print `<window id>|<pane id>` of what they created. */
 const PRINT_CREATED = ["-P", "-F", "#{window_id}|#{pane_id}"];
-const SESSION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+/** Name of the user's own tmux session that holds the view (not an agent session: see `SESSION_PATTERN`). */
+const VIEW_SESSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 const WINDOW_ID_PATTERN = /^@[0-9]+$/;
 const MAX_ASSISTANT_COMMAND_LENGTH = 2_000;
 
@@ -86,28 +86,7 @@ export function createUserTmux(options: UserTmuxOptions = {}): UserTmux {
 
   return {
     run(args) {
-      const subcommand = args[0];
-      if (subcommand === undefined || !ALLOWED.has(subcommand)) {
-        return Promise.reject(new Error(`tmux subcommand not allowed: ${subcommand ?? "(none)"}`));
-      }
-      // tmux treats an argv element that ends with ';' as a command separator.
-      if (args.some((arg) => arg.endsWith(";"))) {
-        return Promise.reject(new Error("tmux argument must not end with ';'"));
-      }
-      return new Promise<UserTmuxResult>((resolve, reject) => {
-        const child = execFile(
-          binary,
-          [...socketArgs, ...args],
-          { env, timeout: TMUX_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: MAX_BUFFER_BYTES, encoding: "utf8", windowsHide: true },
-          (error, stdout, stderr) => {
-            if (!error) return resolve({ code: 0, stdout, stderr });
-            const err = error as NodeJS.ErrnoException & { killed?: boolean };
-            if (typeof err.code === "number") return resolve({ code: err.code, stdout, stderr });
-            reject(new Error(`tmux ${subcommand} failed: ${err.killed ? "timeout" : (err.code ?? err.message)}`));
-          },
-        );
-        child.stdin?.end();
-      });
+      return execTmux({ binary, prefix: socketArgs, allowed: ALLOWED, args, env, execFile });
     },
     attach(target) {
       return new Promise<number>((resolve, reject) => {
@@ -124,7 +103,7 @@ export function createUserTmux(options: UserTmuxOptions = {}): UserTmux {
 // ---------------------------------------------------------------------------
 
 export function validateViewSession(name: string): string {
-  if (!SESSION_NAME_PATTERN.test(name)) {
+  if (!VIEW_SESSION_PATTERN.test(name)) {
     throw new Error(`Invalid tmux session name (use letters, digits, '_' and '-', at most 32 characters): ${name}`);
   }
   return name;
