@@ -44,10 +44,10 @@ Add to `~/.personal-assistant/settings.json`, then restart the daemon:
 | `minStartIntervalMs` | `10000` | Minimum time between two starts |
 | `minSendIntervalMs` | `1500` | Minimum time between two messages to one session |
 | `maxInputChars` | `4000` | Maximum length of a message |
-| `defaultOutputLines` / `maxOutputLines` | `80` / `300` | Screen lines returned by `read` |
+| `defaultOutputLines` / `maxOutputLines` | `80` / `300` | Screen lines returned by `read` without `lines` / the upper limit |
 | `maxWaitMs` | `120000` | Upper limit for `waitForIdleMs` |
 | `stopGraceMs` | `10000` | Time for a graceful `/exit` before the kill |
-| `idleReapMinutes` | `0` | Stop idle sessions without input for this long. `0` = off |
+| `idleReapMinutes` | `0` | Stop idle sessions without input for this long (never one with an attached client). `0` = off |
 | `envAllowlist` | `[]` | Extra environment variable names passed to tmux and so to every agent |
 
 ## Security notes
@@ -126,6 +126,20 @@ the destructive tools confirmed, allow these in the Claude Code settings (`stop`
 ```
 
 The repository template for the Claude Code settings is not changed.
+
+## Behaviour notes
+
+- **Unrecognized screen.** `send` refuses with `UNKNOWN_STATE` while the screen matches no known state (the agent may start or
+  show a dialog). A numbered menu or an "Esc to cancel" footer counts as `waiting_permission`. The caller reads the screen, then
+  retries with `allowUnknownState: true`; that flag never overrides a dialog.
+- **Input guard.** No line of a message may start with `!`, `#` or `/` (a pasted line can be submitted on its own when the
+  agent does not use bracketed paste). Only `/clear` and `/compact` pass, as a single line.
+- **Stop and recover verify the kill.** After `kill-session` the service checks that the session is gone. If not, the call fails
+  with `TMUX_ERROR` and the record stays `running` (no hidden orphan).
+- **Registry.** Stopped and lost records are dropped 7 days after they ended. The registry lock of a dead process is taken over
+  after 2 seconds (10 seconds for a live pid).
+- **tmux config and socket directory.** Every tmux call runs with `-f /dev/null`, so `~/.tmux.conf` is ignored. The socket directory
+  must be owned by the daemon user and not writable by group or others, or the first call fails.
 
 ## Skill
 

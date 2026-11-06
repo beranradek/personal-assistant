@@ -752,8 +752,9 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
 
 - **Claude Code TUI changes (verbs, layout, footer)** - Impact: Wrong `idle`/`busy` | Mitigation: Evidence and confidence in every result;
   fixtures; detector version `claude@1`; skill says read the screen when confidence is low
-- **Permission-prompt text is a guess** - Impact: Missed `waiting_permission` | Mitigation: `send` also checks `unknown` + stable screen for
-  2 captures and reports `unknown`; operator step 6
+- **Permission-prompt text is a guess** - Impact: Missed `waiting_permission` | Mitigation: a generic menu detector (`❯ N.` or
+  "Esc to cancel") reports `waiting_permission`; `send` refuses `unknown` (`UNKNOWN_STATE`) unless `allowUnknownState`; `start`
+  hints on `unknown`; operator step 6 replaces the guessed fixtures
 - **`send-keys` timing (text and Enter)** - Impact: Lost Enter | Mitigation: Two calls with 150 ms gap (PoC); status check after send
 - **Paste mode differs by agent kind** - Impact: Multi-line breaks | Mitigation: Kind table field `multilinePaste:
   'bracketed'|'none'` (Task 2); with `none` the service rejects multi-line text; operator step 6 checks bracketed paste for `claude`
@@ -819,6 +820,30 @@ Deviations from the plan text:
   kind can be injected; with an injected kind table all its kinds are enabled.
 - Fixtures `claude-permission.txt` and `claude-trust.txt` are still guesses (operator step 6). The fake agent uses the
   alternate screen so that a redraw leaves no stale lines in the tmux history.
+
+## Review fixes (2026-11-06, second review of the implementation)
+
+All applied in the commits after `ef83e88`; tests first, `npx vitest run src/tmux-agents` green, real-tmux integration test green.
+
+- **Dialogs and unknown screens:** new generic menu detector; `send` refuses `unknown` with the new error code `UNKNOWN_STATE` unless
+  `allowUnknownState: true` (never overrides `waiting_*`); `start` returns a hint on `unknown`. Replaces the "unknown + stable screen"
+  idea of the Risks table with a simpler rule.
+- **Input guard:** `!`, `#`, `/` are refused at the start of EVERY line (defense in depth until bracketed paste is verified).
+- **Kill is verified:** `killVerified` runs `has-session` after `kill-session`; a surviving session keeps its record `running` and the
+  call fails with `TMUX_ERROR`; `recover` starts no new session then.
+- **`waitForIdle`:** an idle screen counts only after a busy phase was seen, or when the screen is stable across two polls.
+- **Registry lock:** a dead pid is stale only after 2 s (PID namespaces); a taken-over lock is put back only while `lockDir` is free
+  (the review suggested never putting it back; that would drop a fresh lock in the parallel-takeover race, so the residual risk is
+  documented in code); a failed `owner.json` write removes the lock directory; leftover `.stale-*` directories are cleaned.
+- **Runner:** `-f /dev/null` (no user tmux config); "no server" matches only `no server running` and `(No such file or directory)`;
+  an exceeded `maxBuffer` is `TMUX_ERROR`, not `TIMEOUT`; the socket directory must be owned by us and not group/world writable.
+- **Config and records:** `defaultOutputLines` is used (`lines` has no schema default); `endedAt` field and 7-day pruning of stopped
+  and lost records in `reconcile`; the idle reaper skips sessions with an attached client (`#{session_attached}`).
+- **Rate limits:** the send slot is taken only after the refusals pass (a rate-limit pre-check makes no tmux call); starts run through
+  an in-process queue and `lastStartAt` is set before the tmux call, so concurrent and failed starts count.
+- **Smaller:** orphan session after a `new-session` timeout is found by name and killed by id; `recover` audit has `session` (old) and
+  `newSession`; `send` returns `sent: true` plus a `hint` when the screen cannot be read after typing.
+- **Not done:** a bearer token for the HTTP MCP server (still out of scope); the lock stays a directory lock (see above).
 
 ## Review log (2026-11-05)
 

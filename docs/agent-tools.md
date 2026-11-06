@@ -46,7 +46,7 @@ server owns. Claude backend: in-process server `tmuxagents` (`mcp__tmuxagents__a
 | `agent_session_list` | List sessions started by this server. Read-only. |
 | `agent_session_status` | Alive, and busy, idle, waiting_permission, waiting_trust or unknown (heuristic with confidence). Read-only. |
 | `agent_session_read` | Last screen lines, redacted, marked as untrusted data. Read-only. |
-| `agent_session_send` | Type a message and press Enter, optionally wait until idle. Text may not start with `!`, `#`, `/`. |
+| `agent_session_send` | Type a message, press Enter, optionally wait until idle. No line may start with `!`, `#`, `/`. |
 | `agent_session_interrupt` | Press Ctrl-C in the session. |
 | `agent_session_stop` | Graceful `/exit`, kill after a grace period. `force` needs `userConfirmed`. Destructive. |
 | `agent_session_recover` | Forced restart in the same directory, kind and mode; work is lost. Needs `userConfirmed`. Destructive. |
