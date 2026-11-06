@@ -25,6 +25,11 @@ export interface AgentKind {
   allowedSlash: readonly string[];
   /** Whether multi-line text can be pasted (bracketed paste). With `none` the service rejects multi-line text. */
   multilinePaste: "bracketed" | "none";
+  /**
+   * The agent supports `--settings <file>` with `UserPromptSubmit` and `Stop` hooks (payload with `prompt_id` and
+   * `last_assistant_message`). The service then reads the exact answer from the hooks, see `answers.ts`.
+   */
+  answerHooks?: boolean;
 }
 
 export type KindTable = Readonly<Record<string, AgentKind>>;
@@ -55,6 +60,7 @@ export const KINDS: KindTable = {
     detector: "claude@1",
     allowedSlash: ["/clear", "/compact"],
     multilinePaste: "bracketed",
+    answerHooks: true,
   },
 };
 
@@ -64,11 +70,21 @@ export function getKind(kinds: KindTable, id: string): AgentKind {
   return kind;
 }
 
-/** Argv of the agent: the program (or the resolved `binary` in its place), the fixed flags and the flags of the mode. */
-export function buildAgentArgv(kinds: KindTable, kindId: string, mode: PermissionMode, binary?: string): string[] {
+/**
+ * Argv of the agent: the program (or the resolved `binary` in its place), the fixed flags and the flags of the mode.
+ * `settingsPath` (a file written by the service, never user text) adds the answer hooks of a kind that supports them.
+ */
+export function buildAgentArgv(
+  kinds: KindTable,
+  kindId: string,
+  mode: PermissionMode,
+  binary?: string,
+  settingsPath?: string,
+): string[] {
   const kind = getKind(kinds, kindId);
   const [program = kindId, ...fixed] = kind.command;
-  return [binary ?? program, ...fixed, ...kind.modes[mode]];
+  const hooks = kind.answerHooks && settingsPath !== undefined ? ["--settings", settingsPath] : [];
+  return [binary ?? program, ...fixed, ...kind.modes[mode], ...hooks];
 }
 
 /** The program of a kind, as written in its table entry (resolved to a path by `createBinaryResolver`). */

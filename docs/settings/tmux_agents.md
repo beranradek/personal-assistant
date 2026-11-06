@@ -100,7 +100,9 @@ Default channel to an agent is `agent_session_send` (plus `read` and `status`): 
   `confidence` and `evidence`.
 - `agent_session_read`: last `lines` of the screen, redacted, `untrusted: true`.
 - `agent_session_send`: `text`, `waitForIdleMs`, `queueWhileBusy`, `answerPermissionPrompt`, `allowUnknownState`. Returns `newOutput`
-  (the reply only). Errors: `BUSY`, `WAITING_PERMISSION`, `WAITING_TRUST`, `UNKNOWN_STATE`, `RATE_LIMITED`, `INVALID_INPUT`.
+  (the reply only; `source: "hook"` = the complete final answer to exactly this message, `source: "screen"` = visible pane
+  only, may be incomplete; see "Exact answers" below).
+  Errors: `BUSY`, `WAITING_PERMISSION`, `WAITING_TRUST`, `UNKNOWN_STATE`, `RATE_LIMITED`, `INVALID_INPUT`.
 - `agent_session_interrupt`: Ctrl-C.
 - `agent_session_stop`: graceful `/exit`, kill after `stopGraceMs`. Refused while busy, waiting or unrecognized; `force` needs
   `userConfirmed: true`.
@@ -122,6 +124,27 @@ message ... permission mode class doesn't match") until a person approves it the
 `crossSessionInbound` to `"accept"` to get around it: the agent would then take instructions from any session of the same user.
 You can approve a single held message by hand in the agent pane. Peer messaging is sensible only when both sessions run in the
 same permission mode.
+
+### Exact answers (`source: "hook"`)
+
+The screen of a fullscreen Claude Code agent is only a viewport (tmux keeps no history for it), so a long answer does not fit and
+the viewport may be scrolled away from its end. `send` therefore reads the answer from the agent's own hooks:
+
+- The service writes `<dataDir>/tmux-agents/answers/<session>.settings.json` per session and starts the agent with
+  `--settings <that file>` (together with `--setting-sources user`, so project hooks stay off, D20). The file defines a
+  `UserPromptSubmit` and a `Stop` hook; both append their JSON payload to `<session>.jsonl` next to it. The hook commands are fixed
+  by the service and contain no user or agent text.
+- Both payloads carry the same `prompt_id`. `send` notes the size of the file before it types, finds the first new prompt with
+  exactly the text it sent, and returns the `last_assistant_message` of the `Stop` record with the same `prompt_id`. An answer to a
+  message typed by someone else in the pane, an older answer or the answer of another session is never returned.
+- No prompt record (hooks did not run, a slash command) or no `Stop` record (the turn was interrupted) gives the screen fallback with
+  `source: "screen"`. The result still passes through the redactor and is marked `untrusted`.
+- Both files are deleted when the session ends. The answer file holds agent output in clear text: it is private to the daemon user
+  (directory `0700`, settings `0600`).
+- Verified with real Claude Code 2.1.319 in tmux: `PA_E2E_REAL_CLAUDE=1 PA_E2E_PROJECT_DIR=<trusted project> npx vitest run
+  src/tmux-agents/real-claude.e2e.test.ts` (a 150-line answer comes back complete; the next answer is not mixed with it).
+- The hook input fields come from the Claude Code docs (hooks reference: `Stop` has `last_assistant_message`). The transcript file
+  format is NOT used: the docs call it internal and unstable.
 
 ## 4. `pa agents-view`: the assistant and its agents on one screen
 
@@ -226,8 +249,9 @@ reaper skips it.
   `cp <repo>/src/templates/skills/tmux-agents/SKILL.md ~/.personal-assistant/workspace/.claude/skills/tmux-agents/SKILL.md`.
 - **Limits.** Busy/idle detection reads the screen and depends on the Claude Code layout (tested with 2.1.319); the permission prompt
   and trust dialog texts are guesses (a numbered menu or "Esc to cancel" is caught generically). `waitForIdleMs` can return early
-  when the agent shows no busy phase within about 2 s; check with `status` or `read` when a result looks incomplete. A very long reply
-  may be cut to the last 40 lines when the echo of your message scrolled out of the screen. Only kind `claude` exists (a new kind needs an
+  when the agent shows no busy phase within about 2 s; check with `status` or `read` when a result looks incomplete. With
+  `source: "screen"` a long reply is cut to the visible pane (Claude Code fullscreen keeps no tmux history); `read` and the state checks
+  send Ctrl+End first when the viewport shows `(ctrl+End)` (scrolled away from the end). Only kind `claude` exists (a new kind needs an
   entry in `src/tmux-agents/kinds.ts` and a detector in `screen.ts`). tmux eats a trailing `;` of an argument; the service sends
   trailing semicolons as hex keys.
 - **Acceptance example** (manual proof 2026-11-05; the tools give the same result): `new-session -d` starts the server and the session;

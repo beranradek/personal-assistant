@@ -100,7 +100,11 @@ export interface SendResult {
   state: AgentState;
   waited: boolean;
   timedOut: boolean;
-  newOutput?: UntrustedOutput & { untrusted: true };
+  /**
+   * `source: "hook"` is the complete final answer to exactly this message (from the agent's own hooks). `source: "screen"` is
+   * what the visible part of the screen showed after the message: it may be only the end of a long answer.
+   */
+  newOutput?: UntrustedOutput & { untrusted: true; source: "hook" | "screen" };
   /** Set when the text was sent but the screen could not be read afterwards. */
   hint?: string;
 }

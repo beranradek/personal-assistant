@@ -23,6 +23,14 @@ import {
   wrapUntrusted,
   type AgentState,
 } from "./screen.js";
+import {
+  answerFilePath,
+  answerOffset,
+  findAnswer,
+  readAnswerRecords,
+  removeAnswerFiles,
+  writeAnswerSettings,
+} from "./answers.js";
 import type { AttachResult, ServiceDeps, SessionSummary, StartResult, StopResult, TmuxAgentService } from "./types.js";
 
 const log = createLogger("tmux-agents-service");
@@ -46,6 +54,9 @@ const REAP_INTERVAL_MS = 60_000;
 /** Screen lines captured for state detection (status) and for send/wait diffs. */
 const STATUS_CAPTURE_LINES = 60;
 const SEND_CAPTURE_LINES = 200;
+/** How long `send` waits for the `Stop` hook record after the screen went idle (the hook runs just after the last line). */
+const ANSWER_GRACE_MS = 3_000;
+const ANSWER_POLL_MS = 250;
 const SCROLL_TO_BOTTOM_ATTEMPTS = 2;
 const SCROLL_SETTLE_MS = 150;
 const NEW_SESSION_ATTEMPTS = 3;
@@ -180,7 +191,10 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     }));
   }
 
-  const markEnded = (name: string, state: "stopped" | "lost") => patchRecord(name, { state, endedAt: nowIso() });
+  const markEnded = async (name: string, state: "stopped" | "lost") => {
+    await patchRecord(name, { state, endedAt: nowIso() });
+    await removeAnswerFiles(deps.config.security.dataDir, name); // agent output does not outlive the session
+  };
 
   /**
    * Check that the tmux session behind a record is still OUR session (id and creation time match).
@@ -250,7 +264,10 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     kind: AgentKind;
     mode: PermissionMode;
     cwd: string;
+    /** Argv without the answer hooks (for messages). */
     argv: string[];
+    /** Argv of a tmux session: with the answer hooks settings file when the kind supports them. */
+    launchArgv: (settingsPath?: string) => string[];
   }
 
   async function assertStartRate(): Promise<void> {
@@ -277,12 +294,14 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     });
     // Pre-flight: no tmux call, registry record or kill of a replaced session happens when the program is missing.
     const binary = deps.resolveBinary(kind.id, agentProgram(kind));
-    const agentArgv = buildAgentArgv(kinds, kind.id, mode, binary);
     // tmux ignores `new-session -e PATH=...` for the pane (verified on tmux 3.6), so the `PATH` is set by `env`.
     const envPath = deps.agentBasePath === undefined ? undefined : agentEnvPath(binary, deps.agentBasePath);
-    const argv = envPath === undefined ? agentArgv : [ENV_PROGRAM, `PATH=${envPath}`, ...agentArgv];
+    const launchArgv = (settingsPath?: string) => {
+      const agentArgv = buildAgentArgv(kinds, kind.id, mode, binary, settingsPath);
+      return envPath === undefined ? agentArgv : [ENV_PROGRAM, `PATH=${envPath}`, ...agentArgv];
+    };
     if (options.checkRate) await assertStartRate();
-    return { project: input.project, kind, mode, cwd, argv };
+    return { project: input.project, kind, mode, cwd, argv: launchArgv(), launchArgv };
   }
 
   /**
@@ -304,15 +323,18 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   async function createTmuxSession(p: PreparedStart) {
     for (let attempt = 0; attempt < NEW_SESSION_ATTEMPTS; attempt++) {
       const name = buildSessionName(p.project, random);
+      const dataDir = deps.config.security.dataDir;
+      const settingsPath = p.kind.answerHooks ? await writeAnswerSettings(dataDir, name) : undefined;
       let result: TmuxRunResult;
       try {
         result = await runner.run([
           "new-session", "-d", "-s", name, "-x", PANE_WIDTH, "-y", PANE_HEIGHT, "-c", p.cwd,
-          "-P", "-F", NEW_SESSION_FORMAT, "--", ...p.argv,
+          "-P", "-F", NEW_SESSION_FORMAT, "--", ...p.launchArgv(settingsPath),
         ]);
       } catch (err) {
         // The runner throws on a timeout, an exceeded maxBuffer or a spawn failure: tmux may still have created the session.
         await removeOrphan(name);
+        await removeAnswerFiles(dataDir, name);
         throw err;
       }
       if (result.code === 0) {
@@ -320,6 +342,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
         if (!match) throw new TmuxAgentError("TMUX_ERROR", "Unexpected output of tmux new-session");
         return { name, sessionId: match[1]!, paneId: match[2]!, created: match[3]! };
       }
+      await removeAnswerFiles(dataDir, name);
       if (!/duplicate session/i.test(result.stderr)) throw tmuxError(result, "new-session");
     }
     throw new TmuxAgentError("TMUX_ERROR", "Could not find a free session name");
@@ -561,6 +584,24 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     }
   }
 
+  /**
+   * The exact answer to `sentText` from the hook records written after `from`, or undefined (no hook record in time: an
+   * interrupted turn, a slash command, hooks that did not run). The caller then falls back to the screen.
+   */
+  async function awaitAnswer(file: string, from: number, sentText: string, graceMs: number): Promise<string | undefined> {
+    const deadline = clock.now() + graceMs;
+    for (;;) {
+      const { records } = await readAnswerRecords(file, from);
+      const found = findAnswer(records, sentText);
+      if (found.status === "answered") return found.text;
+      // The prompt hook fires when the message is submitted, long before the answer ends. No prompt record by now means the
+      // hooks do not run (or the message was no prompt, for example a slash command): do not wait for a Stop record.
+      if (found.status === "none") return undefined;
+      if (clock.now() >= deadline) return undefined;
+      await clock.sleep(ANSWER_POLL_MS);
+    }
+  }
+
   // ---- service --------------------------------------------------------------
 
   const service: TmuxAgentService = {
@@ -656,6 +697,10 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
           );
         }
 
+        // Taken before typing: only hook records written after this point can belong to our message.
+        const answerFile = kind.answerHooks ? answerFilePath(deps.config.security.dataDir, record.name) : undefined;
+        const answerFrom = answerFile ? await answerOffset(answerFile) : 0;
+
         const previousInput = await reserveSend(record.name);
         let mode: "keys" | "paste";
         try {
@@ -669,7 +714,12 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
         try {
           const waited = await waitForIdle(record, before, budget);
-          const output = wrapUntrusted(extractNewOutput(before, waited.screen, text).text, redact);
+          // Only an idle screen means the `Stop` hook is about to write (or has written) its record; otherwise check once.
+          const graceMs = waited.state === "idle" && !waited.timedOut ? ANSWER_GRACE_MS : 0;
+          const answer = answerFile ? await awaitAnswer(answerFile, answerFrom, text, graceMs) : undefined;
+          const output = answer === undefined
+            ? { ...wrapUntrusted(extractNewOutput(before, waited.screen, text).text, redact), source: "screen" as const }
+            : { ...wrapUntrusted(answer, redact), source: "hook" as const };
           return {
             session: record.name, sent: true, mode, state: waited.state, waited: true, timedOut: waited.timedOut,
             newOutput: { untrusted: true, ...output },

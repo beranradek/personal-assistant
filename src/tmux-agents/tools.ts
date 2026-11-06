@@ -135,7 +135,9 @@ export const TMUX_TOOLS: readonly TmuxToolDefinition[] = [
       "Type a message for the agent and press Enter. Refused when the agent is busy (use queueWhileBusy), waits for a permission " +
       "or trust answer, the screen is not recognized (state unknown; read it first, then allowUnknownState), or any line of the " +
       "text starts with '!', '#' or '/'. Ask the user BEFORE sending input that can cause external side " +
-      "effects (push, deploy, send mail, delete). With waitForIdleMs the result includes the new output. " +
+      "effects (push, deploy, send mail, delete). With waitForIdleMs the result includes newOutput: source 'hook' is the complete " +
+      "final answer to exactly this message (taken from the agent's own hooks, so a long answer is never cut and an answer to " +
+      "another message is never mixed in); source 'screen' is only what the visible pane showed and may be incomplete. " +
       UNTRUSTED,
     shape: sendShape,
     annotations: ACTS,

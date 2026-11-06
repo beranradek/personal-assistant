@@ -108,6 +108,9 @@ describe("TmuxAgentService", () => {
     return service;
   }
 
+  /** Settings file with the answer hooks that the service writes for a session and passes with `--settings`. */
+  const settingsFile = (name: string) => path.join(tmp, "data", "tmux-agents", "answers", `${name}.settings.json`);
+
   const startInput = (over: Partial<StartInput> = {}): StartInput => ({
     project: "proj",
     directory: projectDir,
@@ -149,7 +152,9 @@ describe("TmuxAgentService", () => {
     it("starts the resolved binary with the flags of the kind and mode", async () => {
       const service = make({}, { resolveBinary: (kind, command) => `/opt/agents/${kind}-${command}`, agentBasePath: "/opt/agents" });
       const { fake } = await started(service, { permissionMode: "plan" });
-      expect(fake.argv).toEqual(["/opt/agents/claude-claude", "--setting-sources", "user", "--permission-mode", "plan"]);
+      expect(fake.argv).toEqual([
+        "/opt/agents/claude-claude", "--setting-sources", "user", "--permission-mode", "plan", "--settings", settingsFile(fake.name),
+      ]);
     });
 
     it("appends the directory of the resolved binary to the PATH of the agent (through /usr/bin/env)", async () => {
@@ -157,13 +162,14 @@ describe("TmuxAgentService", () => {
       const { fake } = await started(service);
       expect(fake.argv).toEqual([
         "/usr/bin/env", "PATH=/usr/bin:/bin:/home/u/.local/bin", "/home/u/.local/bin/claude", "--setting-sources", "user",
+        "--settings", settingsFile(fake.name),
       ]);
     });
 
     it("does not wrap the agent when the directory of the binary is on the PATH already", async () => {
       const service = make({}, { resolveBinary: () => "/usr/bin/claude", agentBasePath: "/usr/bin:/bin" });
       const { fake } = await started(service);
-      expect(fake.argv).toEqual(["/usr/bin/claude", "--setting-sources", "user"]);
+      expect(fake.argv).toEqual(["/usr/bin/claude", "--setting-sources", "user", "--settings", settingsFile(fake.name)]);
     });
 
     it("checks the binary of a recover before the old session is killed", async () => {
@@ -218,6 +224,7 @@ describe("TmuxAgentService", () => {
       expect(call).toEqual([
         "new-session", "-d", "-s", "pa-proj-0000", "-x", "200", "-y", "50", "-c", projectDir,
         "-P", "-F", "#{session_id} #{pane_id} #{session_created}", "--", "claude", "--setting-sources", "user",
+        "--settings", settingsFile("pa-proj-0000"),
       ]);
       expect(clock.now() - before).toBeGreaterThanOrEqual(3000);
       expect(result).toMatchObject({ session: "pa-proj-0000", project: "proj", kind: "claude", cwd: projectDir, state: "idle" });
@@ -234,9 +241,9 @@ describe("TmuxAgentService", () => {
     });
 
     it("passes acceptEdits mode flags", async () => {
-      await started(make(), { permissionMode: "acceptEdits" });
-      expect(tmux.callsOf("new-session")[0]!.args.slice(-5)).toEqual([
-        "claude", "--setting-sources", "user", "--permission-mode", "acceptEdits",
+      const { name } = await started(make(), { permissionMode: "acceptEdits" });
+      expect(tmux.callsOf("new-session")[0]!.args.slice(-7)).toEqual([
+        "claude", "--setting-sources", "user", "--permission-mode", "acceptEdits", "--settings", settingsFile(name),
       ]);
     });
 
@@ -467,6 +474,103 @@ describe("TmuxAgentService", () => {
         ["capture-pane", "-p", "-J", "-t", fake.paneId, "-S", "-60"],
       ]);
       expect(status).toMatchObject({ alive: true, state: "idle", confidence: "high", detector: "claude@1", sessionState: "running" });
+    });
+
+    describe("exact answer from the agent hooks", () => {
+      const answerFile = (name: string) => path.join(tmp, "data", "tmux-agents", "answers", `${name}.jsonl`);
+      const hookLine = (payload: Record<string, unknown>) => `${JSON.stringify(payload)}\n\n`;
+      const promptHook = (promptId: string, prompt: string) =>
+        hookLine({ hook_event_name: "UserPromptSubmit", prompt_id: promptId, prompt });
+      const stopHook = (promptId: string, text: string) =>
+        hookLine({ hook_event_name: "Stop", prompt_id: promptId, last_assistant_message: text });
+      const LONG = Array.from({ length: 300 }, (_, i) => `line ${i + 1} of a very long answer`).join("\n");
+
+      /** After Enter the fake agent "submits" the prompt: the hooks append their records and the screen shows the end only. */
+      function agentAnswers(name: string, fake: { screen: string | (() => string) }, writes: (promptText: string) => string, screen: string) {
+        let typed = "";
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys[0] === "-l") typed = keys.slice(2).join(" ");
+          if (keys.includes("Enter") && typed !== "") {
+            fs.appendFileSync(answerFile(name), writes(typed));
+            fake.screen = screen;
+          }
+        };
+      }
+
+      it("writes a settings file with both hooks for the session and passes it to the agent", async () => {
+        const { name } = await started(make());
+        const settings = JSON.parse(fs.readFileSync(settingsFile(name), "utf8")) as { hooks: Record<string, unknown> };
+        expect(Object.keys(settings.hooks).sort()).toEqual(["Stop", "UserPromptSubmit"]);
+        expect(JSON.stringify(settings)).toContain(answerFile(name));
+      });
+
+      it("returns the complete final answer of THIS message, not the visible end of the screen", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        agentAnswers(name, fake, (text) => promptHook("p-1", text) + stopHook("p-1", LONG), `❯ q\n\n● line 300 of a very long answer\n\n${IDLE}`);
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        expect(result.newOutput).toMatchObject({ source: "hook", output: LONG, truncated: false });
+      });
+
+      it("never takes the answer of a message typed by someone else", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        agentAnswers(
+          name, fake,
+          (text) => promptHook("p-user", "typed in the panel") + stopHook("p-user", "answer to the user") + promptHook("p-1", text) + stopHook("p-1", "answer to Amy"),
+          `❯ q\n\n● answer to Amy\n\n${IDLE}`,
+        );
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        expect(result.newOutput).toMatchObject({ source: "hook", output: "answer to Amy" });
+      });
+
+      it("ignores hook records written before the message was sent", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        fs.writeFileSync(answerFile(name), promptHook("old", "Question 1") + stopHook("old", "OLD answer"));
+        agentAnswers(name, fake, (text) => promptHook("new", text) + stopHook("new", "NEW answer"), `❯ q\n\n● NEW answer\n\n${IDLE}`);
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        expect(result.newOutput).toMatchObject({ source: "hook", output: "NEW answer" });
+      });
+
+      it("redacts secrets in the hook answer", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        agentAnswers(name, fake, (text) => promptHook("p", text) + stopHook("p", "key sk-abcdefghijklmnopqrstuvwxyz"), `❯ q\n\n● x\n\n${IDLE}`);
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        expect(result.newOutput).toMatchObject({ source: "hook", redacted: true });
+        expect(result.newOutput?.output).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      });
+
+      it("falls back to the screen (source screen) when no hook record exists", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys.includes("Enter")) fake.screen = `❯ Question 1\n\n● visible end\n\n${IDLE}`;
+        };
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        expect(result.newOutput).toMatchObject({ source: "screen" });
+        expect(result.newOutput?.output).toContain("visible end");
+      });
+
+      it("falls back to the screen when the turn was interrupted (prompt record, no Stop record)", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        agentAnswers(name, fake, (text) => promptHook("p", text), `❯ q\n\n● partial\n\n${IDLE}`);
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        expect(result.newOutput).toMatchObject({ source: "screen" });
+        expect(result.newOutput?.output).toContain("partial");
+      });
+
+      it("removes the answer and settings files when the session ends", async () => {
+        const service = make();
+        const { name } = await started(service);
+        fs.writeFileSync(answerFile(name), promptHook("p", "x"));
+        expect(fs.existsSync(settingsFile(name))).toBe(true);
+        await service.stop({ session: name, force: true, userConfirmed: true });
+        expect(fs.existsSync(answerFile(name))).toBe(false);
+        expect(fs.existsSync(settingsFile(name))).toBe(false);
+      });
     });
 
     describe("viewport scrolled away from the bottom (Claude Code fullscreen)", () => {
