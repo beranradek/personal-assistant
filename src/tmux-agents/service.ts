@@ -13,7 +13,15 @@ import { pruneTerminal, reconcile, type LiveSession, type SessionRecord } from "
 import { resolveStartDirectory } from "./roots.js";
 import type { TmuxRunResult } from "./runner.js";
 import type { StartInput } from "./schemas.js";
-import { detectState, diffNewOutput, sanitizeScreen, tailLines, wrapUntrusted, type AgentState } from "./screen.js";
+import {
+  compactBlankLines,
+  detectState,
+  diffNewOutput,
+  sanitizeScreen,
+  tailLines,
+  wrapUntrusted,
+  type AgentState,
+} from "./screen.js";
 import type { AttachResult, ServiceDeps, SessionSummary, StartResult, StopResult, TmuxAgentService } from "./types.js";
 
 const log = createLogger("tmux-agents-service");
@@ -596,7 +604,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     async read({ session, lines }) {
       const record = await requireRunning(session);
       const count = Math.min(lines ?? cfg.defaultOutputLines, cfg.maxOutputLines);
-      const screen = tailLines(await capture(record, count), count);
+      const screen = compactBlankLines(tailLines(await capture(record, count), count));
       return { session, untrusted: true, lines: count, ...wrapUntrusted(screen, redact) };
     },
 
@@ -643,7 +651,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
         try {
           const waited = await waitForIdle(record, before, budget);
-          const output = wrapUntrusted(diffNewOutput(before, waited.screen).text, redact);
+          const output = wrapUntrusted(compactBlankLines(diffNewOutput(before, waited.screen).text), redact);
           return {
             session: record.name, sent: true, mode, state: waited.state, waited: true, timedOut: waited.timedOut,
             newOutput: { untrusted: true, ...output },

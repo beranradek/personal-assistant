@@ -52,6 +52,21 @@ export function tailLines(text: string, n: number): string {
 }
 
 /**
+ * Drop leading blank-only lines and collapse every run of blank-only lines into one. A captured pane has a fixed height, so a short
+ * conversation is padded with a long run of blank lines that only costs tokens.
+ */
+export function compactBlankLines(text: string): string {
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const blank = line.trim() === "";
+    if (blank && (out.length === 0 || out[out.length - 1] === "")) continue;
+    out.push(blank ? "" : line);
+  }
+  while (out.length > 0 && out[out.length - 1] === "") out.pop();
+  return out.join("\n");
+}
+
+/**
  * Text that was added between two captures. Uses the longest overlap between the end of `before` and the
  * start of `after` (a screen that scrolled). Without any overlap the whole `after` is returned and
  * `overlap` is false.
@@ -102,6 +117,12 @@ const CLAUDE_SPINNER = /^\s*[*✻✽✶✳✢]\s+\S+…\s*\(\d+s/m;
 const CLAUDE_ESC_FOOTER = /esc to interrupt/i;
 const CLAUDE_DONE_LINE = /^\s*✻\s+.+\bfor\s+\d+\w*\s*·\s*done\b/m;
 const CLAUDE_EMPTY_PROMPT = /^\s*❯\s*$/m;
+// Claude Code draws the prompt box as `rule / ❯ text / rule` with a footer (`⏵⏵ ...`, `? for shortcuts`) and sometimes a
+// `/effort` line above the box. The prompt line may hold dim placeholder or predicted-prompt text that a plain-text capture
+// cannot tell from typed input. Real captures: Claude Code 2.1.319.
+const CLAUDE_RULE = /^\s*[─━]{10,}\s*$/;
+const CLAUDE_TEXT_PROMPT = /^\s*❯\s+\S/;
+const CLAUDE_FOOTER_MARK = /⏵⏵|\/effort|\? for shortcuts/;
 // Guesses until real captures exist (operator step 6).
 const CLAUDE_TRUST = /Do you trust the files in this folder\?/i;
 const CLAUDE_PERMISSION = /Do you want to proceed\?/i;
@@ -112,6 +133,16 @@ const CLAUDE_MENU_FOOTER = /esc to cancel/i;
 
 /** Only the bottom of the screen describes the current state; older lines are history. */
 const DETECTION_TAIL_LINES = 25;
+
+/** A `❯ <text>` prompt line between two rule lines, with a footer marker next to the box. Menus never get here (checked before). */
+function hasPromptWithText(tail: string): boolean {
+  const lines = tail.split("\n");
+  for (let i = 1; i < lines.length - 1; i++) {
+    if (!CLAUDE_TEXT_PROMPT.test(lines[i]!) || !CLAUDE_RULE.test(lines[i - 1]!) || !CLAUDE_RULE.test(lines[i + 1]!)) continue;
+    return lines.slice(Math.max(0, i - 2)).some((line) => CLAUDE_FOOTER_MARK.test(line));
+  }
+  return false;
+}
 
 function detectClaude(screen: string): Omit<ScreenStatus, "detector"> {
   const tail = tailLines(screen, DETECTION_TAIL_LINES);
@@ -168,6 +199,14 @@ function detectClaude(screen: string): Omit<ScreenStatus, "detector"> {
   }
   if (prompt) {
     return { state: "idle", signal: "prompt", confidence: "medium", evidence: ["empty prompt", "no esc footer"] };
+  }
+  if (hasPromptWithText(tail)) {
+    return {
+      state: "idle",
+      signal: "prompt-with-text",
+      confidence: "medium",
+      evidence: ["prompt with text (suggestion or typed input)", "no esc footer"],
+    };
   }
   if (done) {
     return { state: "idle", signal: "done-line", confidence: "medium", evidence: ["done line"] };

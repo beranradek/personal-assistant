@@ -901,6 +901,25 @@ Radek: the application should find the program itself, no setting. Changed:
   directory is not on the daemon `PATH` already and the program path is absolute.
 - Integration test: a program in a well-known location outside the `PATH` starts and sees its directory first on `PATH`.
 
+## Review fixes, round 4: prompt line with text (2026-11-06)
+
+First real run (Claude Code 2.1.319): the prompt line is not empty on a fresh agent (`❯ Try "refactor repl.ts"`) and after an answer
+Claude shows a predicted next prompt (`❯ Díky, to je vše.`). The empty-prompt detector said `unknown`, so `send` needed
+`allowUnknownState` and a graceful `stop` was refused. Changed:
+
+- **Detector `claude@1`:** a `❯ <text>` line between two rule lines (`────`), with a footer marker (`⏵⏵`, `/effort`, `? for shortcuts`)
+  next to the box and no busy signal, is `idle`, `medium`, signal `prompt-with-text`, evidence "prompt with text (suggestion or typed
+  input)". It is not tied to the `Try "..."` wording. Numbered menus (`❯ 1.`) and `Esc to cancel` are checked first and stay
+  `waiting_permission`; a spinner or `esc to interrupt` stays `busy`. A `❯ text` line without the two rules or without a footer marker is
+  still `unknown`.
+- **Safety:** typing over a dim suggestion replaces it, so `send` and `stop` (`/exit`) act on a clean line. Text that a person typed in
+  `attach` and did not submit is NOT replaced: the next `send` appends to it. A plain-text capture cannot tell the two apart; capturing
+  with `capture-pane -e` (dim attribute) is a possible later refinement and was not done.
+- **Fixtures:** `claude-startup-real.txt`, `claude-idle-real.txt` (real captures) and `claude-suggestion-real.txt` (rebuilt from the
+  observed lines). Permission and trust fixtures remain guesses.
+- **Output size:** `read` and `newOutput` pass through `compactBlankLines` (leading blank lines dropped, runs collapsed to one). A pane is
+  padded to its full height, which cost about 35 blank lines on a short conversation.
+
 ## Review log (2026-11-05)
 
 An independent adversarial review found these problems; each is applied as listed.

@@ -3,11 +3,17 @@
  * (spinner line, `esc to interrupt` footer, `✻ ... done HH:MM` line, empty `❯` prompt). `claude-permission.txt` and
  * `claude-trust.txt` are GUESSES (wording unverified), so their tests are named `heuristic_unverified`.
  * Operator step 6 replaces the fixtures with real captures.
+ *
+ * REAL captures (2026-11-06, Claude Code 2.1.319, tmux 3.6, pane 200x50): `claude-startup-real.txt` (startup screen, the prompt shows the
+ * placeholder `Try "..."`) and `claude-idle-real.txt` (after an answer: `✻ <verb> for Ns · done HH:MM`, empty prompt).
+ * `claude-suggestion-real.txt` is the real post-answer screen where the prompt line holds a predicted next prompt
+ * (`❯ Díky, to je vše.`); it was rebuilt by hand from the observed lines, the surrounding answer text is shortened.
+ * A plain-text capture cannot tell a suggestion from typed input, so the detector reports a prompt with text as idle, medium.
  */
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import { TmuxAgentError } from "./errors.js";
-import { detectState, diffNewOutput, sanitizeScreen, tailLines, wrapUntrusted } from "./screen.js";
+import { compactBlankLines, detectState, diffNewOutput, sanitizeScreen, tailLines, wrapUntrusted } from "./screen.js";
 
 const fixture = (name: string) => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf-8");
 const detect = (text: string) => detectState("claude@1", text);
@@ -22,6 +28,52 @@ describe("detectState claude@1", () => {
 
   it("idle fixture: idle, high", () => {
     expect(detect(fixture("claude-idle.txt"))).toMatchObject({ state: "idle", confidence: "high" });
+  });
+
+  it("real startup screen (prompt placeholder text): idle, medium, evidence names the prompt with text", () => {
+    const status = detect(fixture("claude-startup-real.txt"));
+    expect(status).toMatchObject({ state: "idle", confidence: "medium", signal: "prompt-with-text" });
+    expect(status.evidence).toEqual(["prompt with text (suggestion or typed input)", "no esc footer"]);
+  });
+
+  it("real screen after an answer (done line, empty prompt): idle, high", () => {
+    expect(detect(fixture("claude-idle-real.txt"))).toMatchObject({ state: "idle", confidence: "high" });
+  });
+
+  it("real screen with a predicted next prompt in the prompt line: idle, medium", () => {
+    expect(detect(fixture("claude-suggestion-real.txt"))).toMatchObject({
+      state: "idle",
+      confidence: "medium",
+      signal: "prompt-with-text",
+    });
+  });
+
+  it("a prompt with text is idle whatever the text is (not tied to the 'Try' wording)", () => {
+    const screen = (text: string) =>
+      `answer\n──────────────────────────────\n❯ ${text}\n──────────────────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle)\n`;
+    for (const text of ['Try "fix lint"', "Díky, to je vše.", "run the tests"]) {
+      expect(detect(screen(text))).toMatchObject({ state: "idle", confidence: "medium" });
+    }
+  });
+
+  it("a prompt with text needs the two rule lines and a footer marker, else unknown", () => {
+    expect(detect("answer\n❯ some text\n  ⏵⏵ auto mode on\n")).toMatchObject({ state: "unknown" });
+    expect(detect("answer\n──────────────────────────────\n❯ some text\n──────────────────────────────\n")).toMatchObject({
+      state: "unknown",
+    });
+  });
+
+  it("a prompt with text next to a busy signal stays busy", () => {
+    const rule = "──────────────────────────────";
+    expect(detect(`* Pondering… (3s · ↓ 10 tokens)\n${rule}\n❯ some text\n${rule}\n  esc to interrupt\n`)).toMatchObject({
+      state: "busy",
+    });
+  });
+
+  it("a numbered menu between rules is never idle", () => {
+    const rule = "──────────────────────────────";
+    const status = detect(`${rule}\n❯ 1. Yes\n  2. No\n${rule}\n  ⏵⏵ auto mode on\n`);
+    expect(status).toMatchObject({ state: "waiting_permission", signal: "menu" });
   });
 
   it("only the empty prompt and no done line: idle, medium", () => {
@@ -105,6 +157,24 @@ describe("tailLines", () => {
     expect(tailLines("a\nb\nc\nd\n\n\n", 2)).toBe("c\nd");
     expect(tailLines("a\nb", 5)).toBe("a\nb");
     expect(tailLines("", 3)).toBe("");
+  });
+});
+
+describe("compactBlankLines", () => {
+  it("drops leading blank lines and collapses runs of blank lines into one", () => {
+    expect(compactBlankLines("\n\n  \na\n\n\n\nb\n \n\nc")).toBe("a\n\nb\n\nc");
+  });
+
+  it("keeps text without blank runs unchanged and handles empty input", () => {
+    expect(compactBlankLines("a\n\nb")).toBe("a\n\nb");
+    expect(compactBlankLines("")).toBe("");
+    expect(compactBlankLines("\n\n")).toBe("");
+  });
+
+  it("shrinks a real capture with a long run of blank lines", () => {
+    const compact = compactBlankLines(fixture("claude-startup-real.txt"));
+    expect(compact.split("\n").length).toBeLessThan(8);
+    expect(compact).toContain('❯ Try "refactor repl.ts"');
   });
 });
 

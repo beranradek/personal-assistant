@@ -1,0 +1,25 @@
+ ▐▛███▛█   Claude Code v2.1.319
+▝▜██████▀  Opus Plan · Claude Team
+ ▝▝   ▝▝   ~/dev/personal-assistant
+
+
+❯ Ahoj, jsem Amy, asistentka Radka. Podívej se jen pro čtení do README.md a CLAUDE.md v tomto projektu a odpověz ve dvou větách, co tento projekt dělá. Nic neměň.
+
+● Projekt je zabezpečený sandboxovaný osobní asistent (CLI pa) s vyměnitelným agentním backendem (Claude Agent SDK nebo OpenAI Codex).
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                                     tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Díky, to je vše.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent
