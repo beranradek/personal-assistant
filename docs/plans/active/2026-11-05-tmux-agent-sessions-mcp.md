@@ -999,6 +999,44 @@ Radek wants one simple command that shows the main assistant and the agents it s
 - Shared input line: text typed by hand is not overwritten and `agent_session_send` appends its text after it; documented (type when the
   agent is idle or the assistant is not sending).
 
+## Review fixes, round 6: `pa agents-view` and the later changes (2026-11-06)
+
+Findings of the independent review of commits `b7c1c49` and `7abc7b1` and the fixes after round 2, and what was done:
+
+- **HIGH: the assistant could run `pa agents-view`.** `pa` is in the default `security.allowedCommands` and nothing looks at its
+  subcommands, so a Bash call such as `pa agents-view --assistant "<cmd>"` would have run a shell line in the user's tmux (and
+  `--config <file>` could have chosen the tmux binary of the controller). Fix: `view-cli.ts` refuses to run without a TTY on stdin and
+  stdout (the assistant's Bash tool has none), the `--watch` mode also needs `TMUX_PANE` (it runs in a tmux pane started by the
+  command). Tests: non-TTY refusal in both modes before any tmux call, `TMUX_PANE` requirement. The docs and the header comment of
+  `view.ts` now state what is enforced (they claimed the assistant "cannot run it" without a mechanism).
+  **Follow-up (out of scope, `src/security/*` and `src/exec/*` must not change here):** add a deny rule for `pa agents-view` (and a
+  check of `--config` values) to the Bash validator, so the guard does not rest on the missing TTY alone.
+- **Controller robustness.** Each pane add has its own try/catch; a failed add is retried with a growing delay (2, 4, ... up to 30
+  ticks) and is NOT treated as a pane the user closed (no dismissal); only failing to list panes or sessions counts toward the five
+  failures; a failing layout call is reported and ignored. Errors go to `<dataDir>/tmux-agents/view.log` (0600, one backup after
+  256 KB, message text only).
+- **Reaper and the view.** Panes are tmux clients, so `#{session_attached}` is above 0 and the reaper skips those sessions while the
+  view is open. Intended; documented (docs "Agents view"). No code change.
+- **Windows are matched by tag, not by name.** The view window carries `@pa_view=1`, the controller window is named `amy-ctl-<n>` and
+  carries `@pa_ctl=<view window id>`. A user window called `amy` is never reused or killed; the controller kills the view window only
+  when it is tagged; the assistant pane `@pa_main` is tagged first and a half configured window is removed on failure (a rerun starts
+  clean); a controller of another view window is not taken for ours (fixes the quick-rerun case).
+- **tmux version.** `main-pane-width 50%` needs tmux 3.3. When tmux rejects it the view still opens and prints a note (default width).
+- **Registry cross-check.** The controller lists the agents' sessions and keeps only those that are RUNNING records of the service's
+  registry (`createRegisteredSessionLister`), so a foreign `pa-...` session gets no pane. A corrupt or missing registry shows nothing.
+- **Agent program path.** A resolved path with `=` is refused (`env PATH=... <program>` would read it as an assignment); the program
+  directory is now APPENDED to the agent `PATH` (a user-writable `~/.local/bin` can no longer shadow `git` or `sh` for the agent).
+  Integration test updated (last entry, not first).
+- **`extractNewOutput`.** A short first line (up to 50 characters) must match the echo line exactly, a longer one by its first 50
+  characters; so "ok" no longer matches an older `❯ ok thanks` once its own echo has scrolled out (tail fallback instead). A large
+  multi-line paste that Claude shows as `❯ [Pasted text #1 +12 lines]` is found by that placeholder (only for multi-line sends).
+  Wrapped echo lines are not an issue because the screen is captured with `-J`. Known limit: a vanished echo falls back to the last 40
+  lines, which truncates a very long reply.
+- **DRY.** `tmux-exec.ts` holds the one `execFile` call, the allowlist check and the `;` check; `runner.ts` (agents server) and the user
+  tmux runner of `view.ts` pass their OWN allowlists, so neither is widened. `SESSION_NAME_PATTERN` is now `VIEW_SESSION_PATTERN`
+  (the user's view session name, not an agent session). `--watch` runs in its own function (`runWatch`).
+- **Not changed:** `creatorPid` and `instanceId` stay (the plan requires them as diagnostics).
+
 ## Review log (2026-11-05)
 
 An independent adversarial review found these problems; each is applied as listed.

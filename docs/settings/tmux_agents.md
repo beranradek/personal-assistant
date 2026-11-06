@@ -122,13 +122,29 @@ session starts and disappear when it ends (the nested attach exits). Each pane b
 - Outside tmux it creates (or reuses) the session `amy` and attaches. Inside tmux without `--session` it adds a window `amy` to the
   current session and selects it. Running the command again reuses the existing view (idempotent); the options of the first run stay
   in effect (the controller was started with them).
-- A hidden window `amy-ctl` runs the controller (`pa agents-view --watch <window>`, polls every 2 s). It ends when the view window or
-  the assistant pane is gone; closing the assistant pane closes the view window. The agent sessions are never touched.
+- The view window is tagged (`@pa_view`), and the view is found by that tag, never by name: a window of yours that happens to be
+  called `amy` is neither reused nor closed. A hidden window `amy-ctl-<n>` (tagged `@pa_ctl` with the id of its view window) runs the
+  controller (`pa agents-view --watch <window>`, polls every 2 s). It ends when the view window or the assistant pane is gone;
+  closing the assistant pane closes the view window (only a tagged one). The agent sessions are never touched.
+- The controller shows only sessions that the service also has as running records in its registry (a `pa-...` session on the agents'
+  server without a record is not ours and gets no pane). One session that cannot get a pane (for example "no space for new pane" in a
+  small terminal) does not block the others: it is retried with a growing delay, and only failing to LIST sessions makes the controller
+  give up after five ticks. Controller errors are written to `<security.dataDir>/tmux-agents/view.log` (mode 0600, one backup after
+  256 KB); check it when panes do not appear.
 - Close an agent pane by hand (`Ctrl-b x`) and it stays closed while that session lives. The session keeps running.
-- The view needs `tmuxAgents.enabled: true` (otherwise it opens but no agent panes appear) and `tmux` 3.x.
-- It is a user command, not an assistant tool: the assistant cannot run it, and it uses its own tmux runner for your tmux (fixed
-  subcommand allowlist, no shell, except the `--assistant` command that tmux itself runs). The view never changes options of the
-  agents' tmux server.
+- The view needs `tmuxAgents.enabled: true` (otherwise it opens but no agent panes appear) and `tmux` 3.3 or newer for the 50 % wide
+  assistant pane. On an older tmux (3.2a on Ubuntu 22.04) the view still works; it prints a note and the assistant pane keeps the
+  default width of `main-vertical`.
+- **While the view is open the idle reaper (`idleReapMinutes`) reaps nothing that is shown in it**, because every pane is a tmux
+  client and the reaper skips sessions with an attached client. Close the pane, or the view, to let the reaper work again; the
+  `maxSessions` limit still counts those sessions.
+- It is a user command, not an assistant tool: no MCP tool reaches it, and it **refuses to run without a terminal** (stdin and
+  stdout must be a TTY, also in the `--watch` mode, which needs `TMUX_PANE`). The assistant's Bash tool has no terminal, so it
+  cannot start a view and so cannot run a shell command through `--assistant`. This is a guard on top of the Bash allowlist, which
+  lists `pa` as a whole and does not look at its subcommands (a deny rule for `pa agents-view` in the Bash validator would be the
+  stronger fix; it is tracked as a follow-up in the plan because `src/security/*` is out of scope here). The command uses its own tmux
+  runner for your tmux (fixed subcommand allowlist, no shell, except the `--assistant` command that tmux itself runs). The view
+  never changes options of the agents' tmux server.
 
 ### Typing into the agents
 
@@ -234,8 +250,10 @@ itself and needs no setting. `start` resolves it BEFORE it creates a session, in
    `~/.npm-global/bin/claude`, `~/.bun/bin/claude`, `~/.volta/bin/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`
    (`~` is the home directory of the daemon user). The first executable regular file wins; symlinks are followed.
 
-The agent runs with the resolved absolute path. When the directory of the program is not on the daemon `PATH`, the agent gets it first
-on its own `PATH` (through `/usr/bin/env`, so that wrappers and siblings of the program are found). The result is cached and checked
+The agent runs with the resolved absolute path. When the directory of the program is not on the daemon `PATH`, the agent gets it
+APPENDED to its own `PATH` (through `/usr/bin/env`, so that wrappers and siblings of the program are found, while a directory such as
+`~/.local/bin` cannot shadow system tools like `git`). A program path that contains `=` is refused (`env` would read it as an
+assignment). The result is cached and checked
 again on every start; a failure is not cached, so a program installed later is found without a restart. The resolved path is logged
 once at INFO (`Agent program resolved`). If nothing is found, `start` fails with `AGENT_BINARY_NOT_FOUND`, which lists the searched
 `PATH` and locations. Only then set the override:
