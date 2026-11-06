@@ -17,6 +17,7 @@ import {
   compactBlankLines,
   detectState,
   extractNewOutput,
+  SCROLLED_AWAY_MARKER,
   sanitizeScreen,
   tailLines,
   wrapUntrusted,
@@ -45,6 +46,8 @@ const REAP_INTERVAL_MS = 60_000;
 /** Screen lines captured for state detection (status) and for send/wait diffs. */
 const STATUS_CAPTURE_LINES = 60;
 const SEND_CAPTURE_LINES = 200;
+const SCROLL_TO_BOTTOM_ATTEMPTS = 2;
+const SCROLL_SETTLE_MS = 150;
 const NEW_SESSION_ATTEMPTS = 3;
 const PANE_WIDTH = "200";
 const PANE_HEIGHT = "50";
@@ -139,9 +142,24 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     return live;
   }
 
-  async function capture(record: SessionRecord, lines: number): Promise<string> {
+  async function captureOnce(record: SessionRecord, lines: number): Promise<string> {
     const result = await must(["capture-pane", "-p", "-J", "-t", record.tmuxPaneId, "-S", `-${lines}`]);
     return sanitizeScreen(result.stdout);
+  }
+
+  /**
+   * Claude Code fullscreen keeps its own scrollback (tmux has no history for it) and shows only a viewport. When that viewport
+   * is scrolled away from the bottom ("Jump to bottom (ctrl+End)"), a capture returns the middle of an answer instead of its end.
+   * Ctrl+End is a navigation key (no text is typed), so it is safe to send before the capture is repeated.
+   */
+  async function capture(record: SessionRecord, lines: number): Promise<string> {
+    let screen = await captureOnce(record, lines);
+    for (let attempt = 0; attempt < SCROLL_TO_BOTTOM_ATTEMPTS && SCROLLED_AWAY_MARKER.test(screen); attempt++) {
+      await must(["send-keys", "-t", record.tmuxPaneId, "C-End"]);
+      await clock.sleep(SCROLL_SETTLE_MS);
+      screen = await captureOnce(record, lines);
+    }
+    return screen;
   }
 
   // ---- registry helpers ---------------------------------------------------

@@ -469,6 +469,45 @@ describe("TmuxAgentService", () => {
       expect(status).toMatchObject({ alive: true, state: "idle", confidence: "high", detector: "claude@1", sessionState: "running" });
     });
 
+    describe("viewport scrolled away from the bottom (Claude Code fullscreen)", () => {
+      const SCROLLED = "● part 1 of the answer\n  middle  Jump to bottom (ctrl+End) ↓\n\n❯ \n";
+      const BOTTOM = "● part 1 of the answer\n  middle\n  the end of the answer\n\n❯ \n";
+
+      it("read sends C-End and captures again, so the end of the answer is returned", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        fake.screen = () => (fake.keys.includes("C-End") ? BOTTOM : SCROLLED);
+        const result = await service.read({ session: name, lines: 50 });
+        expect(fake.keys).toContain("C-End");
+        expect(result.output).toContain("the end of the answer");
+        expect(result.output).not.toContain("Jump to bottom");
+      });
+
+      it("read does not send any key when the viewport is at the bottom", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        fake.screen = BOTTOM;
+        await service.read({ session: name, lines: 50 });
+        expect(fake.keys).not.toContain("C-End");
+      });
+
+      it("send returns the end of the answer after it scrolled the viewport to the bottom", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        let sent = false;
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys.includes("Enter")) sent = true;
+        };
+        fake.screen = () => {
+          if (!sent) return IDLE;
+          return fake.keys.includes("C-End") ? `❯ question\n\n${BOTTOM}` : `❯ question\n\n${SCROLLED}`;
+        };
+        const result = await service.send(sendInput(name, "question", { waitForIdleMs: 5_000 }));
+        expect(fake.keys).toContain("C-End");
+        expect(result.newOutput?.output).toContain("the end of the answer");
+      });
+    });
+
     it("status reports busy", async () => {
       const service = make();
       const { name, fake } = await started(service);

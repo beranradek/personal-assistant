@@ -21,6 +21,12 @@ export interface ScreenStatus {
 
 export const MAX_OUTPUT_BYTES = 64 * 1024;
 
+/**
+ * Claude Code fullscreen shows `Jump to bottom (ctrl+End)` or `N new message (ctrl+End)` while its viewport is scrolled away
+ * from the newest output. Real captures: Claude Code 2.1.319.
+ */
+export const SCROLLED_AWAY_MARKER = /\(ctrl\+End\)/;
+
 // ---------------------------------------------------------------------------
 // Sanitizing and slicing
 // ---------------------------------------------------------------------------
