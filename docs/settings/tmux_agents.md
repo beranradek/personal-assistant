@@ -38,7 +38,7 @@ Add to `~/.personal-assistant/settings.json`, then restart the daemon:
 | `allowedRoots` | `[]` | Where agents may start. Elsewhere: `ROOT_NOT_ALLOWED` (lists them). Also in `agent_session_list` |
 | `trustedRoots` | `[]` | Entries of `allowedRoots` that may lie under a directory the assistant can write (see below) |
 | `enabledKinds` | `["claude"]` | Agent kinds that may start. Only `claude` exists |
-| `agentBinaries` | `{}` | Absolute path of the agent program per kind, `~` allowed: `{"claude": "~/.local/bin/claude"}` (see below) |
+| `agentBinaries` | `{}` | Optional override: absolute path of the agent program per kind (`~` allowed). Normally not needed, see below |
 | `allowPermissionBypass` | `false` | Allow `permissionMode: "bypass"` (also needs `confirmBypass: true` in the call) |
 | `allowAnswerPrompts` | `false` | Allow `send` to answer a permission prompt of the agent (never a trust dialog) |
 | `maxSessions` | `3` | Maximum running sessions (counted from the registry and from tmux) |
@@ -151,17 +151,28 @@ an existing settings file; for an existing install add the snippet by hand.
 ## Agent program and `PATH`
 
 tmux and so the agent get only the allowlisted environment, including the `PATH` of the daemon. A systemd user service often has a
-short `PATH` without `~/.local/bin`, where the native `claude` installer puts the program. Then the agent session would end right after
-start. Therefore `start` checks the program BEFORE it creates a session and fails with `AGENT_BINARY_NOT_FOUND`, naming the program, the
-searched `PATH` and the setting. Fix it with the absolute path:
+short `PATH` without `~/.local/bin`, where the native `claude` installer puts the program. The service therefore finds the program
+itself and needs no setting. `start` resolves it BEFORE it creates a session, in this order:
+
+1. `tmuxAgents.agentBinaries.<kind>`: an optional override (absolute path, `~` allowed). It must be an executable file; there is no
+   fallback when it is not.
+2. The `PATH` of the daemon.
+3. The usual install locations of the kind. For `claude`: `~/.local/bin/claude`, `~/.claude/local/claude`,
+   `~/.npm-global/bin/claude`, `~/.bun/bin/claude`, `~/.volta/bin/claude`, `/usr/local/bin/claude`, `/opt/homebrew/bin/claude`
+   (`~` is the home directory of the daemon user). The first executable regular file wins; symlinks are followed.
+
+The agent runs with the resolved absolute path. When the directory of the program is not on the daemon `PATH`, the agent gets it first
+on its own `PATH` (through `/usr/bin/env`, so that wrappers and siblings of the program are found). The result is cached and checked
+again on every start; a failure is not cached, so a program installed later is found without a restart. The resolved path is logged
+once at INFO (`Agent program resolved`). If nothing is found, `start` fails with `AGENT_BINARY_NOT_FOUND`, which lists the searched
+`PATH` and locations. Only then set the override:
 
 ```json
 "tmuxAgents": { "agentBinaries": { "claude": "~/.local/bin/claude" } }
 ```
 
-The configured file must be executable (there is no fallback to the `PATH`). Without the setting the `PATH` is searched. Find the path with
-`which claude`. If a session still ends right after start (not logged in, wrong flags, crash), `start` marks it `lost` and the hint
-contains the exact command: run it by hand in the project directory to see the error.
+Find the path with `which claude`. If a session still ends right after start (not logged in, wrong flags, crash),
+`start` marks it `lost` and the hint contains the exact command: run it by hand in the project directory to see the error.
 
 ## Skill
 

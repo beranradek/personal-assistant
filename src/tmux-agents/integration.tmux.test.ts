@@ -156,6 +156,41 @@ describe.skipIf(!tmuxAvailable)("tmux integration (real tmux, fake agent)", { ti
     }
   });
 
+  it("finds the program in a well-known location outside the PATH and puts its directory first on the session PATH", async () => {
+    const installDir = path.join(base, "home", ".local", "bin");
+    const pathLog = path.join(base, "agent-path.txt");
+    fs.mkdirSync(installDir, { recursive: true });
+    const program = path.join(installDir, "wrapagent");
+    fs.writeFileSync(program, `#!/bin/sh\necho "$PATH" > "${pathLog}"\nexec node "$@"\n`, { mode: 0o755 });
+    const wrapKind: AgentKind = {
+      ...kinds["fake"]!,
+      id: "wrap",
+      command: ["wrapagent", FAKE_AGENT, messageLog, "600"],
+      knownLocations: [program],
+    };
+    const autoSocket = path.join(base, "auto.sock");
+    const tmuxAgents = TmuxAgentsConfigSchema.parse({
+      enabled: true, socketPath: autoSocket, allowedRoots: [root], minStartIntervalMs: 0, minSendIntervalMs: 0, stopGraceMs: 1_000,
+    });
+    const auto = createTmuxAgentService(
+      {
+        security: { workspace: path.join(base, "ws"), additionalWriteDirs: [], dataDir: path.join(base, "data-auto") },
+        tmuxAgents,
+      } as never,
+      { redact: createRedactor(CONSERVATIVE_PATTERNS), caller: "test", kinds: { wrap: wrapKind }, clock: fastClock },
+    );
+    if (!auto) throw new Error("service disabled");
+    try {
+      const started = await auto.start({ ...startInput("auto"), kind: "wrap" });
+      expect(started.state).toBe("idle");
+      expect(fs.readFileSync(pathLog, "utf-8").trim().split(":")[0]).toBe(installDir);
+      await auto.stop({ session: started.session, force: true, userConfirmed: true });
+    } finally {
+      auto.close();
+      await run("tmux", ["-S", autoSocket, "kill-server"]).catch(() => undefined);
+    }
+  });
+
   it("text ending in ';' arrives unchanged (tmux would eat it as a command separator)", async () => {
     const [session] = (await service.list({ includeStopped: false })).sessions;
     await service.send(sendInput(session!.session, "echo done;;", 8_000));

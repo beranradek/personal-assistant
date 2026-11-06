@@ -9,6 +9,11 @@ export interface AgentKind {
   id: string;
   /** Fixed argv of the agent. Contains no user text. */
   command: readonly string[];
+  /**
+   * Usual install locations of the program, searched after the `PATH` when it is not found there (a systemd user service
+   * often has a short `PATH`). `~/` means the home directory of the daemon. Absolute paths are used as they are.
+   */
+  knownLocations?: readonly string[];
   /** Extra argv per permission mode. */
   modes: Readonly<Record<PermissionMode, readonly string[]>>;
   /** Text typed (then Enter) for a graceful exit. A constant of the kind, never user input. */
@@ -30,6 +35,15 @@ export const KINDS: KindTable = {
     id: "claude",
     // `--setting-sources user`: project and local settings (hooks, allow rules) are not loaded (D20).
     command: ["claude", "--setting-sources", "user"],
+    knownLocations: [
+      "~/.local/bin/claude",
+      "~/.claude/local/claude",
+      "~/.npm-global/bin/claude",
+      "~/.bun/bin/claude",
+      "~/.volta/bin/claude",
+      "/usr/local/bin/claude",
+      "/opt/homebrew/bin/claude",
+    ],
     modes: {
       default: [],
       acceptEdits: ["--permission-mode", "acceptEdits"],

@@ -72,7 +72,7 @@ describe("TmuxAgentService", () => {
 
   function make(
     over: Record<string, unknown> = {},
-    extra: { kinds?: KindTable; registry?: Registry; workspace?: string; resolveBinary?: BinaryResolver } = {},
+    extra: { kinds?: KindTable; registry?: Registry; workspace?: string; resolveBinary?: BinaryResolver; agentBasePath?: string } = {},
   ): TmuxAgentService {
     const tmuxAgents = TmuxAgentsConfigSchema.parse({
       enabled: true,
@@ -96,6 +96,7 @@ describe("TmuxAgentService", () => {
         clock,
         // The production resolver checks the real file system; most tests do not care where `claude` lives.
         resolveBinary: extra.resolveBinary ?? ((_kind, command) => command),
+        ...(extra.agentBasePath !== undefined ? { agentBasePath: extra.agentBasePath } : {}),
         random: () => (n++ % 65536) / 65536,
         ...(extra.kinds ? { kinds: extra.kinds } : {}),
       },
@@ -143,9 +144,23 @@ describe("TmuxAgentService", () => {
     });
 
     it("starts the resolved binary with the flags of the kind and mode", async () => {
-      const service = make({}, { resolveBinary: (kind, command) => `/opt/agents/${kind}-${command}` });
+      const service = make({}, { resolveBinary: (kind, command) => `/opt/agents/${kind}-${command}`, agentBasePath: "/opt/agents" });
       const { fake } = await started(service, { permissionMode: "plan" });
       expect(fake.argv).toEqual(["/opt/agents/claude-claude", "--setting-sources", "user", "--permission-mode", "plan"]);
+    });
+
+    it("puts the directory of the resolved binary first on the PATH of the agent (through /usr/bin/env)", async () => {
+      const service = make({}, { resolveBinary: () => "/home/u/.local/bin/claude", agentBasePath: "/usr/bin:/bin" });
+      const { fake } = await started(service);
+      expect(fake.argv).toEqual([
+        "/usr/bin/env", "PATH=/home/u/.local/bin:/usr/bin:/bin", "/home/u/.local/bin/claude", "--setting-sources", "user",
+      ]);
+    });
+
+    it("does not wrap the agent when the directory of the binary is on the PATH already", async () => {
+      const service = make({}, { resolveBinary: () => "/usr/bin/claude", agentBasePath: "/usr/bin:/bin" });
+      const { fake } = await started(service);
+      expect(fake.argv).toEqual(["/usr/bin/claude", "--setting-sources", "user"]);
     });
 
     it("checks the binary of a recover before the old session is killed", async () => {

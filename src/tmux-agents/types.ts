@@ -36,6 +36,11 @@ export interface ServiceDeps {
   kinds: KindTable;
   /** Pre-flight check of the agent program (throws `AGENT_BINARY_NOT_FOUND`). */
   resolveBinary: BinaryResolver;
+  /**
+   * `PATH` of the environment that the tmux server gets. When set, the session `PATH` starts with the directory of the
+   * resolved program (new-session `-e`), unless that directory is on it already.
+   */
+  agentBasePath?: string;
   /** Kind ids that `start` accepts. */
   enabledKinds: readonly string[];
   redact: (text: string) => string;

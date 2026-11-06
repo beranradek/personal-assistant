@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { createLogger } from "../core/logger.js";
 import type { AuditEntry } from "./audit.js";
+import { agentEnvPath } from "./binary.js";
 import { TmuxAgentError } from "./errors.js";
 import { agentProgram, buildAgentArgv, getKind, resolvePermissionMode, type AgentKind, type PermissionMode } from "./kinds.js";
 import { buildSessionName, isSingleLine, validateProject, validateText } from "./names.js";
@@ -19,6 +20,8 @@ const log = createLogger("tmux-agents-service");
 
 // tmux formats (constants of ours, never built from input)
 const NEW_SESSION_FORMAT = "#{session_id} #{pane_id} #{session_created}";
+/** Runs the agent with an adjusted `PATH` (a constant of ours, never user input). */
+const ENV_PROGRAM = "/usr/bin/env";
 const LIST_FORMAT = "#{session_name} #{session_id} #{session_created}";
 const OWNER_FORMAT = "#{session_id} #{session_created}";
 const ATTACHED_FORMAT = "#{session_attached}";
@@ -247,7 +250,11 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
       writableDirs: [deps.config.security.workspace, ...deps.config.security.additionalWriteDirs],
     });
     // Pre-flight: no tmux call, registry record or kill of a replaced session happens when the program is missing.
-    const argv = buildAgentArgv(kinds, kind.id, mode, deps.resolveBinary(kind.id, agentProgram(kind)));
+    const binary = deps.resolveBinary(kind.id, agentProgram(kind));
+    const agentArgv = buildAgentArgv(kinds, kind.id, mode, binary);
+    // tmux ignores `new-session -e PATH=...` for the pane (verified on tmux 3.6), so the `PATH` is set by `env`.
+    const envPath = deps.agentBasePath === undefined ? undefined : agentEnvPath(binary, deps.agentBasePath);
+    const argv = envPath === undefined ? agentArgv : [ENV_PROGRAM, `PATH=${envPath}`, ...agentArgv];
     if (options.checkRate) await assertStartRate();
     return { project: input.project, kind, mode, cwd, argv };
   }

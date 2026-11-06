@@ -321,7 +321,8 @@ export const TmuxAgentsConfigSchema = z.object({
 ```
 
 The `claude` command is `["claude", "--setting-sources", "user"]` (project and local settings are not loaded, D20; verify that the flag
-exists and that this really skips project hooks: Task 9 / operator step 6). The binary is resolved from `PATH` of the allowlisted env.
+exists and that this really skips project hooks: Task 9 / operator step 6). The binary is found automatically (round 3b): `PATH` of the
+allowlisted env, then the `knownLocations` of the kind; `agentBinaries` is an optional override.
 `allowedRoots` should lie outside every directory Amy can write (`security.workspace`, `additionalWriteDirs`); otherwise the trust level
 equals `exec`. The socket path must stay below about 100 characters (unix socket limit); `loadConfig` checks it.
 
@@ -731,7 +732,8 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
    `KillMode=process` or accept that sessions die on restart (then reconcile marks them `lost`). Also check
    `~/.personal-assistant/bin/codex-watchdog.sh` does not kill `claude` or `tmux` processes.
 4. The skill `src/templates/skills/tmux-agents/SKILL.md` is copied to `<workspace>/.claude/skills/tmux-agents/SKILL.md` by
-   `ensureWorkspace` (listed in `SKILL_FILES`, D17 changed 2026-11-06); check it exists after the daemon restart. Make sure `tmux` and `claude` are on the `PATH` that the daemon sees. Add the alias to `~/.zshrc`
+   `ensureWorkspace` (listed in `SKILL_FILES`, D17 changed 2026-11-06); check it exists after the daemon restart. Make sure `tmux` is on
+   the `PATH` that the daemon sees (`claude` is found automatically, round 3b). Add the alias to `~/.zshrc`
    (can be done before the first start): `alias pa-tmux='tmux -S ~/.personal-assistant/data/tmux-agents/tmux.sock'`, then
    `source ~/.zshrc`. Use the real socket path when it differs.
 5. Try it from Telegram: "start a Claude agent for project X in ~/dev/X, ask it to list the TODOs, then stop it".
@@ -881,6 +883,23 @@ First live start: the session ended within 3 s because the systemd user `PATH` l
   the exact command to run by hand. If the session lives but the screen cannot be read, the hint says so.
 - Test seam `resolveBinary` (service tests use a fake runner and do not touch the file system); the integration test uses the real
   resolver with a bare `node`.
+
+### Round 3b: automatic discovery (2026-11-06)
+
+Radek: the application should find the program itself, no setting. Changed:
+
+- **Resolution order:** (1) optional override `agentBinaries.<kind>` (no fallback when invalid), (2) absolute kind command, (3) `PATH`
+  of the allowlisted env, (4) `knownLocations` of the kind (`kinds.ts`; for `claude`: `~/.local/bin`, `~/.claude/local`,
+  `~/.npm-global/bin`, `~/.bun/bin`, `~/.volta/bin`, `/usr/local/bin`, `/opt/homebrew/bin`; `~` is `os.homedir()`). The first executable
+  regular file wins, symlinks are followed and the symlink path is kept. Directory scans such as nvm are skipped on purpose (cost and
+  safety); the override covers them.
+- **Cache:** per resolver instance, validated (X_OK) on every use, dropped when the file is gone; a failure is never cached.
+  `onResolved` logs the path once at INFO (`Agent program resolved`, path and source only).
+- **Error:** `AGENT_BINARY_NOT_FOUND` lists the searched `PATH` and the known locations.
+- **`PATH` for the agent:** `agentEnvPath` puts the directory of the program first. tmux 3.6 IGNORES `new-session -e PATH=...` for the
+  pane (`-e FOO=bar` works; verified by experiment), so the agent is started as `/usr/bin/env PATH=<path> <program> ...`, only when the
+  directory is not on the daemon `PATH` already and the program path is absolute.
+- Integration test: a program in a well-known location outside the `PATH` starts and sees its directory first on `PATH`.
 
 ## Review log (2026-11-05)
 

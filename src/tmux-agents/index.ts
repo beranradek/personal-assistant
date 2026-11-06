@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Config } from "../core/types.js";
 import { createAuditLog, type AuditLog } from "./audit.js";
+import { createLogger } from "../core/logger.js";
 import { createBinaryResolver, type BinaryResolver } from "./binary.js";
 import { KINDS, type KindTable } from "./kinds.js";
 import { createRegistry, type Registry } from "./registry.js";
@@ -10,6 +11,8 @@ import { createService } from "./service.js";
 import { realClock, type Clock, type TmuxAgentService } from "./types.js";
 
 export type { TmuxAgentService } from "./types.js";
+
+const log = createLogger("tmux-agents");
 
 export interface CreateTmuxAgentServiceOptions {
   /** Redaction of screen output (the daemon passes the redactor it already built). */
@@ -25,6 +28,8 @@ export interface CreateTmuxAgentServiceOptions {
   random?: () => number;
   /** Replaces the file system check of the agent program (tests with a fake runner). */
   resolveBinary?: BinaryResolver;
+  /** `PATH` of the tmux server environment (default: the `PATH` of this process, which the real runner passes on). */
+  agentBasePath?: string;
 }
 
 /**
@@ -46,7 +51,13 @@ export function createTmuxAgentService(
     registry: options.registry ?? createRegistry({ dir }),
     audit: options.audit ?? createAuditLog({ dir, caller: options.caller }),
     kinds,
-    resolveBinary: options.resolveBinary ?? createBinaryResolver(cfg),
+    resolveBinary:
+      options.resolveBinary ??
+      createBinaryResolver(cfg, {
+        kinds,
+        onResolved: (kind, file, source) => log.info({ kind, path: file, source }, "Agent program resolved"),
+      }),
+    agentBasePath: options.agentBasePath ?? process.env["PATH"] ?? "",
     enabledKinds: options.kinds ? Object.keys(kinds) : cfg.enabledKinds,
     redact: options.redact,
     clock: options.clock ?? realClock,

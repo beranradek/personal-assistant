@@ -75,6 +75,6 @@ The result of a failed call has `ok: false` and `error.code`. Common codes: `BUS
 `WAITING_TRUST` (ask the user), `UNKNOWN_STATE` (read the screen, see above), `ROOT_NOT_ALLOWED` and `ROOT_NOT_TRUSTED`
 (the directory is not allowed in settings: compare it with `allowedRoots`, then tell the user), `TOO_MANY_SESSIONS`
 (stop a session first), `RATE_LIMITED` (wait a moment), `NOT_FOUND` (the session ended: use `agent_session_list`),
-`AGENT_BINARY_NOT_FOUND` (the agent program is not installed or not on the PATH of the daemon: tell the user to set
-`tmuxAgents.agentBinaries`; do not try to start it another way). If `start` reports that the session ended right after start,
+`AGENT_BINARY_NOT_FOUND` (the agent program was not found on the PATH or in the usual install locations: tell the user to install
+it, or to set `tmuxAgents.agentBinaries`; do not try to start it another way). If `start` reports that the session ended right after start,
 tell the user what the hint says; do not retry in a loop.
