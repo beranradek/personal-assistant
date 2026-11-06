@@ -16,7 +16,7 @@ import type { StartInput } from "./schemas.js";
 import {
   compactBlankLines,
   detectState,
-  diffNewOutput,
+  extractNewOutput,
   sanitizeScreen,
   tailLines,
   wrapUntrusted,
@@ -651,7 +651,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
         try {
           const waited = await waitForIdle(record, before, budget);
-          const output = wrapUntrusted(compactBlankLines(diffNewOutput(before, waited.screen).text), redact);
+          const output = wrapUntrusted(extractNewOutput(before, waited.screen, text).text, redact);
           return {
             session: record.name, sent: true, mode, state: waited.state, waited: true, timedOut: waited.timedOut,
             newOutput: { untrusted: true, ...output },

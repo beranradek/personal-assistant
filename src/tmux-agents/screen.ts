@@ -87,6 +87,63 @@ export function diffNewOutput(before: string, after: string): { text: string; ov
   return { text: a.join("\n"), overlap: false };
 }
 
+// The bottom of a Claude Code screen is chrome that changes between captures: optional hint lines (`◐ medium · /effort`,
+// `tmux detected ...`, `tmux focus-events off ...`), then the prompt box `rule / ❯ text / rule` and a footer (`⏵⏵ ...`,
+// `paste again to expand`). Real captures: Claude Code 2.1.319.
+const CLAUDE_HINT_LINE = /^\s*(?:tmux \S|paste again to expand|\? for shortcuts|[◐◑◒◓]\s.*\/effort\s*$)/;
+const ECHO_NEEDLE_CHARS = 50;
+const TAIL_FALLBACK_LINES = 40;
+
+/** Drop the trailing prompt box with its footer and the blank or hint lines right above it. Lines without a box are kept. */
+function stripChrome(lines: string[]): string[] {
+  for (let i = lines.length - 2; i >= 1; i--) {
+    const line = lines[i]!;
+    if (!CLAUDE_EMPTY_PROMPT.test(line) && !CLAUDE_TEXT_PROMPT.test(line)) continue;
+    if (!CLAUDE_RULE.test(lines[i - 1]!) || !CLAUDE_RULE.test(lines[i + 1]!)) continue;
+    let end = i - 1;
+    while (end > 0 && (lines[end - 1]!.trim() === "" || CLAUDE_HINT_LINE.test(lines[end - 1]!))) end--;
+    return lines.slice(0, end);
+  }
+  return lines;
+}
+
+/** Index of the line after the echoed message that was sent last, or -1 when the echo is not on the screen. */
+function replyStart(lines: string[], sentText: string): number {
+  const sent = sentText.trim().split("\n");
+  const needle = sent[0]!.trim().slice(0, ECHO_NEEDLE_CHARS);
+  if (!needle) return -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!CLAUDE_TEXT_PROMPT.test(lines[i]!) || !lines[i]!.includes(needle)) continue;
+    // A message with blank lines inside: skip as many lines as were sent. Otherwise the echo (possibly wrapped) ends at the first
+    // blank line.
+    if (sent.some((line) => line.trim() === "")) return Math.min(i + sent.length, lines.length);
+    let end = i + 1;
+    while (end < lines.length && lines[end]!.trim() !== "") end++;
+    return end;
+  }
+  return -1;
+}
+
+export interface NewOutput {
+  text: string;
+  /** `echo`: after our echoed message; `overlap`: scrolled-screen diff; `tail`: last lines of the screen (nothing else matched). */
+  method: "echo" | "overlap" | "tail";
+}
+
+/**
+ * What the agent printed after we sent `sentText`: the text after the last echoed copy of the message, without the prompt box,
+ * footer and hint lines at the bottom (the earlier turns and the banner are above the echo). Falls back to the overlap diff of the
+ * two screens and then to the screen tail. Blank runs are compacted.
+ */
+export function extractNewOutput(before: string, after: string, sentText: string): NewOutput {
+  const afterLines = stripChrome(splitTrimmed(after));
+  const start = replyStart(afterLines, sentText);
+  if (start >= 0) return { text: compactBlankLines(afterLines.slice(start).join("\n")), method: "echo" };
+  const diff = diffNewOutput(stripChrome(splitTrimmed(before)).join("\n"), afterLines.join("\n"));
+  if (diff.overlap) return { text: compactBlankLines(diff.text), method: "overlap" };
+  return { text: compactBlankLines(afterLines.slice(-TAIL_FALLBACK_LINES).join("\n")), method: "tail" };
+}
+
 export interface UntrustedOutput {
   output: string;
   redacted: boolean;

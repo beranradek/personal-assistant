@@ -13,7 +13,7 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import { TmuxAgentError } from "./errors.js";
-import { compactBlankLines, detectState, diffNewOutput, sanitizeScreen, tailLines, wrapUntrusted } from "./screen.js";
+import { compactBlankLines, detectState, diffNewOutput, extractNewOutput, sanitizeScreen, tailLines, wrapUntrusted } from "./screen.js";
 
 const fixture = (name: string) => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf-8");
 const detect = (text: string) => detectState("claude@1", text);
@@ -193,6 +193,102 @@ describe("diffNewOutput", () => {
 
   it("returns the whole after text without overlap", () => {
     expect(diffNewOutput("a\nb", "x\ny")).toEqual({ text: "x\ny", overlap: false });
+  });
+});
+
+// Screens rebuilt from the real 4-message conversation of 2026-11-06 (Claude Code 2.1.319, pane 200 wide): banner, echoed messages,
+// replies, then a padded bottom with a hint line and the prompt box. Texts are shortened where it does not matter.
+describe("extractNewOutput (real conversation shapes)", () => {
+  const RULE = "─".repeat(120);
+  const FOOTER = "  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent";
+  const BANNER = [
+    " ▐▛███▛█   Claude Code v2.1.319",
+    "▝▜██████▀  Opus Plan · Claude Team",
+    " ▝▝   ▝▝   ~/dev/personal-assistant",
+    "",
+  ];
+  const EFFORT = `${" ".repeat(100)}◐ medium · /effort`;
+  const TMUX_HINT = `${" ".repeat(60)}tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scroll`;
+  const FOCUS_HINT = `${" ".repeat(60)}tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach`;
+  const box = (footer = FOOTER) => [RULE, `❯ ${" ".repeat(60)}`, RULE, footer];
+  const MSG1 = "Zpráva 1: kolik souborů má adresář src/tmux-agents a který z nich je největší? Odpověz stručně.";
+  const MSG2 = "Zpráva 2: a který největší soubor je mezi těmi, které nejsou testy (bez .test.ts)?";
+  const MSG3 = ["Zpráva 3 je na více řádků:", "první řádek: napiš slovo ANO,", "druhý řádek: napiš kolik řádků měla zpráva."];
+  const MSG4 = "Zpráva 4, poslední: shrň jednou větou, na co jsem se tě ptala ve zprávách 1 až 3.";
+  const done = (verb: string, secs: number) => `✻ ${verb} for ${secs}s · done 14:21`;
+  const REPLY1 = ["  Ran 1 shell command", "", "● Adresář má 37 souborů. Největší je service.test.ts.", "", done("Churned", 3)];
+  const REPLY2 = ["  Searched for 1 pattern", "", "● Největší soubor bez testů je service.ts.", "", done("Sautéed", 2)];
+  const REPLY3 = ["  Searched for 1 pattern", "", "● ANO", "  3", "  Funkce sloučí řádky.", "", done("Cogitated", 4)];
+  const REPLY4 = ["● Ptala ses na soubory a na zprávu 3.", "", "  Není zač, Amy.", "", done("Worked", 1)];
+  const blanks = (n: number) => Array<string>(n).fill("");
+  const screen = (...parts: string[][]) => parts.flat().join("\n");
+  const startup = screen(BANNER, blanks(30), [EFFORT], box());
+  const turn1 = [`❯ ${MSG1}${" ".repeat(20)}`, "", ...REPLY1, ""];
+  const turn2 = [`❯ ${MSG2}${" ".repeat(20)}`, "", ...REPLY2, ""];
+  const turn3 = [...MSG3.map((l, i) => (i === 0 ? `❯ ${l}` : `  ${l}`)), "", ...REPLY3, ""];
+  const turn4 = [`❯ ${MSG4}`, "", ...REPLY4, ""];
+
+  it("message 1: only the reply, no banner, no echo, no hint line, no prompt box", () => {
+    const after = screen(BANNER, turn1, blanks(20), [EFFORT], box());
+    expect(extractNewOutput(startup, after, MSG1)).toEqual({ text: REPLY1.join("\n"), method: "echo" });
+  });
+
+  it("message 2: earlier turns are not repeated (hint line `tmux detected` is dropped)", () => {
+    const before = screen(BANNER, turn1, blanks(20), [EFFORT], box());
+    const after = screen(BANNER, turn1, turn2, blanks(10), [TMUX_HINT], box());
+    expect(extractNewOutput(before, after, MSG2)).toEqual({ text: REPLY2.join("\n"), method: "echo" });
+  });
+
+  it("message 3 (multi-line paste): echo spans several lines, `paste again to expand` footer is dropped", () => {
+    const before = screen(BANNER, turn1, turn2, blanks(10), [TMUX_HINT], box());
+    const after = screen(BANNER, turn1, turn2, turn3, blanks(5), [FOCUS_HINT], box("  paste again to expand"));
+    expect(extractNewOutput(before, after, MSG3.join("\n"))).toEqual({ text: REPLY3.join("\n"), method: "echo" });
+  });
+
+  it("message 4: bottom is only rule, prompt and footer", () => {
+    const before = screen(BANNER, turn1, turn2, turn3, blanks(5), [FOCUS_HINT], box("  paste again to expand"));
+    const after = screen(BANNER, turn1, turn2, turn3, turn4, box());
+    expect(extractNewOutput(before, after, MSG4)).toEqual({ text: REPLY4.join("\n"), method: "echo" });
+  });
+
+  it("uses the LAST echo when the same message was sent twice", () => {
+    const after = screen(BANNER, turn1, turn1.slice(0, 1), ["", "● Druhá odpověď.", ""], box());
+    expect(extractNewOutput("", after, MSG1).text).toBe("● Druhá odpověď.");
+  });
+
+  it("a multi-line message with a blank line inside is skipped by line count", () => {
+    const sent = "Řádek A\n\nŘádek C";
+    const after = screen(BANNER, ["❯ Řádek A", "", "  Řádek C", "", "● Hotovo.", ""], box());
+    expect(extractNewOutput("", after, sent).text).toBe("● Hotovo.");
+  });
+
+  it("a wrapped echo line (no blank inside the echo) ends at the first blank line", () => {
+    const after = screen(BANNER, [`❯ ${MSG1.slice(0, 80)}`, `  ${MSG1.slice(80)}`, "", "● Odpověď.", ""], box());
+    expect(extractNewOutput("", after, MSG1).text).toBe("● Odpověď.");
+  });
+
+  it("no reply yet: empty text", () => {
+    const after = screen(BANNER, [`❯ ${MSG1}`, ""], box());
+    expect(extractNewOutput("", after, MSG1)).toEqual({ text: "", method: "echo" });
+  });
+
+  it("echo not found: falls back to the overlap diff, still without the chrome", () => {
+    const before = screen(["a", "b"], box());
+    const after = screen(["a", "b", "c", "d"], [EFFORT], box());
+    expect(extractNewOutput(before, after, "něco jiného")).toEqual({ text: "c\nd", method: "overlap" });
+  });
+
+  it("echo and overlap not found: the screen tail without chrome", () => {
+    const lines = Array.from({ length: 60 }, (_, i) => `řádek ${i}`);
+    const after = screen(lines, box());
+    const result = extractNewOutput("zcela jiné\nřádky", after, "nic");
+    expect(result.method).toBe("tail");
+    expect(result.text.split("\n")).toHaveLength(40);
+    expect(result.text.endsWith("řádek 59")).toBe(true);
+  });
+
+  it("a screen without a prompt box is kept as it is", () => {
+    expect(extractNewOutput("", "❯ ahoj\n\n● Ano.", "ahoj").text).toBe("● Ano.");
   });
 });
 

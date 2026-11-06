@@ -20,6 +20,9 @@ const BUSY = fixture("claude-busy.txt");
 const PERMISSION = fixture("claude-permission.txt");
 const TRUST = fixture("claude-trust.txt");
 const EMPTY = fixture("claude-empty.txt");
+// A real screen after a message "work": the echoed message, the reply, a done line and the prompt box.
+const PROMPT_BOX = ["─".repeat(60), "❯", "─".repeat(60), "  ⏵⏵ auto mode on (shift+tab to cycle)"].join("\n");
+const answerScreen = (reply: string, secs = 3) => `❯ work\n\n${reply}\n\n✻ Worked for ${secs}s · done 12:35\n\n${PROMPT_BOX}\n`;
 /** A dialog with wording the detector does not know: only its menu shape is recognized. */
 const UNKNOWN_MENU = "Some new dialog\n\n  ❯ 1. Allow once\n    2. Deny\n";
 
@@ -732,7 +735,7 @@ describe("TmuxAgentService", () => {
         polls++;
         if (polls <= 1) return IDLE; // the capture before sending
         if (polls <= 3) return BUSY;
-        return `${IDLE}\n● reply with sk-abcdefghijklmnopqrstuvwxyz\n\n✻ Worked for 3s · done 12:35\n❯ \n`;
+        return answerScreen("● reply with sk-abcdefghijklmnopqrstuvwxyz");
       };
       const result = await service.send(sendInput(name, "work", { waitForIdleMs: 30_000 }));
       expect(result).toMatchObject({ waited: true, timedOut: false, state: "idle" });
@@ -856,20 +859,23 @@ describe("TmuxAgentService", () => {
     it("waitForIdle does not take the echoed message next to an empty prompt for the answer", async () => {
       const service = make();
       const { name, fake } = await started(service);
-      const echo = `${IDLE}\n> work\n❯ \n`;
-      const answer = `${IDLE}\n> work\n● the real answer\n\n✻ Worked for 3s · done 12:35\n❯ \n`;
+      const echo = `❯ work\n\n${PROMPT_BOX}\n`;
+      const answer = answerScreen("● the real answer");
       const screens = [IDLE, echo, BUSY, answer];
       let polls = 0;
       fake.screen = () => screens[Math.min(polls++, screens.length - 1)]!;
       const result = await service.send(sendInput(name, "work", { waitForIdleMs: 30_000 }));
       expect(result).toMatchObject({ timedOut: false, state: "idle" });
       expect(result.newOutput!.output).toContain("the real answer");
+      // Only the reply: no echoed message, no prompt box, no footer.
+      expect(result.newOutput!.output).not.toContain("❯");
+      expect(result.newOutput!.output).not.toContain("auto mode");
     });
 
     it("waitForIdle accepts a fast answer when the screen is stable across two polls", async () => {
       const service = make();
       const { name, fake } = await started(service);
-      const answer = `${IDLE}\n> work\n● quick answer\n\n✻ Worked for 1s · done 12:35\n❯ \n`;
+      const answer = answerScreen("● quick answer", 1);
       let polls = 0;
       fake.screen = () => (polls++ === 0 ? IDLE : answer);
       const t0 = clock.now();

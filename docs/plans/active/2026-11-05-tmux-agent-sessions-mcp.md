@@ -920,6 +920,22 @@ Claude shows a predicted next prompt (`❯ Díky, to je vše.`). The empty-promp
 - **Output size:** `read` and `newOutput` pass through `compactBlankLines` (leading blank lines dropped, runs collapsed to one). A pane is
   padded to its full height, which cost about 35 blank lines on a short conversation.
 
+## Review fixes, round 5: `newOutput` returns only the new reply (2026-11-06)
+
+A real 4-message conversation showed that `newOutput` repeated the whole screen (banner and all earlier turns) from the second message on:
+the overlap diff compares the end of the old screen with the start of the new one, but the bottom of the screen (hint lines, prompt
+box, footer) changes between captures, so no overlap was found. Changed (`extractNewOutput` in `screen.ts`, used by `send`):
+
+- The reply is the text after the LAST echoed copy of the sent message (`❯ <first 50 characters of the first line>`). A message with
+  blank lines inside is skipped by its line count; otherwise the (possibly wrapped) echo ends at the first blank line.
+- The trailing chrome is dropped: the last `rule / ❯ / rule` prompt box with its footer (`⏵⏵ ...`, `paste again to expand`) and the blank
+  or hint lines right above it (`◐ ... /effort`, `tmux detected ...`, `tmux focus-events off ...`, `? for shortcuts`).
+- Fallbacks when the echo is not on the screen (for example it scrolled out of the 200-line capture): the overlap diff of the two screens
+  (both without chrome), then the last 40 lines. The method (`echo`, `overlap`, `tail`) is internal; the tool result is unchanged.
+- Tests use screens rebuilt from the real conversation (messages 1 to 4, multi-line paste with `paste again to expand`).
+- Known limit: the hint and footer patterns are those of Claude Code 2.1.319; an unknown hint line directly above the box stays in the
+  output (harmless).
+
 ## Review log (2026-11-05)
 
 An independent adversarial review found these problems; each is applied as listed.
