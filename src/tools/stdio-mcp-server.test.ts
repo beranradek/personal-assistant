@@ -599,4 +599,71 @@ describe("createStdioMcpServer", () => {
       expect(parsed.byOutcome).toEqual({ success: 1 });
     });
   });
+
+  describe("tmux agent tools", () => {
+    const TMUX_NAMES = [
+      "agent_session_start", "agent_session_list", "agent_session_status", "agent_session_read", "agent_session_send",
+      "agent_session_interrupt", "agent_session_stop", "agent_session_recover", "agent_session_attach",
+    ];
+
+    function makeTmuxService() {
+      const fn = () => vi.fn().mockResolvedValue({ session: "pa-x-1a2b" });
+      return {
+        start: fn(), list: fn(), status: fn(), read: fn(), send: fn(), interrupt: fn(), stop: fn(), recover: fn(), attach: fn(),
+      };
+    }
+
+    it("are absent without deps.tmuxAgents (disabled means absent)", async () => {
+      const result = await getListHandler()({});
+      expect(result.tools.some((t: { name: string }) => t.name.startsWith("agent_session_"))).toBe(false);
+      const call = await callTool("agent_session_list", {});
+      expect(call.isError).toBe(true);
+      expect(JSON.parse(call.content[0].text).error).toMatch(/Unknown tool/);
+    });
+
+    it("are listed with valid input schemas when deps.tmuxAgents is set", async () => {
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ tmuxAgents: makeTmuxService() as never }));
+      const result = await getListHandler()({});
+      const tmuxTools = result.tools.filter((t: { name: string }) => t.name.startsWith("agent_session_"));
+      expect(tmuxTools.map((t: { name: string }) => t.name)).toEqual(TMUX_NAMES);
+      for (const tool of tmuxTools) {
+        expect(tool.inputSchema.type).toBe("object");
+        expect(tool.annotations).toBeDefined();
+      }
+    });
+
+    it("each tool call reaches the service", async () => {
+      const service = makeTmuxService();
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ tmuxAgents: service as never }));
+      const args: Record<string, Record<string, unknown>> = {
+        start: { project: "p", directory: "/x" },
+        list: {},
+        status: { session: "pa-x-1a2b" },
+        read: { session: "pa-x-1a2b" },
+        send: { session: "pa-x-1a2b", text: "hi" },
+        interrupt: { session: "pa-x-1a2b" },
+        stop: { session: "pa-x-1a2b" },
+        recover: { session: "pa-x-1a2b", userConfirmed: true },
+        attach: { session: "pa-x-1a2b" },
+      };
+      for (const [name, input] of Object.entries(args)) {
+        const result = await callTool(`agent_session_${name}`, input);
+        expect(result.isError).toBeUndefined();
+        expect(JSON.parse(result.content[0].text)).toMatchObject({ ok: true });
+        expect(service[name as keyof typeof service]).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("invalid arguments give isError and do not reach the service", async () => {
+      const service = makeTmuxService();
+      handlers.clear();
+      createStdioMcpServer(makeDeps({ tmuxAgents: service as never }));
+      const result = await callTool("agent_session_status", { session: "pa-x" });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
+      expect(service.status).not.toHaveBeenCalled();
+    });
+  });
 });

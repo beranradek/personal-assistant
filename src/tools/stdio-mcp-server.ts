@@ -11,6 +11,7 @@
  *   - cron_create / cron_update / cron_remove — mutate scheduled jobs
  *   - exec — run background commands
  *   - process — check background process status
+ *   - agent_session_* — tmux project agent sessions (only when tmuxAgents.enabled)
  *
  * Usage: pa mcp-server [--config <path>]
  */
@@ -34,6 +35,8 @@ import {
   type EpisodeMcpDeps,
 } from "./episode-mcp-tools.js";
 import type { CalendarRequest, GmailRequest, SlackRequest } from "../integ-api/mcp-proxy.js";
+import { TMUX_TOOLS, findTmuxTool, toMcpDefinition } from "../tmux-agents/tools.js";
+import type { TmuxAgentService } from "../tmux-agents/types.js";
 
 export interface StdioMcpServerDeps {
   search: (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
@@ -49,6 +52,8 @@ export interface StdioMcpServerDeps {
   handleIntegGmail?: (args: GmailRequest) => Promise<unknown>;
   handleIntegCalendar?: (args: CalendarRequest) => Promise<unknown>;
   handleIntegSlack?: (args: SlackRequest) => Promise<unknown>;
+  /** Present only when `tmuxAgents.enabled`: registers the `agent_session_*` tools. */
+  tmuxAgents?: TmuxAgentService;
 }
 
 const MEMORY_LINT_TOOL_DEFINITION = {
@@ -262,6 +267,7 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
     }),
     ...(deps.episodeDeps ? EPISODE_TOOL_DEFINITIONS : []),
     ...(deps.handleIntegList && deps.handleIntegGmail && deps.handleIntegCalendar && deps.handleIntegSlack ? INTEG_TOOL_DEFINITIONS : []),
+    ...(deps.tmuxAgents ? TMUX_TOOLS.map(toMcpDefinition) : []),
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -432,7 +438,9 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
         return handleEpisodeStats(args as Record<string, unknown>, deps.episodeDeps!);
       case "episode_write":
         return handleEpisodeWrite(args as Record<string, unknown>, deps.episodeDeps!);
-      default:
+      default: {
+        const tmuxTool = deps.tmuxAgents ? findTmuxTool(name) : undefined;
+        if (tmuxTool && deps.tmuxAgents) return tmuxTool.run(deps.tmuxAgents, args);
         return {
           content: [
             {
@@ -442,6 +450,7 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
           ],
           isError: true,
         };
+      }
     }
   });
 
