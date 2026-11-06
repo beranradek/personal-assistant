@@ -1,0 +1,13 @@
+> list the TODOs in this project
+
+● There are 3 TODO markers:
+  - src/a.ts:10 TODO refactor
+  - src/b.ts:4 TODO tests
+  - README.md:2 TODO docs
+
+✻ Worked for 12s · done 12:34
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  ? for shortcuts

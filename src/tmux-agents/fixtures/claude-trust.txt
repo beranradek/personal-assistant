@@ -1,0 +1,8 @@
+╭──────────────────────────────────────────╮
+│ Do you trust the files in this folder?   │
+│                                          │
+│ /home/user/agent-projects/demo           │
+│                                          │
+│ ❯ 1. Yes, proceed                        │
+│   2. No, exit                            │
+╰──────────────────────────────────────────╯

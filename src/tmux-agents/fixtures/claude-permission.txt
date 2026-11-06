@@ -1,0 +1,11 @@
+● Bash(rm -rf build)
+
+╭──────────────────────────────────────────╮
+│ Bash command                             │
+│   rm -rf build                           │
+│                                          │
+│ Do you want to proceed?                  │
+│ ❯ 1. Yes                                 │
+│   2. No, and tell Claude what to do      │
+╰──────────────────────────────────────────╯
+  Esc to cancel

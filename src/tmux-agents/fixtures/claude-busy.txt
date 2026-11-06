@@ -1,0 +1,10 @@
+> list the TODOs in this project
+
+● I will search the project for TODO markers.
+
+* Discombobulating… (5s · ↓ 104 tokens · esc to interrupt)
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  ? for shortcuts                                esc to interrupt
