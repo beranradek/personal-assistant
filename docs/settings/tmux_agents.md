@@ -139,8 +139,19 @@ the viewport may be scrolled away from its end. `send` therefore reads the answe
   message typed by someone else in the pane, an older answer or the answer of another session is never returned.
 - No prompt record (hooks did not run, a slash command) or no `Stop` record (the turn was interrupted) gives the screen fallback with
   `source: "screen"`. The result still passes through the redactor and is marked `untrusted`.
-- Both files are deleted when the session ends. The answer file holds agent output in clear text: it is private to the daemon user
-  (directory `0700`, settings `0600`).
+- With hooks `send` waits for the `Stop` record of its own `prompt_id` (until `waitForIdleMs` ends), not for an idle screen: the
+  screen can look idle before an answer starts. The screen only ends the wait early when the agent waits for a person, when
+  there is no prompt record for 2 s (hooks off, slash command) or when the turn was interrupted (idle 10 s, no `Stop`). After the
+  answer it waits (up to 5 s) until the screen is not `busy`, because the hook runs just before the repaint.
+- After typing, `send` checks that the message left the input box and presses Enter again (up to 3 times) while it is still there.
+  Claude Code can take a fast burst of characters for a paste and then read the Enter as a newline.
+- The two appends of one record run under `flock` where it exists (hooks can run at the same time). A broken line is skipped, and
+  `send` then falls back to the screen.
+- The files are deleted when the session ends. Files of sessions that ended in another way (killed outside the service, tmux server
+  restart, a failed start) are swept by the next `list` or `reconcile` once they are older than 2 minutes. The answer file holds agent
+  output in clear text: it is private to the daemon user (directory `0700`, files `0600`, hook runs with `umask 077`).
+- The answer is cut to the last 64 KB like every output (`truncated: true`). Two sends with identical text at the same time
+  (`queueWhileBusy`) can both match the first prompt: send one message at a time and wait for its answer.
 - Verified with real Claude Code 2.1.319 in tmux: `PA_E2E_REAL_CLAUDE=1 PA_E2E_PROJECT_DIR=<trusted project> npx vitest run
   src/tmux-agents/real-claude.e2e.test.ts` (a 150-line answer comes back complete; the next answer is not mixed with it).
 - The hook input fields come from the Claude Code docs (hooks reference: `Stop` has `last_assistant_message`). The transcript file

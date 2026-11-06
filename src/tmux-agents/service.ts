@@ -17,6 +17,7 @@ import {
   compactBlankLines,
   detectState,
   extractNewOutput,
+  promptBoxText,
   SCROLLED_AWAY_MARKER,
   sanitizeScreen,
   tailLines,
@@ -29,6 +30,7 @@ import {
   findAnswer,
   readAnswerRecords,
   removeAnswerFiles,
+  sweepAnswerFiles,
   writeAnswerSettings,
 } from "./answers.js";
 import type { AttachResult, ServiceDeps, SessionSummary, StartResult, StopResult, TmuxAgentService } from "./types.js";
@@ -46,6 +48,10 @@ const ATTACHED_FORMAT = "#{session_attached}";
 /** Timings (milliseconds). */
 const START_SETTLE_MS = 3_000;
 const KEY_GAP_MS = 150;
+/** After typing: wait this long, then check that the message left the input box (see `ensureSubmitted`). */
+const SUBMIT_CHECK_MS = 700;
+const SUBMIT_RETRIES = 3;
+const SUBMIT_MATCH_CHARS = 30;
 const WAIT_POLL_MS = 1_000;
 const STOP_POLL_MS = 500;
 const RECOVER_INTERRUPT_WAIT_MS = 1_000;
@@ -54,9 +60,13 @@ const REAP_INTERVAL_MS = 60_000;
 /** Screen lines captured for state detection (status) and for send/wait diffs. */
 const STATUS_CAPTURE_LINES = 60;
 const SEND_CAPTURE_LINES = 200;
-/** How long `send` waits for the `Stop` hook record after the screen went idle (the hook runs just after the last line). */
-const ANSWER_GRACE_MS = 3_000;
-const ANSWER_POLL_MS = 250;
+/** After the answer arrived: up to SETTLE_POLLS x SETTLE_POLL_MS for the screen to stop showing `busy`. */
+const SETTLE_POLLS = 20;
+const SETTLE_POLL_MS = 250;
+/** An idle screen without any prompt record for this long: the hooks do not run or the message was no prompt (slash command). */
+const PROMPT_RECORD_GRACE_MS = 2_000;
+/** An idle screen with a prompt record but no `Stop` record for this long: the turn was interrupted (no Stop hook then). */
+const PENDING_IDLE_GRACE_MS = 10_000;
 const SCROLL_TO_BOTTOM_ATTEMPTS = 2;
 const SCROLL_SETTLE_MS = 150;
 const NEW_SESSION_ATTEMPTS = 3;
@@ -324,7 +334,16 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     for (let attempt = 0; attempt < NEW_SESSION_ATTEMPTS; attempt++) {
       const name = buildSessionName(p.project, random);
       const dataDir = deps.config.security.dataDir;
-      const settingsPath = p.kind.answerHooks ? await writeAnswerSettings(dataDir, name) : undefined;
+      let settingsPath: string | undefined;
+      if (p.kind.answerHooks) {
+        try {
+          settingsPath = await writeAnswerSettings(dataDir, name);
+        } catch (err) {
+          // The settings file of this name exists: another session uses the name. Pick another name; never touch its files.
+          if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+          throw err;
+        }
+      }
       let result: TmuxRunResult;
       try {
         result = await runner.run([
@@ -386,10 +405,12 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
       );
     } catch (err) {
       await killQuietly(created.sessionId);
+      await removeAnswerFiles(deps.config.security.dataDir, created.name);
       throw err;
     }
     if (overLimit) {
       await killQuietly(created.sessionId);
+      await removeAnswerFiles(deps.config.security.dataDir, created.name);
       throw new TmuxAgentError("TOO_MANY_SESSIONS", `At most ${cfg.maxSessions} agent sessions may run`);
     }
     return record;
@@ -444,6 +465,9 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     if (corrupt) return undefined;
     const result = reconcile(records, await listLive(), prefix);
     const lost = new Set(result.markLost.map((r) => r.name));
+    // Sessions that ended without `markEnded` (killed outside the service, tmux server restart) leave their files behind.
+    const running = new Set(records.filter((r) => isRunning(r) && !lost.has(r.name)).map((r) => r.name));
+    await sweepAnswerFiles(deps.config.security.dataDir, running, Date.now()).catch(() => undefined);
     const hasOldRecords = pruneTerminal(records, clock.now()).length !== records.length;
     if (lost.size > 0 || hasOldRecords) {
       await registry.mutate((current) => ({
@@ -537,6 +561,28 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   }
 
   /**
+   * Claude Code can take a fast burst of typed characters for a paste and then treats the Enter that follows as a newline: the
+   * message stays in the input box and nothing happens (the agent looks idle, the caller waits for an answer that never comes).
+   * Check the box a moment after typing and press Enter again while our text is still in it. An empty box, or other text in it, means
+   * the message was submitted, so Enter is never repeated then.
+   */
+  async function ensureSubmitted(record: SessionRecord, text: string): Promise<void> {
+    const words = (value: string) => value.replace(/\s+/g, " ").trim();
+    const prefix = words(text).slice(0, SUBMIT_MATCH_CHARS);
+    const placeholder = !isSingleLine(text);
+    for (let attempt = 0; attempt < SUBMIT_RETRIES; attempt++) {
+      await clock.sleep(SUBMIT_CHECK_MS);
+      const box = promptBoxText(await capture(record, STATUS_CAPTURE_LINES));
+      if (box === undefined) return;
+      const shown = words(box);
+      const unsent = prefix !== "" && (shown.startsWith(prefix) || (placeholder && /^\[Pasted text\b/.test(shown)));
+      if (!unsent) return;
+      log.warn({ session: record.name, attempt: attempt + 1 }, "Typed message still in the input box; pressing Enter again");
+      await must(["send-keys", "-t", record.tmuxPaneId, "Enter"]);
+    }
+  }
+
+  /**
    * Type text into the pane. Single lines are typed with `send-keys -l`; multi-line text is pasted from a tmux buffer
    * (text goes through stdin, never argv). tmux eats a trailing ';' of an argument, so those are sent as hex keys.
    */
@@ -585,20 +631,47 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   }
 
   /**
-   * The exact answer to `sentText` from the hook records written after `from`, or undefined (no hook record in time: an
-   * interrupted turn, a slash command, hooks that did not run). The caller then falls back to the screen.
+   * Wait for the exact answer of an agent with hooks. The `Stop` record with the `prompt_id` of our message ends the wait: the
+   * screen is NOT trusted to say that the answer is complete, because it can look idle before the answer starts. The screen only
+   * tells when to stop waiting for a record that will not come:
+   * - the agent waits for a person (permission, trust dialog);
+   * - the screen is idle and there is still no prompt record (hooks do not run, or the message was no prompt, for example a
+   *   slash command) for `PROMPT_RECORD_GRACE_MS`;
+   * - the screen is idle with a prompt record but no `Stop` record for `PENDING_IDLE_GRACE_MS` (an interrupted turn);
+   * - the budget ended.
+   * Without an answer the caller falls back to the screen.
    */
-  async function awaitAnswer(file: string, from: number, sentText: string, graceMs: number): Promise<string | undefined> {
-    const deadline = clock.now() + graceMs;
+  async function waitForAnswer(record: SessionRecord, before: string, budgetMs: number, file: string, from: number, sentText: string) {
+    const detector = kindOf(record).detector;
+    const deadline = clock.now() + budgetMs;
+    let idleSince: number | undefined;
     for (;;) {
-      const { records } = await readAnswerRecords(file, from);
-      const found = findAnswer(records, sentText);
-      if (found.status === "answered") return found.text;
-      // The prompt hook fires when the message is submitted, long before the answer ends. No prompt record by now means the
-      // hooks do not run (or the message was no prompt, for example a slash command): do not wait for a Stop record.
-      if (found.status === "none") return undefined;
-      if (clock.now() >= deadline) return undefined;
-      await clock.sleep(ANSWER_POLL_MS);
+      await clock.sleep(WAIT_POLL_MS);
+      const screen = await capture(record, SEND_CAPTURE_LINES);
+      const { state } = detectState(detector, screen);
+      const found = findAnswer((await readAnswerRecords(file, from)).records, sentText);
+      if (found.status === "answered") {
+        // The Stop hook runs a moment before the screen repaints as idle. Wait for that, so the state we report is true and the
+        // next `send` is not refused as BUSY.
+        let settled = { screen, state };
+        for (let i = 0; i < SETTLE_POLLS && settled.state === "busy"; i++) {
+          await clock.sleep(SETTLE_POLL_MS);
+          const next = await capture(record, SEND_CAPTURE_LINES);
+          settled = { screen: next, state: detectState(detector, next).state };
+        }
+        return { ...settled, timedOut: false, answer: found.text };
+      }
+      const done = { screen, state, timedOut: false, answer: undefined };
+      if (state === "waiting_permission" || state === "waiting_trust") return done;
+      if (state === "idle" && screen !== before) {
+        idleSince ??= clock.now();
+        const idleMs = clock.now() - idleSince;
+        if (found.status === "none" && idleMs >= PROMPT_RECORD_GRACE_MS) return done;
+        if (found.status === "pending" && idleMs >= PENDING_IDLE_GRACE_MS) return done;
+      } else {
+        idleSince = undefined;
+      }
+      if (clock.now() >= deadline) return { ...done, timedOut: true };
     }
   }
 
@@ -709,14 +782,17 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
           await releaseSend(record.name, previousInput);
           throw err;
         }
+        // Best effort: the text is typed already, so a failed check must not turn the send into an error.
+        await ensureSubmitted(record, text).catch((err: unknown) => {
+          log.warn({ err, session: record.name }, "Could not check that the message was submitted");
+        });
         const budget = Math.min(input.waitForIdleMs, cfg.maxWaitMs);
         if (budget <= 0) return { session: record.name, sent: true, mode, state: status.state, waited: false, timedOut: false };
 
         try {
-          const waited = await waitForIdle(record, before, budget);
-          // Only an idle screen means the `Stop` hook is about to write (or has written) its record; otherwise check once.
-          const graceMs = waited.state === "idle" && !waited.timedOut ? ANSWER_GRACE_MS : 0;
-          const answer = answerFile ? await awaitAnswer(answerFile, answerFrom, text, graceMs) : undefined;
+          const { answer, ...waited }: Awaited<ReturnType<typeof waitForIdle>> & { answer?: string } = answerFile
+            ? await waitForAnswer(record, before, budget, answerFile, answerFrom, text)
+            : await waitForIdle(record, before, budget);
           const output = answer === undefined
             ? { ...wrapUntrusted(extractNewOutput(before, waited.screen, text).text, redact), source: "screen" as const }
             : { ...wrapUntrusted(answer, redact), source: "hook" as const };

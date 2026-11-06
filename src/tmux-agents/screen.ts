@@ -210,6 +210,30 @@ const CLAUDE_MENU_FOOTER = /esc to cancel/i;
 /** Only the bottom of the screen describes the current state; older lines are history. */
 const DETECTION_TAIL_LINES = 25;
 
+/**
+ * Text in the input box of the prompt (the last `rule / ❯ text / rule` box with a footer), or undefined when the box is empty
+ * or there is none. Real captures: Claude Code 2.1.319. Used to see whether a typed message was submitted.
+ */
+export function promptBoxText(screen: string): string | undefined {
+  const lines = screen.split("\n");
+  // The box ends with the last rule that has the footer below it; it starts at the rule above. It can hold several lines (a text
+  // with a newline in it, for example an Enter that was taken as part of a paste), so only its first line is read.
+  let bottom = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (CLAUDE_RULE.test(lines[i]!)) {
+      if (lines.slice(i + 1).some((line) => CLAUDE_FOOTER_MARK.test(line))) bottom = i;
+      break;
+    }
+  }
+  if (bottom < 1) return undefined;
+  for (let top = bottom - 1; top >= 0; top--) {
+    if (!CLAUDE_RULE.test(lines[top]!)) continue;
+    const first = lines[top + 1];
+    return first !== undefined && CLAUDE_TEXT_PROMPT.test(first) ? first.replace(/^\s*❯\s+/, "").trimEnd() : undefined;
+  }
+  return undefined;
+}
+
 /** A `❯ <text>` prompt line between two rule lines, with a footer marker next to the box. Menus never get here (checked before). */
 function hasPromptWithText(tail: string): boolean {
   const lines = tail.split("\n");

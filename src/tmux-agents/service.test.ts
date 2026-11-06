@@ -418,7 +418,9 @@ describe("TmuxAgentService", () => {
       tmux.override = (args) => (args[0] === "new-session" ? failed("duplicate session: x") : undefined);
       const error = await errorOf(make().start(startInput()));
       expect(error.code).toBe("TMUX_ERROR");
-      expect(tmux.callsOf("new-session")).toHaveLength(3);
+      // 3 attempts: the name of the live session `ok` (pa-proj-0001) is refused by its settings file, without a tmux call
+      expect(tmux.callsOf("new-session")).toHaveLength(2);
+      expect(fs.existsSync(settingsFile(ok.session))).toBe(true);
     });
 
     it("leaves no registry record when tmux fails", async () => {
@@ -557,9 +559,69 @@ describe("TmuxAgentService", () => {
         const service = make();
         const { name, fake } = await started(service);
         agentAnswers(name, fake, (text) => promptHook("p", text), `❯ q\n\n● partial\n\n${IDLE}`);
-        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 5_000 }));
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 60_000 }));
+        expect(result).toMatchObject({ timedOut: false, state: "idle" });
         expect(result.newOutput).toMatchObject({ source: "screen" });
         expect(result.newOutput?.output).toContain("partial");
+      });
+
+      it("keeps waiting for the Stop record while the screen already looks idle (answer not started yet)", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        let submittedAt: number | undefined;
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys.includes("Enter")) {
+            submittedAt = clock.now();
+            fs.appendFileSync(answerFile(name), promptHook("p-1", "Question 1"));
+          }
+        };
+        // the screen shows the echoed message above an idle prompt for 6 s, then the answer appears and the Stop hook writes
+        fake.screen = () => {
+          if (submittedAt === undefined) return IDLE;
+          if (clock.now() - submittedAt < 6_000) return `❯ Question 1\n\n${IDLE}`;
+          if (!fs.readFileSync(answerFile(name), "utf8").includes("Stop")) fs.appendFileSync(answerFile(name), stopHook("p-1", "the full answer"));
+          return `❯ Question 1\n\n● the full answer\n\n${IDLE}`;
+        };
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 60_000 }));
+        expect(result.newOutput).toMatchObject({ source: "hook", output: "the full answer" });
+      });
+
+      it("waits until the screen is idle again after the Stop record, so the next send is not refused as busy", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        let polls = -1; // counts the captures after the message was submitted
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys.includes("Enter")) {
+            polls = 0;
+            fs.appendFileSync(answerFile(name), promptHook("p", "Question 1") + stopHook("p", "done"));
+          }
+        };
+        // the Stop record is there, but the screen shows the spinner for 3 more captures
+        fake.screen = () => (polls < 0 || ++polls >= 4 ? IDLE : BUSY);
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 60_000 }));
+        expect(result).toMatchObject({ state: "idle", timedOut: false });
+        expect(result.newOutput).toMatchObject({ source: "hook", output: "done" });
+      });
+
+      it("returns at once when the agent waits for a permission answer, with the screen as output", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        agentAnswers(name, fake, (text) => promptHook("p", text), PERMISSION);
+        const result = await service.send(sendInput(name, "Question 1", { waitForIdleMs: 60_000 }));
+        expect(result.state).toBe("waiting_permission");
+        expect(result.newOutput).toMatchObject({ source: "screen" });
+      });
+
+      it("picks another name and leaves the files of a live session alone when the generated name is taken", async () => {
+        const dir = path.dirname(answerFile("x"));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(settingsFile("pa-proj-0000"), "{}");
+        fs.writeFileSync(answerFile("pa-proj-0000"), "records of the live session\n");
+        const { name } = await started(make());
+        expect(name).toBe("pa-proj-0001");
+        expect(fs.readFileSync(answerFile("pa-proj-0000"), "utf8")).toBe("records of the live session\n");
+        expect(fs.readFileSync(settingsFile("pa-proj-0000"), "utf8")).toBe("{}");
+        expect(fs.existsSync(settingsFile(name))).toBe(true);
       });
 
       it("removes the answer and settings files when the session ends", async () => {
@@ -744,9 +806,74 @@ describe("TmuxAgentService", () => {
         ["send-keys", "-t", fake.paneId, "-l", "--", "hello agent"],
         ["send-keys", "-t", fake.paneId, "Enter"],
       ]);
-      expect(clock.now() - t0).toBe(150);
+      expect(clock.now() - t0).toBe(150 + 700); // the gap before Enter, then one check that the message left the input box
       expect(result).toMatchObject({ sent: true, mode: "keys", waited: false, timedOut: false, state: "idle" });
       expect(audits.at(-1)).toMatchObject({ action: "send", ok: true, input: "hello agent" });
+    });
+
+    describe("a message that stays in the input box (Enter taken as a newline of a paste)", () => {
+      const RULE = "─".repeat(60);
+      const boxWith = (text: string) => `● earlier answer\n\n${RULE}\n❯ ${text}\n${RULE}\n  ⏵⏵ auto mode on (shift+tab to cycle)\n`;
+      const boxEmpty = `● earlier answer\n\n${RULE}\n❯ \n${RULE}\n  ⏵⏵ auto mode on (shift+tab to cycle)\n`;
+
+      /** The agent ignores the first `ignored` Enter keys: the text stays in the box; the next Enter submits and empties it. */
+      function ignoreEnters(fake: { screen: string | (() => string) }, text: string, ignored: number) {
+        let enters = 0;
+        fake.screen = boxEmpty;
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys[0] === "-l") fake.screen = boxWith(text);
+          if (keys.includes("Enter") && ++enters > ignored) fake.screen = boxEmpty;
+        };
+        return () => enters;
+      }
+
+      it("also recognizes a box with an empty second line (the ignored Enter became a newline)", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        let enters = 0;
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys[0] === "-l") fake.screen = `${RULE}\n❯ hello agent\n\n${RULE}\n  ⏵⏵ auto mode on (shift+tab to cycle)\n`;
+          if (keys.includes("Enter") && ++enters > 1) fake.screen = boxEmpty;
+        };
+        await service.send(sendInput(name, "hello agent"));
+        expect(enters).toBe(2);
+      });
+
+      it("presses Enter again until the text has left the box", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        const enters = ignoreEnters(fake, "Print the integers from 1 to 150", 1);
+        await service.send(sendInput(name, "Print the integers from 1 to 150"));
+        expect(enters()).toBe(2);
+      });
+
+      it("does not press Enter again when the message was submitted at once", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        const enters = ignoreEnters(fake, "hello agent", 0);
+        await service.send(sendInput(name, "hello agent"));
+        expect(enters()).toBe(1);
+      });
+
+      it("gives up after a few repeats instead of pressing Enter forever", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        const enters = ignoreEnters(fake, "hello agent", 99);
+        await service.send(sendInput(name, "hello agent"));
+        expect(enters()).toBe(1 + 3);
+      });
+
+      it("does not press Enter when the box holds other text (someone typed there)", async () => {
+        const service = make();
+        const { name, fake } = await started(service);
+        let enters = 0;
+        tmux.onSendKeys = (_s, keys) => {
+          if (keys[0] === "-l") fake.screen = boxWith("something else typed by a person");
+          if (keys.includes("Enter")) enters++;
+        };
+        await service.send(sendInput(name, "hello agent"));
+        expect(enters).toBe(1);
+      });
     });
 
     it("passes dangerous-looking text as ONE argv element", async () => {
@@ -784,7 +911,7 @@ describe("TmuxAgentService", () => {
       expect(load.args.slice(-1)).toEqual(["-"]);
       expect(load.input).toBe("line one\nline two;");
       expect(tmux.callsOf("paste-buffer")[0]!.args).toEqual(["paste-buffer", "-p", "-d", "-b", load.args[2], "-t", fake.paneId]);
-      expect(tmux.calls.at(-1)!.args).toEqual(["send-keys", "-t", fake.paneId, "Enter"]);
+      expect(tmux.callsOf("send-keys").map((c) => c.args)).toEqual([["send-keys", "-t", fake.paneId, "Enter"]]);
       expect(tmux.subcommands().indexOf("load-buffer")).toBeLessThan(tmux.subcommands().indexOf("paste-buffer"));
       expect(result.mode).toBe("paste");
       expect(fake.pasted).toEqual(["line one\nline two;"]);

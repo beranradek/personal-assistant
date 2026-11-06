@@ -136,8 +136,9 @@ export const TMUX_TOOLS: readonly TmuxToolDefinition[] = [
       "or trust answer, the screen is not recognized (state unknown; read it first, then allowUnknownState), or any line of the " +
       "text starts with '!', '#' or '/'. Ask the user BEFORE sending input that can cause external side " +
       "effects (push, deploy, send mail, delete). With waitForIdleMs the result includes newOutput: source 'hook' is the complete " +
-      "final answer to exactly this message (taken from the agent's own hooks, so a long answer is never cut and an answer to " +
-      "another message is never mixed in); source 'screen' is only what the visible pane showed and may be incomplete. " +
+      "final answer to exactly this message (taken from the agent's own hooks: not limited to the visible pane, and an answer to " +
+      "another message is never mixed in; above 64 KB the oldest part is dropped and truncated is true); source 'screen' is only " +
+      "what the visible pane showed and may be incomplete. " +
       UNTRUSTED,
     shape: sendShape,
     annotations: ACTS,

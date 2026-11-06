@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,6 +10,8 @@ import {
   findAnswer,
   parseAnswerRecords,
   readAnswerRecords,
+  sweepAnswerFiles,
+  writeAnswerSettings,
   type AnswerRecord,
 } from "./answers.js";
 
@@ -30,8 +33,84 @@ describe("answer hook settings", () => {
       const [hook] = settings.hooks[event]![0]!.hooks;
       expect(hook!.type).toBe("command");
       // the path is quoted for the shell: one quoted word, the single quote escaped
-      expect(hook!.command).toBe(`cat >> '/d/tmux-agents/answers/a b'\\''c.jsonl'; echo >> '/d/tmux-agents/answers/a b'\\''c.jsonl'`);
+      expect(hook!.command).toContain(`'/d/tmux-agents/answers/a b'\\''c.jsonl'`);
+      expect(hook!.command.startsWith("umask 077;")).toBe(true);
     }
+  });
+
+  describe("the hook command run by a real shell", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "answers-hook-"));
+    });
+    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+    const commandFor = (file: string) =>
+      (JSON.parse(buildAnswerSettings(file)) as { hooks: { Stop: { hooks: { command: string }[] }[] } }).hooks.Stop[0]!.hooks[0]!.command;
+
+    const runHook = (command: string, payload: string) =>
+      new Promise<number | null>((resolve) => {
+        const child = spawn("sh", ["-c", command], { stdio: ["pipe", "ignore", "ignore"] });
+        child.stdin.end(payload);
+        child.on("close", resolve);
+      });
+
+    it("appends concurrent payloads as separate, complete lines (also big ones, in a path with a space and a quote)", async () => {
+      const file = path.join(dir, "a b'c.jsonl");
+      const command = commandFor(file);
+      const payloads = Array.from({ length: 24 }, (_, i) =>
+        JSON.stringify({ hook_event_name: "Stop", prompt_id: `p${i}`, last_assistant_message: `${i}:`.padEnd(200_000, "x") }),
+      );
+      const codes = await Promise.all(payloads.map((payload) => runHook(command, `${payload}\n`)));
+      expect(codes.every((code) => code === 0)).toBe(true);
+      const { records } = await readAnswerRecords(file, 0);
+      expect(records).toHaveLength(24);
+      expect(new Set(records.map((r) => r.promptId)).size).toBe(24);
+      expect((fs.statSync(file).mode & 0o077)).toBe(0); // private: umask 077
+    });
+  });
+});
+
+describe("writeAnswerSettings and sweepAnswerFiles", () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "answers-files-"));
+  });
+  afterEach(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+
+  it("refuses a session name whose settings file exists and leaves its files alone", async () => {
+    await writeAnswerSettings(dataDir, "pa-a-0001");
+    fs.writeFileSync(answerFilePath(dataDir, "pa-a-0001"), "live records\n");
+    await expect(writeAnswerSettings(dataDir, "pa-a-0001")).rejects.toMatchObject({ code: "EEXIST" });
+    expect(fs.readFileSync(answerFilePath(dataDir, "pa-a-0001"), "utf8")).toBe("live records\n");
+  });
+
+  it("makes the answers directory private even when it existed with looser permissions", async () => {
+    const dir = path.dirname(answerFilePath(dataDir, "x"));
+    fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
+    await writeAnswerSettings(dataDir, "pa-a-0001");
+    expect(fs.statSync(dir).mode & 0o077).toBe(0);
+  });
+
+  it("sweeps files of sessions that are not kept and old enough; keeps the others", async () => {
+    for (const name of ["pa-keep-0001", "pa-gone-0002", "pa-new-0003"]) {
+      await writeAnswerSettings(dataDir, name);
+      fs.writeFileSync(answerFilePath(dataDir, name), "x\n");
+      fs.writeFileSync(`${answerFilePath(dataDir, name)}.lock`, "");
+    }
+    const dir = path.dirname(answerFilePath(dataDir, "x"));
+    const old = new Date(Date.now() - 600_000);
+    for (const file of fs.readdirSync(dir).filter((f) => !f.startsWith("pa-new-"))) fs.utimesSync(path.join(dir, file), old, old);
+    expect(await sweepAnswerFiles(dataDir, new Set(["pa-keep-0001"]), Date.now())).toBe(3);
+    expect(fs.readdirSync(dir).sort()).toEqual(
+      fs.readdirSync(dir).filter((f) => f.startsWith("pa-keep-") || f.startsWith("pa-new-")).sort(),
+    );
+    expect(fs.readdirSync(dir).some((f) => f.startsWith("pa-gone-"))).toBe(false);
+    expect(fs.readdirSync(dir).some((f) => f.startsWith("pa-new-"))).toBe(true); // too young: a start may be in progress
+  });
+
+  it("returns 0 when the directory does not exist", async () => {
+    expect(await sweepAnswerFiles(dataDir, new Set(), Date.now())).toBe(0);
   });
 });
 

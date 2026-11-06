@@ -53,17 +53,23 @@ describe.skipIf(!enabled || projectDir === "")("real Claude Code agent: exact an
   it("returns the complete answer of each message from the hooks, even when it is far longer than the pane", async () => {
     const started = await service.start({ project: "e2e", directory: projectDir, kind: "claude", permissionMode: "default" });
     sessions.push(started.session);
-    expect(started.state).toBe("idle");
+    // The TUI may need a moment after the start before its screen is recognized.
+    for (let i = 0; i < 30 && (await service.status({ session: started.session })).state !== "idle"; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    expect((await service.status({ session: started.session })).state).toBe("idle");
 
     const long = await send(started.session, "Print the integers from 1 to 150, each on its own line. Output nothing else. Do not use any tool.");
-    expect(long.newOutput?.source).toBe("hook");
+    const diagnostics = async () =>
+      `state=${long.state} timedOut=${long.timedOut} screen:\n${(await service.read({ session: started.session, lines: 60 })).output}`;
+    expect(long.newOutput?.source, long.newOutput?.source === "hook" ? "" : await diagnostics()).toBe("hook");
     const lines = long.newOutput!.output.trim().split("\n").map((l) => l.trim());
     expect(lines).toHaveLength(150);
     expect(lines[0]).toBe("1");
     expect(lines[149]).toBe("150");
 
     const short = await send(started.session, "Reply with exactly the single word: pong. Do not use any tool.");
-    expect(short.newOutput?.source).toBe("hook");
+    expect(short.newOutput?.source, `short answer, screen was: ${short.newOutput?.output.slice(-300)}`).toBe("hook");
     expect(short.newOutput!.output.trim().toLowerCase()).toBe("pong");
     // the answer of the previous message is not mixed in
     expect(short.newOutput!.output).not.toContain("150");

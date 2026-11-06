@@ -28,26 +28,66 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Settings JSON (for `--settings <file>`): both hooks append their stdin payload to `answerFile`, one JSON per line. */
+/**
+ * Settings JSON (for `--settings <file>`): both hooks append their stdin payload to `answerFile`, one JSON per line.
+ * Several hooks can run at the same time (a Stop hook next to a subagent event), so the two appends of one record (payload, then
+ * the newline) run under `flock` where it exists. `umask 077` keeps the answer file private to the daemon user.
+ */
 export function buildAnswerSettings(answerFile: string): string {
-  const quoted = shellQuote(answerFile);
-  const hook = { type: "command", command: `cat >> ${quoted}; echo >> ${quoted}` };
+  const file = shellQuote(answerFile);
+  const lock = shellQuote(`${answerFile}.lock`);
+  const plain = `cat >> ${file}; echo >> ${file}`;
+  const locked = `flock ${lock} sh -c 'cat >> "$1"; echo >> "$1"' sh ${file}`;
+  const hook = { type: "command", command: `umask 077; if command -v flock >/dev/null 2>&1; then ${locked}; else ${plain}; fi` };
   return JSON.stringify({ hooks: Object.fromEntries(ANSWER_EVENTS.map((event) => [event, [{ hooks: [hook] }]])) });
 }
 
-/** Create the answers directory (private) and write the settings file of a session. Returns the settings path. */
+/**
+ * Create the answers directory (private) and write the settings file of a session. Returns the settings path.
+ * Fails with EEXIST when the file exists: the name belongs to another session, and its files must stay as they are.
+ */
 export async function writeAnswerSettings(dataDir: string, session: string): Promise<string> {
   const settingsPath = answerSettingsPath(dataDir, session);
-  await fs.promises.mkdir(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
-  await fs.promises.writeFile(settingsPath, buildAnswerSettings(answerFilePath(dataDir, session)), { mode: 0o600 });
+  const dir = path.dirname(settingsPath);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  await fs.promises.chmod(dir, 0o700); // `mkdir` applies the mode only to a directory it creates
+  await fs.promises.writeFile(settingsPath, buildAnswerSettings(answerFilePath(dataDir, session)), { mode: 0o600, flag: "wx" });
   return settingsPath;
 }
 
 /** Best effort: answers are agent output, so they do not outlive the session. */
 export async function removeAnswerFiles(dataDir: string, session: string): Promise<void> {
-  for (const file of [answerFilePath(dataDir, session), answerSettingsPath(dataDir, session)]) {
+  const answers = answerFilePath(dataDir, session);
+  for (const file of [answers, `${answers}.lock`, answerSettingsPath(dataDir, session)]) {
     await fs.promises.rm(file, { force: true }).catch(() => undefined);
   }
+}
+
+/**
+ * Remove the files of sessions that are not in `keep` (killed outside the service, died with the tmux server, a failed start).
+ * Files younger than `minAgeMs` stay: a session that is being started has its settings file before its registry record.
+ */
+export async function sweepAnswerFiles(dataDir: string, keep: ReadonlySet<string>, now: number, minAgeMs = 120_000): Promise<number> {
+  const dir = path.dirname(answerFilePath(dataDir, "x"));
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (keep.has(name.split(".")[0]!)) continue;
+    const file = path.join(dir, name);
+    try {
+      if (now - (await fs.promises.stat(file)).mtimeMs < minAgeMs) continue;
+      await fs.promises.rm(file, { force: true });
+      removed++;
+    } catch {
+      // gone already or not removable: the next sweep tries again
+    }
+  }
+  return removed;
 }
 
 export type AnswerRecord =
