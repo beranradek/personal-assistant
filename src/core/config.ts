@@ -141,6 +141,27 @@ export const DEFAULTS: Config = {
     ttlHours: 24,
     autoScan: false,
   },
+  tmuxAgents: {
+    enabled: false,
+    tmuxBinary: "tmux",
+    socketPath: "",
+    sessionPrefix: "pa-" as const,
+    allowedRoots: [],
+    trustedRoots: [],
+    enabledKinds: ["claude" as const],
+    allowPermissionBypass: false,
+    allowAnswerPrompts: false,
+    maxSessions: 3,
+    minStartIntervalMs: 10_000,
+    minSendIntervalMs: 1_500,
+    maxInputChars: 4_000,
+    defaultOutputLines: 80,
+    maxOutputLines: 300,
+    maxWaitMs: 120_000,
+    stopGraceMs: 10_000,
+    idleReapMinutes: 0,
+    envAllowlist: [],
+  },
   mcp: {
     httpServer: { enabled: false },
   },
@@ -271,6 +292,38 @@ export function loadConfig(configDir: string): Config {
   config.security.additionalReadDirs = config.security.additionalReadDirs.map(resolveUserPath);
   config.security.additionalWriteDirs = config.security.additionalWriteDirs.map(resolveUserPath);
   config.gateway.workloadLockFiles = config.gateway.workloadLockFiles.map(resolveUserPath);
+  resolveTmuxAgentsPaths(config);
 
   return config;
+}
+
+/** Unix socket paths are limited to about 108 bytes; keep a margin. */
+const MAX_SOCKET_PATH_LENGTH = 100;
+
+/**
+ * Resolve and validate the `tmuxAgents` paths in place: `~` expansion, derived default socket path,
+ * absolute-path checks and `trustedRoots` being a subset of `allowedRoots`.
+ */
+function resolveTmuxAgentsPaths(config: Config): void {
+  const t = config.tmuxAgents;
+  t.allowedRoots = t.allowedRoots.map(resolveUserPath);
+  t.trustedRoots = t.trustedRoots.map(resolveUserPath);
+  t.socketPath = t.socketPath === ""
+    ? path.join(config.security.dataDir, "tmux-agents", "tmux.sock")
+    : resolveUserPath(t.socketPath);
+
+  if (!path.isAbsolute(t.socketPath)) {
+    throw new Error(`tmuxAgents.socketPath must be an absolute path: ${t.socketPath}`);
+  }
+  if (t.socketPath.length > MAX_SOCKET_PATH_LENGTH) {
+    throw new Error(`tmuxAgents.socketPath is longer than ${MAX_SOCKET_PATH_LENGTH} characters (unix socket limit)`);
+  }
+  for (const root of t.allowedRoots) {
+    if (!path.isAbsolute(root)) throw new Error(`tmuxAgents.allowedRoots entry must be absolute: ${root}`);
+  }
+  for (const root of t.trustedRoots) {
+    if (!t.allowedRoots.includes(root)) {
+      throw new Error(`tmuxAgents.trustedRoots entry is not listed in allowedRoots: ${root}`);
+    }
+  }
 }

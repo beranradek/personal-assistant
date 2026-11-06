@@ -324,6 +324,35 @@ export const DraftsConfigSchema = z.object({
   autoScan: z.boolean().default(false),
 });
 
+/** Optional tmux-backed project agent sessions (`agent_session_*` MCP tools). Disabled by default. */
+export const TmuxAgentsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  tmuxBinary: z.string().min(1).default("tmux"),
+  /** "" = derived `<dataDir>/tmux-agents/tmux.sock`; otherwise an absolute path (below about 100 characters). */
+  socketPath: z.string().default(""),
+  sessionPrefix: z.literal("pa-").default("pa-"),
+  /** Absolute directories where agents may start. Should lie OUTSIDE every directory the assistant can write. */
+  allowedRoots: z.array(z.string()).default([]),
+  /** Subset of allowedRoots that may lie under security.workspace or security.additionalWriteDirs. */
+  trustedRoots: z.array(z.string()).default([]),
+  enabledKinds: z.array(z.enum(["claude"])).default(["claude"]),
+  allowPermissionBypass: z.boolean().default(false),
+  allowAnswerPrompts: z.boolean().default(false),
+  maxSessions: z.number().int().min(1).max(10).default(3),
+  minStartIntervalMs: z.number().int().min(0).default(10_000),
+  minSendIntervalMs: z.number().int().min(0).default(1_500),
+  maxInputChars: z.number().int().min(1).max(20_000).default(4_000),
+  defaultOutputLines: z.number().int().min(1).max(300).default(80),
+  maxOutputLines: z.number().int().min(1).max(300).default(300),
+  maxWaitMs: z.number().int().min(0).max(300_000).default(120_000),
+  stopGraceMs: z.number().int().min(1_000).max(60_000).default(10_000),
+  /** Stop idle sessions after this many minutes without input. 0 = off. */
+  idleReapMinutes: z.number().int().min(0).default(0),
+  envAllowlist: z.array(z.string().regex(/^[A-Z_][A-Z0-9_]*$/)).default([]),
+});
+
+export type TmuxAgentsConfig = z.infer<typeof TmuxAgentsConfigSchema>;
+
 export const ConfigSchema = z.object({
   security: SecurityConfigSchema,
   adapters: AdaptersConfigSchema,
@@ -339,6 +368,7 @@ export const ConfigSchema = z.object({
   integApi: IntegApiConfigSchema.default(() => IntegApiConfigSchema.parse({})),
   habits: HabitsConfigSchema.default(() => HabitsConfigSchema.parse({})),
   drafts: DraftsConfigSchema.default(() => DraftsConfigSchema.parse({})),
+  tmuxAgents: TmuxAgentsConfigSchema.default(() => TmuxAgentsConfigSchema.parse({})),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

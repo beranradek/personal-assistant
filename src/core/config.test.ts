@@ -320,4 +320,60 @@ describe("config", () => {
       }
     });
   });
+
+  describe("tmuxAgents", () => {
+    function load(tmuxAgents?: Record<string, unknown>, security?: Record<string, unknown>) {
+      const settings: Record<string, unknown> = {};
+      if (tmuxAgents) settings["tmuxAgents"] = tmuxAgents;
+      if (security) settings["security"] = security;
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(settings));
+      return loadConfig(tmpDir);
+    }
+
+    it("is disabled with safe defaults when the key is absent", () => {
+      const config = load();
+      expect(config.tmuxAgents.enabled).toBe(false);
+      expect(config.tmuxAgents.maxSessions).toBe(3);
+      expect(config.tmuxAgents.allowPermissionBypass).toBe(false);
+      expect(config.tmuxAgents.allowAnswerPrompts).toBe(false);
+      expect(config.tmuxAgents.trustedRoots).toEqual([]);
+      expect(config.tmuxAgents.allowedRoots).toEqual([]);
+    });
+
+    it("derives the socket path from dataDir when empty", () => {
+      const config = load(undefined, { dataDir: path.join(tmpDir, "data") });
+      expect(config.tmuxAgents.socketPath).toBe(path.join(tmpDir, "data", "tmux-agents", "tmux.sock"));
+    });
+
+    it("resolves ~ in allowedRoots, trustedRoots and socketPath", () => {
+      const config = load({
+        allowedRoots: ["~/agents"],
+        trustedRoots: ["~/agents"],
+        socketPath: "~/s.sock",
+      });
+      expect(config.tmuxAgents.allowedRoots).toEqual([path.join(os.homedir(), "agents")]);
+      expect(config.tmuxAgents.trustedRoots).toEqual([path.join(os.homedir(), "agents")]);
+      expect(config.tmuxAgents.socketPath).toBe(path.join(os.homedir(), "s.sock"));
+    });
+
+    it("rejects a relative socketPath", () => {
+      expect(() => load({ socketPath: "rel/tmux.sock" })).toThrow(/socketPath/);
+    });
+
+    it("rejects a socketPath longer than 100 characters", () => {
+      expect(() => load({ socketPath: `/${"a".repeat(100)}/tmux.sock` })).toThrow(/socketPath/);
+    });
+
+    it("rejects a trustedRoots entry that is not in allowedRoots", () => {
+      expect(() => load({ allowedRoots: ["/srv/a"], trustedRoots: ["/srv/b"] })).toThrow(/trustedRoots/);
+    });
+
+    it("rejects a sessionPrefix other than pa-", () => {
+      expect(() => load({ sessionPrefix: "x-" })).toThrow();
+    });
+
+    it("rejects relative allowedRoots entries", () => {
+      expect(() => load({ allowedRoots: ["rel/dir"] })).toThrow(/allowedRoots/);
+    });
+  });
 });

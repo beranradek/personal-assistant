@@ -186,7 +186,8 @@ OD1, OD2 and OD3 are decided (2026-11-06).
   and max length
 - **T2** - Threat: Runaway session creation | Control: `maxSessions` (default 3) applies to `max(registry running,
   tmux list-sessions count on the own server)`; `minStartIntervalMs`; count check under lock. A corrupt
-  registry (`corrupt: true`) makes `start` fail with `TMUX_ERROR` ("registry corrupt, manual repair needed") because live sessions would not be adopted but would still use RAM
+  registry (`corrupt: true`) makes `start` fail with `TMUX_ERROR` ("registry corrupt, manual repair needed") because live sessions
+  would not be adopted but would still use RAM
 - **T3** - Threat: Command injection through names or text | Control: Regex-validated project and session names; `execFile` only; argv
   arrays; `send-keys -l --`; stdin for `load-buffer`; control chars (C0 and C1) rejected; text starting with `!`, `#`, `/` rejected
   except `kind.allowedSlash` (D19)
@@ -720,8 +721,8 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
    does, remove `tmux` from `security.allowedCommands` in settings (and from the Claude Code hook allowlist).
    Also check that `~/.claude/settings.json` has no broad allow rules (it is inherited by the child through `HOME`).
 2. Claude Code companion: set `"mcp": { "httpServer": { "enabled": true } }` (F2). Check `mcp__pa__agent_session_list` is visible
-   after restarting `claude`. Add the OD3 allow snippet from `docs/settings/tmux_agents.md` to the live Claude Code settings; `stop` and `recover` keep
-   prompting.
+   after restarting `claude`. Add the OD3 allow snippet from `docs/settings/tmux_agents.md` to the live Claude Code settings;
+   `stop` and `recover` keep prompting.
 3. systemd: run `systemctl --user show pa-daemon.service -p KillMode` (or the system unit). If `control-group`, either set
    `KillMode=process` or accept that sessions die on restart (then reconcile marks them `lost`). Also check
    `~/.personal-assistant/bin/codex-watchdog.sh` does not kill `claude` or `tmux` processes.

@@ -66,5 +66,6 @@
     },
     "extraPaths": []
   },
+  "tmuxAgents": { "enabled": false },
   "mcpServers": {}
 }
