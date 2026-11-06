@@ -17,10 +17,13 @@ that agent sessions are disabled, point to `docs/settings/tmux_agents.md`, and s
 ## Which channel to use
 
 - Lifecycle (always): `agent_session_start`, `agent_session_list`, `agent_session_stop`, `agent_session_recover`.
-- Talking to the agent:
-  - If this session has the `ListAgents` and `SendMessage` tools (Claude Code), find the peer in `ListAgents` by its
-    `tmux <session>:...` field and send with `notify_when_idle: true`.
-  - Otherwise use `agent_session_send` with `waitForIdleMs`, and `agent_session_read` to look at the screen.
+- Talking to the agent: use `agent_session_send` with `waitForIdleMs`, and `agent_session_read` or `agent_session_status` to
+  look at the screen. This is the default channel in every client, with the server-side guards (input rules, rate limit, state checks).
+- Do NOT use Claude Code peer messaging (`ListAgents` and `SendMessage`) to talk to these agents, unless the user asks for it and
+  both sessions run in the same permission mode. When the modes differ, Claude Code holds the message in the agent terminal
+  ("Held peer message") until a person approves it there; it is a deliberate safety feature. If you see this: do not retry, do not ask
+  the user to change `crossSessionInbound`, and send the text with `agent_session_send` instead. The user may approve a single held
+  message in the agent pane if they want.
 - For long jobs do not wait in one call. Send the task, then poll `agent_session_status` and read the screen when it is idle.
 
 ## Workflow

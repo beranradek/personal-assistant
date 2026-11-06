@@ -19,7 +19,7 @@ project agents in tmux sessions that this server owns.
 Non-goals:
 
 - No tmux control of sessions that the server did not create (no `kill-server`, no foreign session access).
-- No agent-to-agent protocol of our own. Claude Code has built-in peer messaging; we use it when possible (see Decisions).
+- No agent-to-agent protocol of our own. Claude Code has built-in peer messaging; it is optional, not the default (see D11, F6).
 - No Windows, remote tmux over ssh, web UI, or multi-user support.
 - No change to the Bash allowlist hook or to the `exec` policy.
 
@@ -48,8 +48,10 @@ Non-goals:
   command text in settings
 - **D10** - Decision: Permission modes: `default`, `acceptEdits`, `plan`, `bypass`. Default is `default`. `bypass` needs settings AND
   `confirmBypass: true` | Reason: Never default
-- **D11** - Decision: Amy-to-agent talk: prefer Claude Code `ListAgents`/`SendMessage` when Amy runs inside Claude Code. MCP tools are
-  lifecycle plus fallback | Reason: Verified in PoC; see Finding F6
+- **D11** - Decision (changed 2026-11-06): Amy-to-agent talk uses `agent_session_send` (+ `read`/`status`) in every client. Claude Code
+  peer messaging (`ListAgents`/`SendMessage`) is optional, only on the user's request and with matching permission modes |
+  Reason: Verified in a real run: with different permission modes Claude Code HOLDS the message until approved in the agent
+  terminal; see Finding F6
 - **D12** - Decision: Status is a screen heuristic with an explicit `signal`, `confidence`, `evidence` | Reason: Honest about fragility
 - **D13** - Decision: Output is redacted with the existing `CONSERVATIVE_PATTERNS` and wrapped as untrusted data | Reason: Reuse, no new
   redactor
@@ -124,9 +126,13 @@ OD1, OD2 and OD3 are decided (2026-11-06).
   `run-shell` or `send-keys` through Bash and bypass the whole design. So with `tmuxAgents.enabled=true` the daemon logs a WARN at start
   when `tmux` is in the allowlist, and the docs tell the operator to remove it (Task 8, operator step 3). Review also confirmed:
   `exec` uses `spawn(command, { shell: true })` (`src/exec/tool.ts`), so the new module shares no code with it.
-- **F6. Peer messaging is unverified for Amy.** `ListAgents`/`SendMessage` are verified inside interactive Claude Code
-  sessions. Amy is an Agent SDK `query()` run (`src/core/agent-runner.ts:134`). Whether the SDK exposes these tools and
-  registers Amy as a peer is unknown. The design does not depend on it. Operator step 5 checks it.
+- **F6. Peer messaging is not the default channel (verified 2026-11-06).** `ListAgents`/`SendMessage` work inside interactive Claude
+  Code sessions, but in a real run the assistant (`--dangerously-skip-permissions`) sent a message to an agent in default mode and
+  Claude Code HELD it in the agent session ("Held peer message ... The sending session's permission mode class doesn't match this
+  session's"); it waits for approval in the agent terminal. This is a deliberate Claude Code safety feature. The setting
+  `crossSessionInbound: "accept"` would deliver without approval but lets any same-user session feed instructions to the agent, so we do
+  not recommend it. Whether the Agent SDK run of Amy (`src/core/agent-runner.ts:134`) exposes these tools is still unknown; the design
+  does not depend on it.
 - **F7. Settings-file template is minimal.** `settings.json` in the repo omits many keys (no `habits`, `drafts`). New config
   must still have defaults in `DEFAULTS` (`src/core/config.ts:10`, typed `Config`), or the build fails.
 - **F8. systemd cgroup risk (needs owner check).** A `tmux` server spawned by the daemon lives in the daemon's cgroup.
@@ -668,11 +674,10 @@ Files: `src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.m
 1. Skill (frontmatter `name`, `description`, `version` like the integrations skill). Content:
    - Preconditions: tools `agent_session_*` exist only when `tmuxAgents.enabled`. If they are absent, tell the user how to enable
      (link `docs/settings/tmux_agents.md`) and stop.
-   - Which channel to use. If the current session has `ListAgents`/`SendMessage` (Claude Code), use them to talk to the project agent:
-     find the peer in `ListAgents` by its `tmux <session>:...` field, send with `notify_when_idle: true`. Use `agent_session_start`,
-     `list`, `stop`, `recover` (forced restart, work lost) for the lifecycle in every case. If peer messaging is not available,
-     use `agent_session_send`
-     with `waitForIdleMs` and `agent_session_read`.
+   - Which channel to use (D11, changed 2026-11-06). Talk to the project agent with `agent_session_send` (`waitForIdleMs`) and
+     `agent_session_read`/`status`. Use `agent_session_start`, `list`, `stop`, `recover` (forced restart, work lost) for the
+     lifecycle. Do not use Claude Code peer messaging unless the user asks and both sessions have the same permission mode; a "Held
+     peer message" means: do not retry, do not suggest `crossSessionInbound`, use `agent_session_send`.
    - Workflow: start (default mode) -> status -> send task -> wait or notice -> read -> report to the user -> stop when done.
    - Safety rules: ask the user BEFORE (a) starting with `permissionMode: "bypass"` (explain: no approval prompts, full user rights),
      (b) sending input that can cause external side effects (push, deploy, send mail, delete), (c) `stop` with `force`, `recover`,
@@ -738,7 +743,7 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
    `source ~/.zshrc`. Use the real socket path when it differs.
 5. Try it from Telegram: "start a Claude agent for project X in ~/dev/X, ask it to list the TODOs, then stop it".
    Expect Amy to ask nothing for default mode, to ask before bypass, and to give the attach command on request.
-   Check whether Amy sees `ListAgents`/`SendMessage` (F6) and write the result in `memory/` as a note.
+   Optionally check whether Amy sees `ListAgents`/`SendMessage` (F6; not needed, `agent_session_send` is the default channel).
 6. Try it from Claude Code: ask the companion to start a session and message it. Capture real screens of the child
    (`tmux -S <socketPath> capture-pane -p -t <pane_id>`) for busy, idle, a permission prompt and the first-start trust dialog in an
    unknown directory (F12); replace the four fixture files (Task 3) and keep the tests green. This fixes the unverified
@@ -1059,6 +1064,15 @@ pane and window die, a NEW tmux server exits with its last window, and the confi
   builtins, empty `PATH`), `openAgentsView` and `showAgentsView` with a vanished window (clear error, cleanup, original error kept when
   the window is alive), CLI tests (refusal before any tmux call, `-i` skips, controller mode has no preflight), and an integration
   test on real tmux 3.6 for `definitely-not-a-command-xyz` and `exit 3`.
+
+## Round 8: peer messaging is not the default channel (2026-11-06)
+
+- Real run: the assistant (`--dangerously-skip-permissions`) sent a message to an agent in default mode through `ListAgents`/`SendMessage`.
+  Claude Code held it in the agent session because the permission mode classes differ (F6).
+- D11 changed: `agent_session_send` is the default channel. The skill, `docs/settings/tmux_agents.md` ("Peer messaging (Claude Code)
+  vs `agent_session_send`") and operator steps are updated. `crossSessionInbound: "accept"` is explicitly not recommended.
+- Existing installs keep the old workspace copy of the skill (`ensureWorkspace` never overwrites, the `version` field is not
+  compared), so a `version` bump would not help; the docs give the `cp` command for a manual replacement.
 
 ## Review log (2026-11-05)
 

@@ -231,6 +231,20 @@ the destructive tools confirmed, allow these in the Claude Code settings (`stop`
 The Claude Code settings template already contains these entries, so a new `init` for Claude Code sets them. `init` never overwrites
 an existing settings file; for an existing install add the snippet by hand.
 
+## Peer messaging (Claude Code) vs `agent_session_send`
+
+Use `agent_session_send` to talk to the agents. Claude Code also has peer messaging between sessions (`ListAgents`,
+`SendMessage`), but it is not the default channel here. Verified in a real run: an assistant started with
+`--dangerously-skip-permissions` sent a message to an agent in default mode, and Claude Code HELD it in the agent session
+("Held peer message ... The sending session's permission mode class doesn't match this session's"). The message waits for approval in
+the agent terminal. This is a deliberate Claude Code safety feature: a session without prompts must not steer a session with prompts.
+
+- Do not set `crossSessionInbound` to `"accept"` to get around it. The agent would then take messages from any session of the same
+  user without approval, which lets any local session feed it instructions (escalation, prompt injection).
+- `agent_session_send` is checked by the server (text rules, rate limit, state checks) and works with any permission mode.
+- A single held message can be approved by hand in the agent pane (for example in `pa agents-view`).
+- Peer messaging is optional, and only sensible when both sessions run in the same permission mode.
+
 ## Behaviour notes
 
 - **Unrecognized screen.** `send` refuses with `UNKNOWN_STATE` while the screen matches no known state (the agent may start or
@@ -283,6 +297,17 @@ The skill template `src/templates/skills/tmux-agents/SKILL.md` is copied to
 `<workspace>/.claude/skills/tmux-agents/SKILL.md` together with the `integrations` skill when the workspace is prepared
 (at daemon start; an existing file is never overwritten). While the feature is disabled the skill only tells the assistant
 how to enable it. Make sure `tmux` and `claude` are on the `PATH` that the daemon sees.
+
+An existing install keeps its old workspace copy of the skill (it is never overwritten, and the `version` field is not compared).
+After a skill change replace it by hand:
+
+```bash
+WS=~/.personal-assistant/workspace
+mkdir -p $WS/.claude/skills/tmux-agents
+cp $WS/dev/personal-assistant/src/templates/skills/tmux-agents/SKILL.md $WS/.claude/skills/tmux-agents/SKILL.md
+```
+
+Adjust the first path when the repository lives elsewhere.
 
 ## Sessions and daemon restarts
 
