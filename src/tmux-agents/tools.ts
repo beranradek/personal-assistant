@@ -131,7 +131,8 @@ export const TMUX_TOOLS: readonly TmuxToolDefinition[] = [
     name: "send",
     description:
       "Type a message for the agent and press Enter. Refused when the agent is busy (use queueWhileBusy), waits for a permission " +
-      "or trust answer, or the text starts with '!', '#' or '/'. Ask the user BEFORE sending input that can cause external side " +
+      "or trust answer, the screen is not recognized (state unknown; read it first, then allowUnknownState), or any line of the " +
+      "text starts with '!', '#' or '/'. Ask the user BEFORE sending input that can cause external side " +
       "effects (push, deploy, send mail, delete). With waitForIdleMs the result includes the new output. " +
       UNTRUSTED,
     shape: sendShape,

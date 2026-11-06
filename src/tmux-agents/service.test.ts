@@ -18,6 +18,9 @@ const IDLE = fixture("claude-idle.txt");
 const BUSY = fixture("claude-busy.txt");
 const PERMISSION = fixture("claude-permission.txt");
 const TRUST = fixture("claude-trust.txt");
+const EMPTY = fixture("claude-empty.txt");
+/** A dialog with wording the detector does not know: only its menu shape is recognized. */
+const UNKNOWN_MENU = "Some new dialog\n\n  ❯ 1. Allow once\n    2. Deny\n";
 
 /** Union of the tmux subcommands used by all tests; compared with the fixed set at the end. */
 const usedSubcommands = new Set<string>();
@@ -171,6 +174,56 @@ describe("TmuxAgentService", () => {
       expect(result.state).toBe("waiting_trust");
       expect(result.hint).toMatch(/trust dialog/);
       expect(result.hint).toMatch(/agent_session_attach/);
+    });
+
+    it("hints when the screen is not recognized after start", async () => {
+      tmux.defaultScreen = EMPTY;
+      const { result } = await started(make());
+      expect(result.state).toBe("unknown");
+      expect(result.hint).toMatch(/not recognized/);
+      expect(result.hint).toMatch(/agent_session_attach/);
+    });
+
+    it("serializes concurrent starts: the second one sees the first and is rate limited", async () => {
+      const service = make({ minStartIntervalMs: 10_000, maxSessions: 3 });
+      const results = await Promise.allSettled([service.start(startInput()), service.start(startInput())]);
+      expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+      const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect((rejected.reason as TmuxAgentError).code).toBe("RATE_LIMITED");
+      expect(tmux.callsOf("new-session")).toHaveLength(1);
+    });
+
+    it("a failed start also counts against minStartIntervalMs", async () => {
+      const service = make({ minStartIntervalMs: 10_000 });
+      tmux.override = (args) => (args[0] === "new-session" ? failed("boom") : undefined);
+      expect(await codeOf(service.start(startInput()))).toBe("TMUX_ERROR");
+      tmux.override = undefined;
+      expect(await codeOf(service.start(startInput()))).toBe("RATE_LIMITED");
+    });
+
+    it("kills an orphan when new-session times out after tmux created the session", async () => {
+      const service = make();
+      tmux.override = (args) => {
+        if (args[0] !== "new-session") return undefined;
+        tmux.addSession(args[args.indexOf("-s") + 1]!);
+        throw new TmuxAgentError("TIMEOUT", "tmux new-session timed out");
+      };
+      expect(await codeOf(service.start(startInput()))).toBe("TIMEOUT");
+      expect(tmux.sessions.size).toBe(0);
+      expect(tmux.callsOf("kill-session")).toHaveLength(1);
+      expect((await registry.read()).records).toEqual([]);
+    });
+
+    it("leaves a foreign session alone when new-session times out and no session with our name exists", async () => {
+      const service = make();
+      tmux.addSession("other");
+      tmux.override = (args) => {
+        if (args[0] === "new-session") throw new TmuxAgentError("TIMEOUT", "tmux new-session timed out");
+        return undefined;
+      };
+      expect(await codeOf(service.start(startInput()))).toBe("TIMEOUT");
+      expect(tmux.sessions.size).toBe(1);
+      expect(tmux.callsOf("kill-session")).toHaveLength(0);
     });
 
     it("hints when the screen cannot be captured after start", async () => {
@@ -360,6 +413,42 @@ describe("TmuxAgentService", () => {
       expect(result).toMatchObject({ untrusted: true, redacted: true, truncated: false, lines: 5 });
       expect(result.output).toBe("filler\nfiller\nfiller\nkey [REDACTED]\nlast line".split("\n").slice(-5).join("\n"));
       expect(result.output).not.toContain("sk-abc");
+    });
+
+    it("read uses tmuxAgents.defaultOutputLines when no line count is given", async () => {
+      const service = make({ defaultOutputLines: 5 });
+      const { name, fake } = await started(service);
+      fake.screen = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
+      const result = await service.read({ session: name });
+      expect(result.lines).toBe(5);
+      expect(result.output).toBe("line 16\nline 17\nline 18\nline 19\nline 20");
+      expect(tmux.callsOf("capture-pane").at(-1)!.args).toContain("-5");
+      expect((await service.read({ session: name, lines: 10 })).lines).toBe(10);
+    });
+
+    it("reconcile prunes old stopped and lost records but keeps recent and running ones", async () => {
+      const service = make();
+      const { name } = await started(service);
+      const base = (await registry.read()).records[0]!;
+      const day = 24 * 60 * 60 * 1000;
+      const ended = (n: number, state: "stopped" | "lost", daysAgo: number) => ({
+        ...base, name: `pa-old-000${n}`, tmuxSessionId: `$9${n}`, tmuxPaneId: `%9${n}`, state,
+        endedAt: new Date(clock.now() - daysAgo * day).toISOString(),
+      });
+      await registry.mutate((records) => ({
+        records: [...records, ended(1, "stopped", 8), ended(2, "lost", 30), ended(3, "stopped", 1)],
+        result: undefined,
+      }));
+      await service.reconcile();
+      expect((await registry.read()).records.map((r) => r.name)).toEqual([name, "pa-old-0003"]);
+    });
+
+    it("marks vanished sessions lost with an endedAt time", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      tmux.sessions.delete(fake.id);
+      await service.reconcile();
+      expect((await registry.read()).records[0]).toMatchObject({ name, state: "lost", endedAt: new Date(clock.now()).toISOString() });
     });
 
     it("attach returns commands and makes no tmux call", async () => {
@@ -581,6 +670,103 @@ describe("TmuxAgentService", () => {
       expect(result).toMatchObject({ state: "waiting_permission", timedOut: false });
     });
 
+    it("refuses an unrecognized screen unless allowUnknownState is set", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      fake.screen = EMPTY;
+      expect(await codeOf(service.send(sendInput(name, "hello")))).toBe("UNKNOWN_STATE");
+      expect(tmux.callsOf("send-keys")).toHaveLength(0);
+      await expect(service.send(sendInput(name, "hello", { allowUnknownState: true }))).resolves.toMatchObject({ sent: true });
+    });
+
+    it("allowUnknownState never overrides a dialog", async () => {
+      const service = make({ allowAnswerPrompts: true });
+      const { name, fake } = await started(service);
+      fake.screen = TRUST;
+      expect(await codeOf(service.send(sendInput(name, "1", { allowUnknownState: true, answerPermissionPrompt: true })))).toBe(
+        "WAITING_TRUST",
+      );
+      fake.screen = UNKNOWN_MENU;
+      expect(await codeOf(service.send(sendInput(name, "1", { allowUnknownState: true })))).toBe("WAITING_PERMISSION");
+      expect(tmux.callsOf("send-keys")).toHaveLength(0);
+    });
+
+    it("refuses a dialog with unknown wording because it looks like a menu", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      fake.screen = UNKNOWN_MENU;
+      expect(await codeOf(service.send(sendInput(name, "hello")))).toBe("WAITING_PERMISSION");
+    });
+
+    it("applies the leading-character guard to every line of multi-line text", async () => {
+      const service = make();
+      const { name } = await started(service);
+      tmux.calls.length = 0;
+      expect(await codeOf(service.send(sendInput(name, "Please run the tests\n!rm -rf ~")))).toBe("INVALID_INPUT");
+      expect(await codeOf(service.send(sendInput(name, "task\n/permissions")))).toBe("INVALID_INPUT");
+      expect(tmux.callsOf("send-keys")).toHaveLength(0);
+      expect(tmux.callsOf("load-buffer")).toHaveLength(0);
+    });
+
+    it("a refused send does not use up the send slot", async () => {
+      const service = make({ minSendIntervalMs: 1_500 });
+      const { name, fake } = await started(service);
+      fake.screen = BUSY;
+      expect(await codeOf(service.send(sendInput(name, "more")))).toBe("BUSY");
+      expect((await registry.read()).records[0]!.lastInputAt).toBeUndefined();
+      fake.screen = IDLE;
+      await expect(service.send(sendInput(name, "now"))).resolves.toMatchObject({ sent: true });
+    });
+
+    it("rate limits before any tmux call", async () => {
+      const service = make({ minSendIntervalMs: 1_500 });
+      const { name } = await started(service);
+      await service.send(sendInput(name, "one"));
+      tmux.calls.length = 0;
+      expect(await codeOf(service.send(sendInput(name, "two")))).toBe("RATE_LIMITED");
+      expect(tmux.calls).toEqual([]);
+    });
+
+    it("waitForIdle does not take the echoed message next to an empty prompt for the answer", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      const echo = `${IDLE}\n> work\n❯ \n`;
+      const answer = `${IDLE}\n> work\n● the real answer\n\n✻ Worked for 3s · done 12:35\n❯ \n`;
+      const screens = [IDLE, echo, BUSY, answer];
+      let polls = 0;
+      fake.screen = () => screens[Math.min(polls++, screens.length - 1)]!;
+      const result = await service.send(sendInput(name, "work", { waitForIdleMs: 30_000 }));
+      expect(result).toMatchObject({ timedOut: false, state: "idle" });
+      expect(result.newOutput!.output).toContain("the real answer");
+    });
+
+    it("waitForIdle accepts a fast answer when the screen is stable across two polls", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      const answer = `${IDLE}\n> work\n● quick answer\n\n✻ Worked for 1s · done 12:35\n❯ \n`;
+      let polls = 0;
+      fake.screen = () => (polls++ === 0 ? IDLE : answer);
+      const t0 = clock.now();
+      const result = await service.send(sendInput(name, "work", { waitForIdleMs: 30_000 }));
+      expect(result).toMatchObject({ timedOut: false, state: "idle" });
+      expect(result.newOutput!.output).toContain("quick answer");
+      expect(clock.now() - t0).toBeLessThan(5_000);
+    });
+
+    it("reports a sent message when the screen cannot be read afterwards", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      let polls = 0;
+      fake.screen = () => {
+        if (polls++ > 0) throw new Error("pane is gone");
+        return IDLE;
+      };
+      const result = await service.send(sendInput(name, "work", { waitForIdleMs: 30_000 }));
+      expect(result).toMatchObject({ sent: true, state: "unknown", waited: false });
+      expect(result.hint).toMatch(/was sent/);
+      expect(tmux.callsOf("send-keys").length).toBeGreaterThan(0);
+    });
+
     it("interrupt sends only C-c and counts as input", async () => {
       const service = make();
       const { name, fake } = await started(service);
@@ -666,6 +852,32 @@ describe("TmuxAgentService", () => {
       expect(audits.at(-1)).toMatchObject({ action: "stop-force", ok: true });
     });
 
+    it("a forced stop whose kill fails keeps the record running and reports the error", async () => {
+      const service = make();
+      const { name } = await started(service);
+      tmux.override = (args) => (args[0] === "kill-session" ? failed("server hiccup") : undefined);
+      expect(await codeOf(service.stop({ session: name, force: true, userConfirmed: true }))).toBe("TMUX_ERROR");
+      expect(tmux.sessions.size).toBe(1);
+      expect((await registry.read()).records[0]).toMatchObject({ state: "running" });
+      expect((await registry.read()).records[0]!.endedAt).toBeUndefined();
+    });
+
+    it("a kill after the grace period that fails keeps the record running", async () => {
+      const service = make({ stopGraceMs: 1_000 });
+      const { name } = await started(service);
+      exitsOnSlashExit(true);
+      tmux.override = (args) => (args[0] === "kill-session" ? failed("server hiccup") : undefined);
+      expect(await codeOf(service.stop({ session: name, force: false }))).toBe("TMUX_ERROR");
+      expect((await registry.read()).records[0]).toMatchObject({ state: "running" });
+    });
+
+    it("stopped records get an endedAt time", async () => {
+      const service = make();
+      const { name } = await started(service);
+      await service.stop({ session: name, force: true, userConfirmed: true });
+      expect((await registry.read()).records[0]).toMatchObject({ state: "stopped", endedAt: new Date(clock.now()).toISOString() });
+    });
+
     it("never kills when ownership cannot be verified", async () => {
       const service = make();
       const { name, fake } = await started(service);
@@ -692,6 +904,22 @@ describe("TmuxAgentService", () => {
       const { records } = await registry.read();
       expect(records.map((r) => r.state)).toEqual(["stopped", "running"]);
       expect(records[1]).toMatchObject({ recoveredFrom: name });
+    });
+
+    it("recover audits the old session as session and the new one as newSession", async () => {
+      const service = make({ maxSessions: 1 });
+      const { name } = await started(service);
+      const result = await service.recover({ session: name, userConfirmed: true });
+      expect(audits.at(-1)).toMatchObject({ action: "recover", session: name, newSession: result.session, ok: true });
+    });
+
+    it("recover does not start a new session when the old one survives the kill", async () => {
+      const service = make({ maxSessions: 2 });
+      const { name } = await started(service);
+      tmux.override = (args) => (args[0] === "kill-session" ? failed("server hiccup") : undefined);
+      expect(await codeOf(service.recover({ session: name, userConfirmed: true }))).toBe("TMUX_ERROR");
+      expect(tmux.callsOf("new-session")).toHaveLength(1);
+      expect((await registry.read()).records).toEqual([expect.objectContaining({ name, state: "running" })]);
     });
 
     it("recover re-checks the start gates BEFORE killing the old session", async () => {
@@ -724,6 +952,18 @@ describe("TmuxAgentService", () => {
       const states = Object.fromEntries((await registry.read()).records.map((r) => [r.name, r.state]));
       expect(states).toEqual({ [idle.name]: "stopped", [busy.name]: "running" });
       expect(audits.some((a) => a.action === "reap" && a.session === idle.name)).toBe(true);
+    });
+
+    it("the reaper leaves a session alone while a human is attached to it", async () => {
+      const service = make({ idleReapMinutes: 1 });
+      const { name, fake } = await started(service);
+      fake.attached = 1;
+      clock.t += 61_000;
+      expect(await service.reapOnce()).toEqual([]);
+      expect(tmux.callsOf("send-keys")).toHaveLength(0);
+      fake.attached = 0;
+      exitsOnSlashExit();
+      expect(await service.reapOnce()).toEqual([name]);
     });
 
     it("a recent send keeps a session from being reaped", async () => {

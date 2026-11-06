@@ -41,8 +41,9 @@ export interface TextRules {
 
 /**
  * Validate text that will be typed into an agent TUI and return it with CRLF normalized to LF.
- * Rejects control characters, empty or too long text, and text starting with `!`, `#` or `/`
- * (after leading whitespace) unless it is a single-line allowed slash command.
+ * Rejects control characters, empty or too long text, and text where ANY line starts with `!`, `#` or `/`
+ * (after leading whitespace) unless it is a single-line allowed slash command. Every line is checked because
+ * without bracketed paste the terminal turns each pasted line into its own submitted input.
  */
 export function validateText(text: string, rules: TextRules): string {
   const normalized = text.replace(/\r\n/g, "\n");
@@ -55,11 +56,12 @@ export function validateText(text: string, rules: TextRules): string {
   if (FORBIDDEN_CONTROL.test(normalized)) {
     throw new TmuxAgentError("INVALID_INPUT", "Text contains control characters");
   }
-  const head = normalized.trimStart();
-  if (GUARDED_LEADING.has(head[0] ?? "")) {
+  for (const line of normalized.split("\n")) {
+    const head = line.trimStart();
+    if (!GUARDED_LEADING.has(head[0] ?? "")) continue;
     const command = head.split(/\s/, 1)[0] ?? "";
-    if (!(rules.allowedSlash.includes(command) && isSingleLine(head))) {
-      throw new TmuxAgentError("INVALID_INPUT", "Text must not start with '!', '#' or '/' (rephrase the task)");
+    if (!(rules.allowedSlash.includes(command) && isSingleLine(normalized.trimStart()))) {
+      throw new TmuxAgentError("INVALID_INPUT", "No line of the text may start with '!', '#' or '/' (rephrase the task)");
     }
   }
   return normalized;

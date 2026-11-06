@@ -84,7 +84,10 @@ describe("TMUX_TOOLS", () => {
       await call("agent_session_start", { project: "p", directory: "/x" }, service);
       expect(service.start).toHaveBeenCalledWith({ project: "p", directory: "/x", kind: "claude", permissionMode: "default" });
       await call("agent_session_read", { session: "pa-x-1a2b" }, service);
-      expect(service.read).toHaveBeenCalledWith({ session: "pa-x-1a2b", lines: 80 });
+      // `lines` has no schema default: the service applies tmuxAgents.defaultOutputLines
+      expect(service.read).toHaveBeenCalledWith({ session: "pa-x-1a2b" });
+      await call("agent_session_send", { session: "pa-x-1a2b", text: "hi" }, service);
+      expect(service.send).toHaveBeenCalledWith(expect.objectContaining({ allowUnknownState: false, queueWhileBusy: false }));
     });
   });
 

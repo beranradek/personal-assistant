@@ -17,6 +17,8 @@ export interface FakeSession {
   /** Keys sent with `send-keys` (each call as one string). */
   keys: string[];
   pasted: string[];
+  /** Number of attached clients (`#{session_attached}`). */
+  attached: number;
 }
 
 export interface FakeCall {
@@ -62,7 +64,8 @@ export class FakeTmux implements TmuxRunner {
   addSession(name: string, screen = this.defaultScreen): FakeSession {
     const n = this.nextId++;
     const session: FakeSession = {
-      name, id: `$${n}`, paneId: `%${n}`, created: String(this.createdCounter++), cwd: "/", argv: [], screen, keys: [], pasted: [],
+      name, id: `$${n}`, paneId: `%${n}`, created: String(this.createdCounter++), cwd: "/", argv: [], screen,
+      keys: [], pasted: [], attached: 0,
     };
     this.sessions.set(session.id, session);
     return session;
@@ -102,7 +105,9 @@ export class FakeTmux implements TmuxRunner {
       case "display-message": {
         if (noServer) return fail("no server running on /tmp/fake", true);
         const session = this.target(args);
-        return session ? ok(`${session.id} ${session.created}\n`) : fail("can't find pane");
+        if (!session) return fail("can't find pane");
+        if (args[args.length - 1] === "#{session_attached}") return ok(`${session.attached}\n`);
+        return ok(`${session.id} ${session.created}\n`);
       }
       case "capture-pane": {
         const session = this.target(args);

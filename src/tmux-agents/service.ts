@@ -8,7 +8,7 @@ import type { AuditEntry } from "./audit.js";
 import { TmuxAgentError } from "./errors.js";
 import { buildAgentArgv, getKind, resolvePermissionMode, type AgentKind, type PermissionMode } from "./kinds.js";
 import { buildSessionName, isSingleLine, validateProject, validateText } from "./names.js";
-import { reconcile, type LiveSession, type SessionRecord } from "./registry.js";
+import { pruneTerminal, reconcile, type LiveSession, type SessionRecord } from "./registry.js";
 import { resolveStartDirectory } from "./roots.js";
 import type { TmuxRunResult } from "./runner.js";
 import type { StartInput } from "./schemas.js";
@@ -21,6 +21,7 @@ const log = createLogger("tmux-agents-service");
 const NEW_SESSION_FORMAT = "#{session_id} #{pane_id} #{session_created}";
 const LIST_FORMAT = "#{session_name} #{session_id} #{session_created}";
 const OWNER_FORMAT = "#{session_id} #{session_created}";
+const ATTACHED_FORMAT = "#{session_attached}";
 
 /** Timings (milliseconds). */
 const START_SETTLE_MS = 3_000;
@@ -65,8 +66,16 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   const random = deps.random;
   const prefix = cfg.sessionPrefix;
   let lastStartAt = 0;
+  let startChain: Promise<unknown> = Promise.resolve();
   let reaperTimer: NodeJS.Timeout | undefined;
   let reaping = false;
+
+  /** Run `fn` after all earlier calls finished (never overlaps): the start gates must see the effect of the previous start. */
+  function serializedStart<T>(fn: () => Promise<T>): Promise<T> {
+    const run = startChain.then(fn);
+    startChain = run.catch(() => undefined);
+    return run;
+  }
 
   // ---- tmux primitives ----------------------------------------------------
 
@@ -77,11 +86,28 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     return result;
   }
 
+  /** Best effort kill for cleanup paths that already fail with their own error. */
   async function killQuietly(sessionId: string): Promise<void> {
     try {
       await runner.run(["kill-session", "-t", sessionId]);
     } catch (err) {
+      log.warn({ err, sessionId }, "kill-session failed; the session may be orphaned");
+    }
+  }
+
+  async function sessionGone(sessionId: string): Promise<boolean> {
+    return (await runner.run(["has-session", "-t", sessionId])).code !== 0;
+  }
+
+  /** Kill a session and prove it is gone: a failed kill must not turn into a `stopped` record of a running session. */
+  async function killVerified(sessionId: string): Promise<void> {
+    try {
+      await runner.run(["kill-session", "-t", sessionId]);
+    } catch (err) {
       log.warn({ err, sessionId }, "kill-session failed");
+    }
+    if (!(await sessionGone(sessionId))) {
+      throw new TmuxAgentError("TMUX_ERROR", "The session is still alive after kill-session; it stays registered as running");
     }
   }
 
@@ -120,6 +146,8 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     }));
   }
 
+  const markEnded = (name: string, state: "stopped" | "lost") => patchRecord(name, { state, endedAt: nowIso() });
+
   /**
    * Check that the tmux session behind a record is still OUR session (id and creation time match).
    * Returns false (and marks the record `lost`) when it is gone; throws NOT_OWNED when the id is now used by another session.
@@ -129,15 +157,21 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     const result = await runner.run(["display-message", "-p", "-t", record.tmuxPaneId, OWNER_FORMAT]);
     if (result.code !== 0) {
       log.warn({ session: record.name }, "tmux session is gone, marking it lost");
-      await patchRecord(record.name, { state: "lost" });
+      await markEnded(record.name, "lost");
       return false;
     }
     const [id, created] = result.stdout.trim().split(" ");
     if (id !== record.tmuxSessionId || created !== record.tmuxCreated) {
-      await patchRecord(record.name, { state: "lost" });
+      await markEnded(record.name, "lost");
       throw new TmuxAgentError("NOT_OWNED", `Session ${record.name} no longer matches its tmux session; refusing to touch it`);
     }
     return true;
+  }
+
+  /** Whether a client (a human through `attach`) is connected to the session. */
+  async function isAttached(record: SessionRecord): Promise<boolean> {
+    const result = await runner.run(["display-message", "-p", "-t", record.tmuxPaneId, ATTACHED_FORMAT]);
+    return result.code === 0 && Number(result.stdout.trim()) > 0;
   }
 
   /** Registry record of a session that must be running and owned by us. */
@@ -211,12 +245,35 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     return { project: input.project, kind, mode, cwd, argv: buildAgentArgv(kinds, kind.id, mode) };
   }
 
+  /**
+   * After a `new-session` timeout tmux may still have created the session. It would be live without a record: it counts
+   * against `maxSessions`, is never reaped and cannot be stopped. The name was generated a moment ago on our dedicated
+   * server, so a live session with exactly this name is ours: kill it by id. Failures are only logged.
+   */
+  async function removeOrphan(name: string): Promise<void> {
+    try {
+      const orphan = (await listLive()).find((l) => l.name === name);
+      if (!orphan) return;
+      log.warn({ name, sessionId: orphan.sessionId }, "new-session timed out but the session exists; killing the orphan");
+      await killVerified(orphan.sessionId);
+    } catch (err) {
+      log.warn({ err, name }, "Could not check for an orphan session after a new-session timeout");
+    }
+  }
+
   async function createTmuxSession(p: PreparedStart) {
     for (let attempt = 0; attempt < NEW_SESSION_ATTEMPTS; attempt++) {
       const name = buildSessionName(p.project, random);
-      const result = await runner.run([
-        "new-session", "-d", "-s", name, "-x", PANE_WIDTH, "-y", PANE_HEIGHT, "-c", p.cwd, "-P", "-F", NEW_SESSION_FORMAT, "--", ...p.argv,
-      ]);
+      let result: TmuxRunResult;
+      try {
+        result = await runner.run([
+          "new-session", "-d", "-s", name, "-x", PANE_WIDTH, "-y", PANE_HEIGHT, "-c", p.cwd,
+          "-P", "-F", NEW_SESSION_FORMAT, "--", ...p.argv,
+        ]);
+      } catch (err) {
+        if (errorCode(err) === "TIMEOUT") await removeOrphan(name);
+        throw err;
+      }
       if (result.code === 0) {
         const match = /^(\$\d+) (%\d+) (\d+)$/.exec(result.stdout.trim());
         if (!match) throw new TmuxAgentError("TMUX_ERROR", "Unexpected output of tmux new-session");
@@ -227,7 +284,8 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     throw new TmuxAgentError("TMUX_ERROR", "Could not find a free session name");
   }
 
-  async function launch(p: PreparedStart, entry: { session?: string }, recoveredFrom?: string) {
+  /** Check the limits, create the tmux session and write its record. Callers run it through `serializedStart`. */
+  async function register(p: PreparedStart, entry: AuditContext, recoveredFrom?: string): Promise<SessionRecord> {
     const snapshot = await registry.read();
     if (snapshot.corrupt) throw new TmuxAgentError("TMUX_ERROR", "registry corrupt, manual repair needed");
     const live = await listLive();
@@ -236,7 +294,9 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     }
 
     const created = await createTmuxSession(p);
-    entry.session = created.name;
+    // A recover audits the replaced session as `session` and the new one as `newSession`.
+    if (recoveredFrom) entry.newSession = created.name;
+    else entry.session = created.name;
     const record: SessionRecord = {
       name: created.name,
       project: p.project,
@@ -268,8 +328,11 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
       await killQuietly(created.sessionId);
       throw new TmuxAgentError("TOO_MANY_SESSIONS", `At most ${cfg.maxSessions} agent sessions may run`);
     }
-    lastStartAt = clock.now();
+    return record;
+  }
 
+  /** Wait for the TUI to draw, then report the detected state (outside the start serialization: it only reads). */
+  async function settle(record: SessionRecord) {
     await clock.sleep(START_SETTLE_MS);
     let state: AgentState = "unknown";
     let hint: string | undefined;
@@ -281,11 +344,15 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     }
     if (state === "waiting_trust") {
       hint = "The agent shows a trust dialog. Report it to the user and recommend agent_session_attach; do not confirm it.";
+    } else if (state === "unknown" && !hint) {
+      hint =
+        "The screen is not recognized: the agent may still be starting or wait at a dialog. Read it with agent_session_read; " +
+        "if it shows a dialog, report it to the user and recommend agent_session_attach.";
     }
     return { record, state, hint };
   }
 
-  const toStartResult = ({ record, state, hint }: Awaited<ReturnType<typeof launch>>): StartResult => ({
+  const toStartResult = ({ record, state, hint }: Awaited<ReturnType<typeof settle>>): StartResult => ({
     session: record.name,
     project: record.project,
     kind: record.kind,
@@ -298,15 +365,22 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
   // ---- registry sync --------------------------------------------------------
 
-  /** Mark running records whose tmux session is gone as lost. Returns the reconcile result for logging. */
+  /**
+   * Mark running records whose tmux session is gone as lost and prune old terminal records (one locked write).
+   * Returns the reconcile result for logging.
+   */
   async function syncWithTmux() {
     const { records, corrupt } = await registry.read();
     if (corrupt) return undefined;
     const result = reconcile(records, await listLive(), prefix);
-    if (result.markLost.length > 0) {
-      const lost = new Set(result.markLost.map((r) => r.name));
+    const lost = new Set(result.markLost.map((r) => r.name));
+    const hasOldRecords = pruneTerminal(records, clock.now()).length !== records.length;
+    if (lost.size > 0 || hasOldRecords) {
       await registry.mutate((current) => ({
-        records: current.map((r) => (lost.has(r.name) && isRunning(r) ? { ...r, state: "lost" as const } : r)),
+        records: pruneTerminal(
+          current.map((r) => (lost.has(r.name) && isRunning(r) ? { ...r, state: "lost" as const, endedAt: nowIso() } : r)),
+          clock.now(),
+        ),
         result: undefined,
       }));
     }
@@ -315,15 +389,10 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
   // ---- stop -----------------------------------------------------------------
 
-  async function sessionGone(record: SessionRecord): Promise<boolean> {
-    const result = await runner.run(["has-session", "-t", record.tmuxSessionId]);
-    return result.code !== 0;
-  }
-
   async function stopSession(record: SessionRecord, force: boolean): Promise<StopResult> {
     if (force) {
-      await killQuietly(record.tmuxSessionId);
-      await patchRecord(record.name, { state: "stopped" });
+      await killVerified(record.tmuxSessionId);
+      await markEnded(record.name, "stopped");
       return { session: record.name, method: "forced", gone: true };
     }
     const kind = kindOf(record);
@@ -334,34 +403,39 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     const deadline = clock.now() + cfg.stopGraceMs;
     while (clock.now() < deadline) {
       await clock.sleep(STOP_POLL_MS);
-      if (await sessionGone(record)) {
-        await patchRecord(record.name, { state: "stopped" });
+      if (await sessionGone(record.tmuxSessionId)) {
+        await markEnded(record.name, "stopped");
         return { session: record.name, method: "graceful", gone: true };
       }
     }
-    // Still alive after the grace period: make sure it is still our session, then kill it.
-    if (await verifyAlive(record)) await killQuietly(record.tmuxSessionId);
-    await patchRecord(record.name, { state: "stopped" });
+    // Still alive after the grace period: make sure it is still our session, then kill it (and prove it is gone).
+    if (await verifyAlive(record)) await killVerified(record.tmuxSessionId);
+    await markEnded(record.name, "stopped");
     return { session: record.name, method: "kill-after-grace", gone: true };
   }
 
   // ---- send -----------------------------------------------------------------
 
-  /** Reserve the send slot: rate limit and `lastInputAt` in one locked step (also across processes). */
+  const sentTooSoon = (record: SessionRecord) =>
+    record.lastInputAt !== undefined && clock.now() - Date.parse(record.lastInputAt) < cfg.minSendIntervalMs;
+
+  const rateLimitedSend = () => new TmuxAgentError("RATE_LIMITED", "Messages are sent too fast; wait a moment");
+
+  /**
+   * Reserve the send slot: rate limit and `lastInputAt` in one locked step (also across processes). Called only after
+   * all refusals (busy, waiting, unknown) passed, so a refused send does not use up the slot or reset the reaper clock.
+   */
   async function reserveSend(name: string): Promise<void> {
     const allowed = await registry.mutate((records) => {
-      const now = clock.now();
       const record = records.find((r) => r.name === name);
-      if (!record) return { records, result: false };
-      if (record.lastInputAt && now - Date.parse(record.lastInputAt) < cfg.minSendIntervalMs) {
-        return { records, result: false };
-      }
+      if (!record || sentTooSoon(record)) return { records, result: false };
+      const now = clock.now();
       return {
         records: records.map((r) => (r.name === name ? { ...r, lastInputAt: new Date(now).toISOString() } : r)),
         result: true,
       };
     });
-    if (!allowed) throw new TmuxAgentError("RATE_LIMITED", "Messages are sent too fast; wait a moment");
+    if (!allowed) throw rateLimitedSend();
   }
 
   async function pressEnter(record: SessionRecord): Promise<void> {
@@ -395,18 +469,25 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     return "keys";
   }
 
+  /**
+   * Poll until the answer is finished. An idle screen counts only when it differs from the one before sending AND the agent
+   * was seen busy, or the screen did not change between two polls: right after sending, the echoed message next to an empty
+   * prompt would otherwise pass for a finished answer.
+   */
   async function waitForIdle(record: SessionRecord, before: string, budgetMs: number) {
     const detector = kindOf(record).detector;
     const deadline = clock.now() + budgetMs;
-    let screen = before;
+    let sawBusy = false;
+    let previous: string | undefined;
     for (;;) {
       await clock.sleep(WAIT_POLL_MS);
-      screen = await capture(record, SEND_CAPTURE_LINES);
+      const screen = await capture(record, SEND_CAPTURE_LINES);
       const { state } = detectState(detector, screen);
-      // An idle screen identical to the one before sending is the old prompt, not the finished answer.
-      if (state === "idle" && screen !== before) return { screen, state, timedOut: false };
+      if (state === "busy") sawBusy = true;
       if (state === "waiting_permission" || state === "waiting_trust") return { screen, state, timedOut: false };
+      if (state === "idle" && screen !== before && (sawBusy || screen === previous)) return { screen, state, timedOut: false };
       if (clock.now() >= deadline) return { screen, state, timedOut: true };
+      previous = screen;
     }
   }
 
@@ -414,9 +495,15 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
   const service: TmuxAgentService = {
     async start(input) {
-      return audited({ action: "start", project: input.project, kind: input.kind, permissionMode: input.permissionMode }, async (entry) =>
-        toStartResult(await launch(await prepareStart(input, { checkRate: true }), entry)),
-      );
+      return audited({ action: "start", project: input.project, kind: input.kind, permissionMode: input.permissionMode }, async (entry) => {
+        const record = await serializedStart(async () => {
+          const prepared = await prepareStart(input, { checkRate: true });
+          // Reserved before the tmux call: concurrent and failed starts count against minStartIntervalMs too.
+          lastStartAt = clock.now();
+          return register(prepared, entry);
+        });
+        return toStartResult(await settle(record));
+      });
     },
 
     async list({ includeStopped }) {
@@ -461,7 +548,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
     async read({ session, lines }) {
       const record = await requireRunning(session);
-      const count = Math.min(lines, cfg.maxOutputLines);
+      const count = Math.min(lines ?? cfg.defaultOutputLines, cfg.maxOutputLines);
       const screen = tailLines(await capture(record, count), count);
       return { session, untrusted: true, lines: count, ...wrapUntrusted(screen, redact) };
     },
@@ -474,7 +561,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
         if (!isSingleLine(text) && kind.multilinePaste === "none") {
           throw new TmuxAgentError("INVALID_INPUT", `Agent kind ${kind.id} does not accept multi-line text`);
         }
-        await reserveSend(record.name);
+        if (sentTooSoon(record)) throw rateLimitedSend(); // cheap early refusal; reserveSend re-checks under the lock
         if (!(await verifyAlive(record))) throw new TmuxAgentError("NOT_FOUND", `Session ${record.name} is not running`);
 
         const { screen: before, status } = await screenState(record, SEND_CAPTURE_LINES);
@@ -487,17 +574,35 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
         if (status.state === "busy" && !input.queueWhileBusy) {
           throw new TmuxAgentError("BUSY", "The agent is busy; wait, use queueWhileBusy, or interrupt it");
         }
+        // An unrecognized screen may be a dialog with unknown wording: Enter could confirm its default answer.
+        if (status.state === "unknown" && !input.allowUnknownState) {
+          throw new TmuxAgentError(
+            "UNKNOWN_STATE",
+            "The screen is not recognized (the agent may be starting or show a dialog); read it with agent_session_read, " +
+              "then retry with allowUnknownState or ask the user (agent_session_attach)",
+          );
+        }
 
+        await reserveSend(record.name);
         const mode = await typeText(record, text);
         const budget = Math.min(input.waitForIdleMs, cfg.maxWaitMs);
         if (budget <= 0) return { session: record.name, sent: true, mode, state: status.state, waited: false, timedOut: false };
 
-        const waited = await waitForIdle(record, before, budget);
-        const output = wrapUntrusted(diffNewOutput(before, waited.screen).text, redact);
-        return {
-          session: record.name, sent: true, mode, state: waited.state, waited: true, timedOut: waited.timedOut,
-          newOutput: { untrusted: true, ...output },
-        };
+        try {
+          const waited = await waitForIdle(record, before, budget);
+          const output = wrapUntrusted(diffNewOutput(before, waited.screen).text, redact);
+          return {
+            session: record.name, sent: true, mode, state: waited.state, waited: true, timedOut: waited.timedOut,
+            newOutput: { untrusted: true, ...output },
+          };
+        } catch (err) {
+          // The input is already typed: report that instead of an error that suggests it was not sent.
+          log.warn({ err, session: record.name }, "Could not read the screen after sending");
+          return {
+            session: record.name, sent: true, mode, state: "unknown", waited: false, timedOut: false,
+            hint: "The text was sent, but the screen could not be read afterwards (the agent may have exited). Check agent_session_status.",
+          };
+        }
       });
     },
 
@@ -543,11 +648,11 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
         if (await verifyAlive(old)) {
           await runner.run(["send-keys", "-t", old.tmuxPaneId, kindOf(old).interruptKey]);
           await clock.sleep(RECOVER_INTERRUPT_WAIT_MS);
-          await killQuietly(old.tmuxSessionId);
+          await killVerified(old.tmuxSessionId); // throws (old record stays running) when the session survives
         }
-        await patchRecord(old.name, { state: "stopped" });
-        const started = await launch(prepared, entry, old.name);
-        return { ...toStartResult(started), oldSession: old.name, method: "force-restart" as const };
+        await markEnded(old.name, "stopped");
+        const record = await serializedStart(() => register(prepared, entry, old.name));
+        return { ...toStartResult(await settle(record)), oldSession: old.name, method: "force-restart" as const };
       });
     },
 
@@ -580,6 +685,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
           try {
             if (!(await verifyAlive(record))) continue;
             if ((await screenState(record)).status.state !== "idle") continue;
+            if (await isAttached(record)) continue; // a human works in it through attach; lastInputAt does not see that
             const context = { action: "reap", session: record.name, project: record.project, kind: record.kind };
             await audited(context, () => stopSession(record, false));
             reaped.push(record.name);

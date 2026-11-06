@@ -44,6 +44,23 @@ describe("detectState claude@1", () => {
     expect(detect(fixture("claude-trust.txt"))).toMatchObject({ state: "waiting_trust", confidence: "low" });
   });
 
+  it("generic menu with unknown wording: a selected numbered option is waiting_permission, low", () => {
+    const status = detect("Some new dialog title\n\n  ❯ 1. Allow once\n    2. Deny\n");
+    expect(status).toMatchObject({ state: "waiting_permission", confidence: "low", signal: "menu" });
+    expect(status.evidence).toEqual(["menu: selected numbered option"]);
+    expect(detect("│ ❯ 1. Yes │\n│   2. No │\n")).toMatchObject({ state: "waiting_permission" });
+  });
+
+  it("generic menu: an 'Esc to cancel' footer alone is waiting_permission, low", () => {
+    const status = detect("Pick one\n  Enter to confirm · Esc to cancel\n");
+    expect(status).toMatchObject({ state: "waiting_permission", confidence: "low", signal: "menu" });
+    expect(status.evidence).toEqual(["menu footer: esc to cancel"]);
+  });
+
+  it("an empty prompt is not mistaken for a menu", () => {
+    expect(detect("done\n\n❯ \n  ? for shortcuts\n")).toMatchObject({ state: "idle" });
+  });
+
   it("empty or garbage screen: unknown, low", () => {
     expect(detect(fixture("claude-empty.txt"))).toMatchObject({ state: "unknown", confidence: "low", evidence: [] });
     expect(detect("\u0000garbage ☃ ???")).toMatchObject({ state: "unknown", confidence: "low" });

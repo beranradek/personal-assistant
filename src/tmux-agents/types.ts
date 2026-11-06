@@ -93,6 +93,8 @@ export interface SendResult {
   waited: boolean;
   timedOut: boolean;
   newOutput?: UntrustedOutput & { untrusted: true };
+  /** Set when the text was sent but the screen could not be read afterwards. */
+  hint?: string;
 }
 
 export interface StopResult {

@@ -110,8 +110,8 @@ describe("createTmuxRunner", () => {
   it("maps 'no server running' and 'error connecting' to noServer, not an exception", async () => {
     const a = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr: "no server running on /x" })).run(["list-sessions"]);
     expect(a).toMatchObject({ code: 1, noServer: true });
-    const b = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr: "error connecting to /x (No such file or directory)" }))
-      .run(["list-sessions"]);
+    const stderr = "error connecting to /x (No such file or directory)";
+    const b = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr })).run(["list-sessions"]);
     expect(b).toMatchObject({ code: 1, noServer: true });
   });
 

@@ -127,6 +127,12 @@ describe.skipIf(!tmuxAvailable)("tmux integration (real tmux, fake agent)", { ti
     expect(result.newOutput?.output).toContain("line one | line two");
   });
 
+  it("session_attached is 0 for a session without a client (the idle reaper skips attached sessions)", async () => {
+    const [session] = (await service.list({ includeStopped: false })).sessions;
+    const result = await tmux("list-sessions", "-F", "#{session_name} #{session_attached}");
+    expect(`${result.stdout ?? ""}`.split("\n")).toContain(`${session!.session} 0`);
+  });
+
   it("text ending in ';' arrives unchanged (tmux would eat it as a command separator)", async () => {
     const [session] = (await service.list({ includeStopped: false })).sessions;
     await service.send(sendInput(session!.session, "echo done;;", 8_000));

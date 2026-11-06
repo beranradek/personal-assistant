@@ -99,10 +99,17 @@ describe("validateText", () => {
     expect(code(() => validateText("/clear", { ...opts, allowedSlash: [] }))).toBe("INVALID_INPUT");
   });
 
-  it("allows ! and / later in the line", () => {
+  it("allows ! and / later in a line", () => {
     expect(validateText("run ls !important and /tmp", opts)).toBe("run ls !important and /tmp");
-    expect(validateText("first\n!second\n/third", opts)).toBe("first\n!second\n/third");
+    expect(validateText("first\nsecond !x\nthird /y", opts)).toBe("first\nsecond !x\nthird /y");
   });
+
+  it.each(["Please run the tests\n!rm -rf ~", "task\n  /permissions", "task\n# heading", "task\n/clear", "line one\n\n!x", "ok\r\n!x"])(
+    "rejects a guarded character at the start of ANY line: %j",
+    (text) => {
+      expect(code(() => validateText(text, opts))).toBe("INVALID_INPUT");
+    },
+  );
 });
 
 describe("isSingleLine", () => {

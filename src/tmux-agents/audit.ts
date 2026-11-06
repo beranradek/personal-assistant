@@ -11,6 +11,8 @@ export const AUDIT_MAX_BYTES = 5 * 1024 * 1024;
 export interface AuditEntry {
   action: string;
   session?: string;
+  /** The session a `recover` started (`session` is the replaced one). */
+  newSession?: string;
   project?: string;
   kind?: string;
   permissionMode?: string;

@@ -29,7 +29,8 @@ export const statusShape = { session: Session };
 
 export const readShape = {
   session: Session,
-  lines: z.number().int().min(1).max(300).default(80).describe("How many screen lines from the bottom"),
+  // No schema default: the service applies `tmuxAgents.defaultOutputLines`.
+  lines: z.number().int().min(1).max(300).optional().describe("How many screen lines from the bottom (default from settings)"),
 };
 
 export const sendShape = {
@@ -38,6 +39,9 @@ export const sendShape = {
   waitForIdleMs: z.number().int().min(0).max(300_000).default(0).describe("Wait up to this long for the agent to become idle"),
   queueWhileBusy: z.boolean().default(false).describe("Send even when the agent is busy"),
   answerPermissionPrompt: z.boolean().default(false).describe("Answer a permission prompt (needs settings allowAnswerPrompts)"),
+  allowUnknownState: z.boolean().default(false).describe(
+    "Send although the screen is not recognized (state unknown). Read the screen first; never use it to answer a dialog",
+  ),
 };
 
 export const interruptShape = { session: Session };

@@ -105,6 +105,10 @@ const CLAUDE_EMPTY_PROMPT = /^\s*❯\s*$/m;
 // Guesses until real captures exist (operator step 6).
 const CLAUDE_TRUST = /Do you trust the files in this folder\?/i;
 const CLAUDE_PERMISSION = /Do you want to proceed\?/i;
+// Generic menu: a selected numbered option (`❯ 1. Yes`) or an "Esc to cancel" footer. Catches dialogs whose wording is unknown,
+// so that Enter is never sent into a menu whose default answer may be "yes".
+const CLAUDE_MENU_SELECTION = /^[\s│|]*❯\s*\d+\.\s+\S/m;
+const CLAUDE_MENU_FOOTER = /esc to cancel/i;
 
 /** Only the bottom of the screen describes the current state; older lines are history. */
 const DETECTION_TAIL_LINES = 25;
@@ -120,6 +124,15 @@ function detectClaude(screen: string): Omit<ScreenStatus, "detector"> {
       signal: "permission-prompt",
       confidence: "low",
       evidence: ["permission prompt text"],
+    };
+  }
+  const menuSelection = CLAUDE_MENU_SELECTION.test(tail);
+  if (menuSelection || CLAUDE_MENU_FOOTER.test(tail)) {
+    return {
+      state: "waiting_permission",
+      signal: "menu",
+      confidence: "low",
+      evidence: [menuSelection ? "menu: selected numbered option" : "menu footer: esc to cancel"],
     };
   }
 
