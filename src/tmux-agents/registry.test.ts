@@ -1,8 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createRegistry, reconcile, type SessionRecord, type LiveSession } from "./registry.js";
+import { createRegistry, pruneTerminal, reconcile, type SessionRecord, type LiveSession } from "./registry.js";
+
+/** Lets one test make the write of `owner.json` fail (ESM namespaces cannot be spied on). */
+const ownerWrite = vi.hoisted(() => ({ failNext: false }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: ((file: Parameters<typeof actual.writeFile>[0], ...rest: unknown[]) => {
+      if (ownerWrite.failNext && String(file).endsWith("owner.json")) {
+        ownerWrite.failNext = false;
+        return Promise.reject(new Error("disk full"));
+      }
+      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(file, ...rest);
+    }) as typeof actual.writeFile,
+  };
+});
 
 function record(name: string, over: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -118,11 +134,39 @@ describe("registry", () => {
     expect(fs.readdirSync(dir)).toEqual(["registry.json"]);
   });
 
-  it("takes over a lock whose owner process is dead", async () => {
-    holdLock(`${file()}.lock`, { token: "dead", pid: 999_999 });
+  it("takes over a lock whose owner process is dead and the lock is older than the minimum age", async () => {
+    holdLock(`${file()}.lock`, { token: "dead", pid: 999_999, ageMs: 5_000 });
     const registry = createRegistry({ dir, lockPollMs: 5, isPidAlive: () => false });
     await registry.mutate((records) => ({ records: [...records, record("pa-a-0001")], result: undefined }));
     expect((await registry.read()).records).toHaveLength(1);
+  });
+
+  it("does not take over a fresh lock only because its pid looks dead (other PID namespace)", async () => {
+    holdLock(`${file()}.lock`, { token: "fresh", pid: 999_999 });
+    const registry = createRegistry({ dir, lockWaitMs: 60, lockPollMs: 5, isPidAlive: () => false });
+    await expect(registry.mutate((records) => ({ records, result: 1 }))).rejects.toMatchObject({ code: "TMUX_ERROR" });
+    expect(fs.existsSync(`${file()}.lock`)).toBe(true);
+  });
+
+  it("removes leftover .stale-* lock directories of crashed processes, keeps fresh ones", async () => {
+    fs.mkdirSync(dir, { recursive: true });
+    const old = `${file()}.lock.stale-1-aaaa`;
+    const fresh = `${file()}.lock.stale-2-bbbb`;
+    fs.mkdirSync(old);
+    fs.mkdirSync(fresh);
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(old, past, past);
+    await createRegistry({ dir }).mutate((records) => ({ records, result: undefined }));
+    expect(fs.existsSync(old)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("does not leave a lock directory behind when owner.json cannot be written", async () => {
+    const registry = createRegistry({ dir });
+    ownerWrite.failNext = true;
+    await expect(registry.mutate((records) => ({ records, result: 1 }))).rejects.toThrow("disk full");
+    expect(fs.existsSync(`${file()}.lock`)).toBe(false);
+    await registry.mutate((records) => ({ records, result: 1 }));
   });
 
   it("parallel writers lose no entry (several rounds)", async () => {
@@ -170,6 +214,36 @@ describe("registry", () => {
       return { records, result: undefined };
     });
     expect(fs.existsSync(`${file()}.lock`)).toBe(true);
+  });
+});
+
+describe("pruneTerminal", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.parse("2026-11-20T10:00:00.000Z");
+
+  it("keeps running records and recently ended ones, drops old stopped and lost ones", () => {
+    const records = [
+      record("pa-a-0001"),
+      record("pa-b-0002", { state: "stopped", endedAt: new Date(now - 1 * DAY).toISOString() }),
+      record("pa-c-0003", { state: "stopped", endedAt: new Date(now - 8 * DAY).toISOString() }),
+      record("pa-d-0004", { state: "lost", endedAt: new Date(now - 30 * DAY).toISOString() }),
+    ];
+    expect(pruneTerminal(records, now).map((r) => r.name)).toEqual(["pa-a-0001", "pa-b-0002"]);
+  });
+
+  it("uses the last activity for records without endedAt", () => {
+    const old = record("pa-a-0001", { state: "stopped", createdAt: new Date(now - 20 * DAY).toISOString() });
+    const active = record("pa-b-0002", {
+      state: "stopped",
+      createdAt: new Date(now - 20 * DAY).toISOString(),
+      lastInputAt: new Date(now - DAY).toISOString(),
+    });
+    expect(pruneTerminal([old, active], now).map((r) => r.name)).toEqual(["pa-b-0002"]);
+  });
+
+  it("never drops a running record, however old", () => {
+    const running = record("pa-a-0001", { createdAt: new Date(now - 90 * DAY).toISOString() });
+    expect(pruneTerminal([running], now)).toHaveLength(1);
   });
 });
 

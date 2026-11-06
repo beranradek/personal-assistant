@@ -41,7 +41,7 @@ export interface TmuxRunResult {
   noServer: boolean;
 }
 
-/** The single entry point for every tmux call of the module. It prepends `-S <socketPath>`. */
+/** The single entry point for every tmux call of the module. It prepends `-f /dev/null -S <socketPath>`. */
 export interface TmuxRunner {
   readonly socketPath: string;
   run(args: readonly string[], options?: TmuxRunOptions): Promise<TmuxRunResult>;
@@ -63,18 +63,32 @@ function buildEnv(source: NodeJS.ProcessEnv, extra: readonly string[]): NodeJS.P
   return env;
 }
 
+/** tmux says "no server running on <socket>" or "error connecting to <socket> (No such file or directory)". Other errors are real. */
 function isNoServer(stderr: string): boolean {
-  return /no server running|error connecting to/i.test(stderr);
+  return /no server running|error connecting to .*\(No such file or directory\)/i.test(stderr);
 }
+
+/** Node reports an exceeded `maxBuffer` with this code (the child is killed too, so it is checked before `killed`). */
+const MAX_BUFFER_ERROR = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
 
 export function createTmuxRunner(config: RunnerConfig, deps: TmuxRunnerDeps = {}): TmuxRunner {
   const execFile = deps.execFile ?? nodeExecFile;
   const env = buildEnv(deps.env ?? process.env, config.envAllowlist);
   let socketDirReady = false;
 
+  /** Create the socket directory (mode 0700) and refuse one that others could write into (tmux sockets are group-accessible). */
   function ensureSocketDir(): void {
     if (socketDirReady) return;
-    fs.mkdirSync(path.dirname(config.socketPath), { recursive: true, mode: 0o700 });
+    const dir = path.dirname(config.socketPath);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const stat = fs.statSync(dir);
+    const uid = process.getuid?.();
+    if ((uid !== undefined && stat.uid !== uid) || (stat.mode & 0o022) !== 0) {
+      throw new TmuxAgentError(
+        "TMUX_ERROR",
+        `Socket directory ${dir} must be owned by the daemon user and not writable by group or others (use mode 0700)`,
+      );
+    }
     socketDirReady = true;
   }
 
@@ -97,7 +111,8 @@ export function createTmuxRunner(config: RunnerConfig, deps: TmuxRunnerDeps = {}
       return new Promise<TmuxRunResult>((resolve, reject) => {
         const child = execFile(
           config.tmuxBinary,
-          ["-S", config.socketPath, ...args],
+          // `-f /dev/null`: never read ~/.tmux.conf or /etc/tmux.conf (options such as destroy-unattached, run-shell hooks).
+          ["-f", "/dev/null", "-S", config.socketPath, ...args],
           {
             env,
             timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -112,7 +127,9 @@ export function createTmuxRunner(config: RunnerConfig, deps: TmuxRunnerDeps = {}
               return;
             }
             const err = error as NodeJS.ErrnoException & { killed?: boolean };
-            if (err.killed) {
+            if (err.code === MAX_BUFFER_ERROR) {
+              reject(new TmuxAgentError("TMUX_ERROR", `tmux ${args[0]} produced too much output`));
+            } else if (err.killed) {
               reject(new TmuxAgentError("TIMEOUT", `tmux ${args[0]} timed out`));
             } else if (typeof err.code === "number") {
               resolve({ code: err.code, stdout, stderr, noServer: isNoServer(stderr) });

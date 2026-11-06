@@ -55,7 +55,7 @@ describe("createTmuxRunner", () => {
     const result = await make(exec).run(["has-session", "-t", "$1"]);
     expect(result).toEqual({ code: 0, stdout: "ok\n", stderr: "", noServer: false });
     expect(exec.calls[0]!.file).toBe("tmux-bin");
-    expect(exec.calls[0]!.args).toEqual(["-S", socketPath, "has-session", "-t", "$1"]);
+    expect(exec.calls[0]!.args).toEqual(["-f", "/dev/null", "-S", socketPath, "has-session", "-t", "$1"]);
     expect(exec.calls[0]!.options).not.toHaveProperty("shell");
   });
 
@@ -97,7 +97,7 @@ describe("createTmuxRunner", () => {
     const exec = fakeExec();
     const runner = make(exec);
     for (const sub of ALLOWED_SUBCOMMANDS) await runner.run([sub]);
-    expect(exec.calls.map((c) => c.args[2])).toEqual([...ALLOWED_SUBCOMMANDS]);
+    expect(exec.calls.map((c) => c.args[4])).toEqual([...ALLOWED_SUBCOMMANDS]);
   });
 
   it("refuses an argument that ends with a semicolon (tmux command separator)", async () => {
@@ -110,9 +110,35 @@ describe("createTmuxRunner", () => {
   it("maps 'no server running' and 'error connecting' to noServer, not an exception", async () => {
     const a = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr: "no server running on /x" })).run(["list-sessions"]);
     expect(a).toMatchObject({ code: 1, noServer: true });
-    const b = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr: "error connecting to /x (No such file)" }))
+    const b = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr: "error connecting to /x (No such file or directory)" }))
       .run(["list-sessions"]);
     expect(b).toMatchObject({ code: 1, noServer: true });
+  });
+
+  it("does not take other connection errors for a missing server", async () => {
+    const result = await make(fakeExec({ error: { code: 1 as unknown as string }, stderr: "error connecting to /x (Permission denied)" }))
+      .run(["list-sessions"]);
+    expect(result).toMatchObject({ code: 1, noServer: false });
+  });
+
+  it("never reads the user's tmux config", async () => {
+    const exec = fakeExec();
+    await make(exec).run(["list-sessions"]);
+    expect(exec.calls[0]!.args.slice(0, 2)).toEqual(["-f", "/dev/null"]);
+  });
+
+  it("refuses a socket directory that others can write into", async () => {
+    fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+    fs.chmodSync(path.dirname(socketPath), 0o777);
+    const exec = fakeExec();
+    await expect(make(exec).run(["list-sessions"])).rejects.toMatchObject({ code: "TMUX_ERROR" });
+    expect(exec.calls).toHaveLength(0);
+  });
+
+  it("accepts an existing socket directory that only we can write", async () => {
+    fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+    fs.chmodSync(path.dirname(socketPath), 0o755);
+    await expect(make(fakeExec()).run(["list-sessions"])).resolves.toMatchObject({ code: 0 });
   });
 
   it("returns a non-zero exit as a result", async () => {
@@ -124,6 +150,13 @@ describe("createTmuxRunner", () => {
   it("rejects with TIMEOUT when the child was killed", async () => {
     const err = await make(fakeExec({ error: { killed: true } })).run(["list-sessions"]).catch((e: unknown) => e);
     expect(code(err)).toBe("TIMEOUT");
+  });
+
+  it("reports an exceeded output buffer as TMUX_ERROR, not as a timeout", async () => {
+    const err = await make(fakeExec({ error: { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: true } }))
+      .run(["list-sessions"]).catch((e: unknown) => e);
+    expect(code(err)).toBe("TMUX_ERROR");
+    expect((err as Error).message).toMatch(/too much output/);
   });
 
   it("rejects with TMUX_ERROR when the binary is missing", async () => {
