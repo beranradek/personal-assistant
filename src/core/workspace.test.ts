@@ -143,6 +143,17 @@ describe("workspace", () => {
       expect(stat.isDirectory()).toBe(true);
     });
 
+    it("copies the skill templates into .claude/skills/", async () => {
+      const config = makeConfig(workspaceDir, dataDir);
+
+      await ensureWorkspace(config);
+
+      for (const skill of ["integrations", "tmux-agents"]) {
+        const content = await fs.readFile(path.join(workspaceDir, ".claude", "skills", skill, "SKILL.md"), "utf-8");
+        expect(content).toContain(`name: "${skill}"`);
+      }
+    });
+
     it("creates data directory if missing", async () => {
       const config = makeConfig(workspaceDir, dataDir);
 

@@ -61,9 +61,10 @@ Non-goals:
   outlives the daemon
 - **D16** - Decision: Audit: structured pino logs plus `<dataDir>/tmux-agents/audit.jsonl`. Never log input or output text, only length and
   short hash | Reason: Secrets stay out of logs
-- **D17** - Decision: Skill is a repo template `src/templates/skills/tmux-agents/SKILL.md`, NOT added to `SKILL_FILES`
-  (`src/core/workspace.ts:31-33`, copied by the loop at `:114-123` to `<workspace>/.claude/skills/<name>/SKILL.md`). The operator copies
-  it there by hand when enabling the feature (operator step 4) | Reason: Do not advertise a disabled feature
+- **D17** - Decision (changed 2026-11-06): Skill is a repo template `src/templates/skills/tmux-agents/SKILL.md`, listed in
+  `SKILL_FILES` (`src/core/workspace.ts`), so `ensureWorkspace` copies it to `<workspace>/.claude/skills/tmux-agents/SKILL.md`
+  like `integrations` (never overwrites) | Reason: Uniform setup; the skill has a precondition step that tells the user how to
+  enable a disabled feature
 - **D18** - Decision (changed 2026-11-06): the repo template `src/templates/claude-code/settings.json` `permissions.allow` lists
   `list, status, read, attach, start, send, interrupt`; `stop` and `recover` stay confirmation-gated (OD3, decided). Entries for absent
   tools are harmless (a disabled feature registers no tools). `pa init claude` copies the template only when the target file is
@@ -694,9 +695,9 @@ Files: `src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.m
    start `pa-tmux ls` prints `no server running`), and the PoC results as the acceptance example (see Operator steps).
 3. `docs/agent-tools.md`: a new section "Tmux Agent Tools (optional)" with a table of the nine tools.
    `README.md`: one line in "Setup guides". `CLAUDE.md`: one row `tmux-agents/` in the source layout table.
-4. The skill lives as a repo template in `src/templates/skills/tmux-agents/SKILL.md`. Do not add it to `SKILL_FILES` in
-   `src/core/workspace.ts:31-33` (D17; the loop at `:114-123` would copy it to `<workspace>/.claude/skills/` for everybody). The docs
-   give the one-line copy command for the operator (operator step 4).
+4. The skill lives as a repo template in `src/templates/skills/tmux-agents/SKILL.md` and is listed in `SKILL_FILES` in
+   `src/core/workspace.ts` (D17, changed 2026-11-06: uniform with `integrations`; the skill itself explains how to enable a disabled
+   feature).
 5. `memory_lint` is not needed (these are repo docs, not the workspace knowledge base).
 
 Acceptance: skill passes the `skill-creator` format check (frontmatter fields present); every tool name in the skill and docs exists in
@@ -729,9 +730,8 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
 3. systemd: run `systemctl --user show pa-daemon.service -p KillMode` (or the system unit). If `control-group`, either set
    `KillMode=process` or accept that sessions die on restart (then reconcile marks them `lost`). Also check
    `~/.personal-assistant/bin/codex-watchdog.sh` does not kill `claude` or `tmux` processes.
-4. Copy the repo template `src/templates/skills/tmux-agents/SKILL.md` to `<workspace>/.claude/skills/tmux-agents/SKILL.md` (the
-   `integrations` skill gets there through `SKILL_FILES` in `src/core/workspace.ts:31-33`; this one is opt-in, so copy by hand with
-   `mkdir -p` and `cp`). Make sure `tmux` and `claude` are on the `PATH` that the daemon sees. Add the alias to `~/.zshrc`
+4. The skill `src/templates/skills/tmux-agents/SKILL.md` is copied to `<workspace>/.claude/skills/tmux-agents/SKILL.md` by
+   `ensureWorkspace` (listed in `SKILL_FILES`, D17 changed 2026-11-06); check it exists after the daemon restart. Make sure `tmux` and `claude` are on the `PATH` that the daemon sees. Add the alias to `~/.zshrc`
    (can be done before the first start): `alias pa-tmux='tmux -S ~/.personal-assistant/data/tmux-agents/tmux.sock'`, then
    `source ~/.zshrc`. Use the real socket path when it differs.
 5. Try it from Telegram: "start a Claude agent for project X in ~/dev/X, ask it to list the TODOs, then stop it".

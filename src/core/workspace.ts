@@ -30,6 +30,7 @@ const TEMPLATE_FILES = [
 // Each entry is a relative path under src/templates/skills/
 const SKILL_FILES = [
   "integrations/SKILL.md",
+  "tmux-agents/SKILL.md",
 ] as const;
 
 // ---------------------------------------------------------------------------

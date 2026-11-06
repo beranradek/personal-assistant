@@ -149,14 +149,10 @@ an existing settings file; for an existing install add the snippet by hand.
 
 ## Skill
 
-The skill is a repository template and is not installed automatically. Copy it into the workspace when you enable the feature:
-
-```bash
-mkdir -p ~/.personal-assistant/workspace/.claude/skills/tmux-agents
-cp src/templates/skills/tmux-agents/SKILL.md ~/.personal-assistant/workspace/.claude/skills/tmux-agents/SKILL.md
-```
-
-Make sure `tmux` and `claude` are on the `PATH` that the daemon sees.
+The skill template `src/templates/skills/tmux-agents/SKILL.md` is copied to
+`<workspace>/.claude/skills/tmux-agents/SKILL.md` together with the `integrations` skill when the workspace is prepared
+(at daemon start; an existing file is never overwritten). While the feature is disabled the skill only tells the assistant
+how to enable it. Make sure `tmux` and `claude` are on the `PATH` that the daemon sees.
 
 ## Sessions and daemon restarts
 
