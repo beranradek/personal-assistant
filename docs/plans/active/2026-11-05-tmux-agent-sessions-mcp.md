@@ -64,10 +64,11 @@ Non-goals:
 - **D17** - Decision: Skill is a repo template `src/templates/skills/tmux-agents/SKILL.md`, NOT added to `SKILL_FILES`
   (`src/core/workspace.ts:31-33`, copied by the loop at `:114-123` to `<workspace>/.claude/skills/<name>/SKILL.md`). The operator copies
   it there by hand when enabling the feature (operator step 4) | Reason: Do not advertise a disabled feature
-- **D18** - Decision: Do NOT change the repo template `src/templates/claude-code/settings.json` `permissions.allow` (a default for every
-  user). The docs give a snippet the operator puts in the live Claude Code settings: allow `list, status, read, attach, start, send,
-  interrupt`; keep `stop` and `recover` confirmation-gated (OD3, decided) | Reason: Radek wants autonomous agent talk; destructive
-  tools keep the prompt
+- **D18** - Decision (changed 2026-11-06): the repo template `src/templates/claude-code/settings.json` `permissions.allow` lists
+  `list, status, read, attach, start, send, interrupt`; `stop` and `recover` stay confirmation-gated (OD3, decided). Entries for absent
+  tools are harmless (a disabled feature registers no tools). `pa init claude` copies the template only when the target file is
+  missing, so existing installs add the entries by hand (docs snippet) | Reason: Radek wants autonomous agent talk; the template
+  already allows `mcp__pa__exec` and `cron_*`; destructive tools keep the prompt
 - **D19** - Decision: Input guard: `send` text may not start (after `trimStart()`) with `!`, `#` or `/` (shell escape, memory note,
   slash commands) except `kind.allowedSlash` (default `["/clear","/compact"]`); C1 control characters are rejected | Reason: `!cmd`
   runs a shell line in Claude Code without a prompt and `/permissions` can add allow rules (finding B1)
@@ -90,7 +91,7 @@ OD1, OD2 and OD3 are decided (2026-11-06).
 - **OD3 - DECIDED: in Claude Code the operator allows `list, status, read, attach, start, send, interrupt` and keeps `stop` and
   `recover` confirmation-gated.** Reason: Radek wants the assistant to talk to agents on its own; `stop` and `recover` are destructive
   (`recover` loses work). Amy (SDK agent) auto-allows all tools anyway (F3); OD3 only affects the interactive Claude Code prompt.
-  The repo template stays unchanged (D18); the docs give the snippet.
+  The repo template includes these entries (D18); the docs give the snippet for existing installs.
 
 ## Findings that change the requirements
 

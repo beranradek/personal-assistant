@@ -126,7 +126,8 @@ the destructive tools confirmed, allow these in the Claude Code settings (`stop`
 }
 ```
 
-The repository template for the Claude Code settings is not changed.
+The Claude Code settings template already contains these entries, so a new `init` for Claude Code sets them. `init` never overwrites
+an existing settings file; for an existing install add the snippet by hand.
 
 ## Behaviour notes
 
