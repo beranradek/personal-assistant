@@ -33,7 +33,7 @@ const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", 
 type Command = (typeof VALID_COMMANDS)[number];
 
 /** Options whose value must not be mistaken for a command (for example `--assistant claude`). */
-const VALUE_OPTIONS = new Set(["--config", "--assistant", "--session", "--watch"]);
+const VALUE_OPTIONS = new Set(["--config", "--assistant", "--assistant-cwd", "--session", "--watch"]);
 
 /**
  * Parse the subcommand from argv, skipping option values (`--config <path>`, `--assistant <cmd>`, ...).
@@ -64,7 +64,9 @@ Commands:
   claude-context        Print safe SessionStart context for Claude Code
   claude-security-hook  Apply PA's PreToolUse security policy for Claude Code
   claude                Start Claude Code in workspace-restricted companion mode
-  agents-view           tmux view: assistant left, agent sessions right [--assistant <cmd>] [--session <name>] [--no-attach]
+  agents-view           tmux view: assistant left, agent sessions right (writable)
+                          [--assistant <cmd>] [--assistant-cwd <dir>] [-i|--interactive-shell] [--read-only]
+                          [--session <name>] [--no-attach]
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
   episode-eval          Run the built-in episodic memory evaluation fixture corpus [--json] [--output <path>]

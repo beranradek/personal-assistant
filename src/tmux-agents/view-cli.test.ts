@@ -34,7 +34,15 @@ describe("runAgentsView", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const base = { env: {}, execPath: "/usr/bin/node", scriptPath: "/opt/pa/cli.js" };
+  // `cwd` is a getter: `dir` is created per test, and the spread reads it inside the test
+  const base = {
+    env: {},
+    get cwd() {
+      return dir;
+    },
+    execPath: "/usr/bin/node",
+    scriptPath: "/opt/pa/cli.js",
+  };
 
   it("creates the view, starts the controller with the config path and attaches", async () => {
     const user = fakeUser();
@@ -65,8 +73,9 @@ describe("runAgentsView", () => {
       out: () => {},
     });
     expect(user.attached).toEqual([]);
+    // the assistant pane starts in the directory `pa agents-view` runs in (here: dir)
     expect(user.calls.find((call) => call[0] === "new-session")).toEqual(
-      ["new-session", "-d", "-s", "work", "-n", "amy", "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa terminal"],
+      ["new-session", "-d", "-s", "work", "-n", "amy", "-c", dir, "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa terminal"],
     );
     // no --config given: none is passed to the controller
     const ctl = user.calls.find((call) => call.includes("amy-ctl"))!;
@@ -106,5 +115,42 @@ describe("runAgentsView", () => {
     const run = runAgentsView(dir, ["--session", "a:b"], undefined, { ...base, user, out: () => {} });
     await expect(run).rejects.toThrow(/Invalid tmux session name/);
     expect(user.calls).toEqual([]);
+  });
+
+  it("starts the assistant pane in --assistant-cwd (relative to the current directory) and rejects a missing directory", async () => {
+    fs.mkdirSync(path.join(dir, "proj"));
+    const user = fakeUser();
+    await runAgentsView(dir, ["--no-attach", "--assistant-cwd", "proj"], undefined, {
+      ...base, user, listAgentSessions: async () => [], out: () => {},
+    });
+    expect(user.calls.find((call) => call[0] === "new-session")).toContain(path.join(dir, "proj"));
+
+    const other = fakeUser();
+    const run = runAgentsView(dir, ["--assistant-cwd", "nope"], undefined, {
+      ...base, user: other, listAgentSessions: async () => [], out: () => {},
+    });
+    await expect(run).rejects.toThrow(/not an existing directory/);
+    expect(other.calls).toEqual([]);
+  });
+
+  it("runs the assistant through $SHELL -i -c with --interactive-shell and warns for shells other than zsh and bash", async () => {
+    const lines: string[] = [];
+    const user = fakeUser();
+    await runAgentsView(dir, ["--no-attach", "-i", "--assistant", "clauded"], undefined, {
+      ...base, env: { SHELL: "/bin/sh" }, user, listAgentSessions: async () => [], out: (line) => lines.push(line),
+    });
+    expect(user.calls.find((call) => call[0] === "new-session")!.slice(-5)).toEqual(["--", "/bin/sh", "-i", "-c", "clauded"]);
+    expect(lines.some((line) => line.includes("only with zsh and bash"))).toBe(true);
+  });
+
+  it("passes --read-only on to the controller window and not otherwise", async () => {
+    const readOnly = fakeUser();
+    await runAgentsView(dir, ["--no-attach", "--read-only"], undefined, {
+      ...base, user: readOnly, listAgentSessions: async () => [], out: () => {},
+    });
+    expect(readOnly.calls.find((call) => call.includes("amy-ctl"))!.slice(-4)).toEqual(["agents-view", "--watch", "@3", "--read-only"]);
+    const writable = fakeUser();
+    await runAgentsView(dir, ["--no-attach"], undefined, { ...base, user: writable, listAgentSessions: async () => [], out: () => {} });
+    expect(writable.calls.find((call) => call.includes("amy-ctl"))).not.toContain("--read-only");
   });
 });

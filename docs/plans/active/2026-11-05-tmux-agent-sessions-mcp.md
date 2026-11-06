@@ -943,9 +943,9 @@ Radek wants one simple command that shows the main assistant and the agents it s
 `src/cli.ts` (`agents-view`; `parseCommand` skips the values of `--assistant`, `--session`, `--watch`).
 
 - Layout in the USER's tmux (not the agents' socket): window `amy` with `main-vertical` (assistant left, `main-pane-width 50%`, the
-  mirror panes stacked on the right), hidden window `amy-ctl` with the controller. Mirror pane = `env -u TMUX tmux -u -S <agents socket>
-  attach-session -r -t =<session>` (read-only). Panes are tagged with the pane options `@pa_main` and `@pa_agent`; the pane border
-  format shows the session name.
+  agent panes stacked on the right), hidden window `amy-ctl` with the controller. Agent pane = `env -u TMUX tmux -u -S <agents socket>
+  attach-session -t =<session>` (writable; `-r` with `--read-only`, see the additions below). Panes are tagged with the pane
+  options `@pa_main` and `@pa_agent`; the pane border format shows the session name.
 - Controller (poll 2 s): `list-sessions` on the agents server (only names that match the session pattern) and `list-panes` of the view
   window; adds a pane per session without one, re-applies the layout when the pane count changes. Ended sessions: the nested attach
   exits and the pane closes (`remain-on-exit off`). A mirror pane closed by hand is not re-added while the session lives (in-memory
@@ -963,6 +963,41 @@ Radek wants one simple command that shows the main assistant and the agents it s
 - Tests: `view.test.ts` (fake tmux: validation, runner allowlist, `planView`, open/idempotence, controller add/remove/dismiss/no server/
   failures/abort), `view-cli.test.ts`, `view.integration.tmux.test.ts` (two private real tmux servers and the fake agent: panes appear,
   stack, disappear, are not re-added after a manual close, the controller ends with the assistant pane; nothing is left afterwards).
+
+### Task 11 additions (2026-11-06, coordinator requests)
+
+- **Writable agent panes by default, `--read-only` for `attach -r`.** The controller attaches `attach-session -t =<session>` (no `-r`);
+  `--read-only` is passed on to the controller window. The integration test asserts that keys typed in the view pane (`send-keys`) reach
+  the agent in the default mode (the client has `client_readonly=0`) and do NOT with `--read-only` (`client_readonly=1`). The earlier
+  sentence "typed keys do not reach the agent" holds only for `--read-only`.
+- **Window size with two clients (real tmux 3.6, default `window-size latest`, nothing changed on the agents server).** Measured: an
+  agent window created detached with `-x 200 -y 50` takes the size of the first attached client (here 40x22); a second client makes
+  the window follow the latest active client (80x23, then 120x29 after resizing it); when a client leaves, the window follows the
+  remaining one; after the last client leaves it keeps the last size. `attach -r` does NOT ignore the client size (the same
+  resizing happens). The agent keeps working and typing works with two clients. The assistant reads with `capture-pane -p -J`, so the
+  narrower window only changes the number of columns the agent draws. `attach -f ignore-size` did not keep the original size for a sole
+  client, so it is not used. Optional manual restore: `resize-window -t <session>: -x 200 -y 50` (verified: restores the size and
+  sets `window-size manual` for that window, later clients no longer resize it). No global option of the agents server is changed
+  (asserted in the integration test).
+- **`--assistant-cwd <dir>`** (default: the directory `pa agents-view` runs in; resolved against it; must exist and be a directory; no NUL
+  or newline). Passed as `-c <dir>` to `new-session`/`new-window` of the assistant pane only (not to the `amy-ctl` window, not to agent
+  panes). Verified on real tmux: the pane starts in that directory.
+- **How the assistant command runs (verified on real tmux 3.6 with a temporary HOME/ZDOTDIR, zsh, bash and sh):** a command string runs
+  as `$SHELL -c "<command>"`, non-interactive (flags without `i`); `~/.zshrc` and `~/.bashrc` are not read; an alias gives "command
+  not found" in all three. Docs say: use the full command (for example `claude --dangerously-skip-permissions`) or a script on `PATH`.
+- **`--interactive-shell` / `-i` (default off):** argv `<shell> -i -c <command>` as separate tmux arguments (shell from `$SHELL` when it is
+  an absolute executable, else `/bin/sh`; a note is printed for shells other than zsh and bash, which are the only verified ones). Verified
+  with a temporary rc: without the flag the alias is not found, with the flag it runs (zsh and bash; integration tests). Measured costs:
+  the command starts after the rc files (1.4 s zsh and 1.1 s bash with a 1 s sleep in the rc, 0.07 s without the flag); rc output is
+  visible in the pane; no job-control warnings in the pane. Not `exec <command>`: after `exec` the alias is not expanded (zsh: "command
+  not found", bash: "exec: not found"), so the interactive shell stays the parent process.
+- Documented in `docs/settings/tmux_agents.md`: a plain `claude` is not the `pa claude` companion (no launcher-owned settings; it sees
+  `mcp__pa__agent_session_*` only through the `.mcp.json` of the start directory and `mcp.httpServer.enabled`); with bypass permissions
+  there are no confirmation prompts for `stop` and `recover`, only the server-side guards remain.
+- Security: typing into an agent yourself is the user's own action; the guards of the assistant tools (input guard, prompt and trust
+  refusals, rate limits) are unchanged and apply to the assistant only (a bullet in the "Security notes" of the settings guide).
+- Shared input line: text typed by hand is not overwritten and `agent_session_send` appends its text after it; documented (type when the
+  agent is idle or the assistant is not sending).
 
 ## Review log (2026-11-05)
 

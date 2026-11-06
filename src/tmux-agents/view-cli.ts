@@ -6,6 +6,8 @@ import {
   createUserTmux,
   openAgentsView,
   parseAgentsViewArgs,
+  resolveAssistantCwd,
+  resolveInteractiveShell,
   runViewController,
   showAgentsView,
   type UserTmux,
@@ -16,6 +18,8 @@ export interface AgentsViewCliDeps {
   /** Live agent sessions (default: `list-sessions` on the configured agents socket). */
   listAgentSessions?: () => Promise<string[]>;
   env?: NodeJS.ProcessEnv;
+  /** Directory `pa agents-view` runs in (default: `process.cwd()`); the default start directory of the assistant pane. */
+  cwd?: string;
   /** Node and script path used to start the controller window (default: this process). */
   execPath?: string;
   scriptPath?: string;
@@ -27,8 +31,12 @@ function controllerArgv(
   runtime: { execPath: string; scriptPath: string },
   configPath: string | undefined,
   windowId: string,
+  readOnly: boolean,
 ): string[] {
-  return [runtime.execPath, runtime.scriptPath, ...(configPath ? ["--config", configPath] : []), "agents-view", "--watch", windowId];
+  return [
+    runtime.execPath, runtime.scriptPath, ...(configPath ? ["--config", configPath] : []),
+    "agents-view", "--watch", windowId, ...(readOnly ? ["--read-only"] : []),
+  ];
 }
 
 /**
@@ -59,6 +67,7 @@ export async function runAgentsView(
       listAgentSessions,
       tmuxBinary: agents.tmuxBinary,
       agentSocketPath: agents.socketPath,
+      readOnly: parsed.readOnly,
       windowId: parsed.watch,
       signal: abort.signal,
     });
@@ -69,13 +78,21 @@ export async function runAgentsView(
   // Fail early (in the foreground) when the agents socket directory is unusable; the controller runs hidden.
   await listAgentSessions();
 
-  const insideTmux = (deps.env ?? process.env)["TMUX"] !== undefined;
+  const env = deps.env ?? process.env;
+  const insideTmux = env["TMUX"] !== undefined;
+  const assistantCwd = resolveAssistantCwd(parsed.assistantCwd, deps.cwd ?? process.cwd());
+  const interactiveShell = parsed.interactiveShell ? resolveInteractiveShell(env) : undefined;
+  if (interactiveShell && !/(^|\/)(zsh|bash)$/.test(interactiveShell)) {
+    out(`Note: --interactive-shell is verified only with zsh and bash (shell: ${interactiveShell}).`);
+  }
   const runtime = { execPath: deps.execPath ?? process.execPath, scriptPath: deps.scriptPath ?? process.argv[1] ?? "pa" };
   const view = await openAgentsView(user, {
     session: parsed.session,
     assistant: parsed.assistant,
+    assistantCwd,
+    interactiveShell,
     insideTmux,
-    controllerArgv: (windowId) => controllerArgv(runtime, configPath, windowId),
+    controllerArgv: (windowId) => controllerArgv(runtime, configPath, windowId, parsed.readOnly),
   });
   out(view.created ? "Agents view created." : "Agents view already exists.");
   if (!parsed.attach) return 0;

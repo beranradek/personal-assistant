@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   EMPTY_VIEW_STATE,
   USER_TMUX_SUBCOMMANDS,
@@ -11,6 +14,9 @@ import {
   planView,
   runViewController,
   showAgentsView,
+  buildAssistantCommand,
+  resolveAssistantCwd,
+  resolveInteractiveShell,
   validateAssistantCommand,
   validateViewSession,
   type UserTmux,
@@ -63,13 +69,25 @@ describe("validation and argument parsing", () => {
   });
 
   it("parses options with defaults", () => {
-    expect(parseAgentsViewArgs([])).toEqual({ assistant: "pa claude", attach: true });
+    // writable agent panes and a non-interactive assistant shell are the defaults
+    expect(parseAgentsViewArgs([])).toEqual({ assistant: "pa claude", interactiveShell: false, readOnly: false, attach: true });
     expect(parseAgentsViewArgs(["--assistant", "pa terminal", "--session", "work", "--no-attach"])).toEqual({
       assistant: "pa terminal",
+      interactiveShell: false,
+      readOnly: false,
       session: "work",
       attach: false,
     });
     expect(parseAgentsViewArgs(["--watch", "@12"])).toMatchObject({ watch: "@12" });
+  });
+
+  it("parses --assistant-cwd, --interactive-shell (-i) and --read-only", () => {
+    expect(parseAgentsViewArgs(["--assistant-cwd", "../proj"])).toMatchObject({ assistantCwd: "../proj" });
+    expect(parseAgentsViewArgs(["--interactive-shell"])).toMatchObject({ interactiveShell: true });
+    expect(parseAgentsViewArgs(["-i"])).toMatchObject({ interactiveShell: true });
+    expect(parseAgentsViewArgs(["--read-only"])).toMatchObject({ readOnly: true });
+    expect(() => parseAgentsViewArgs(["--assistant-cwd"])).toThrow(/requires a value/);
+    expect(() => parseAgentsViewArgs(["--assistant-cwd", "/a\0b"])).toThrow(/NUL/);
   });
 
   it("rejects unknown options, missing values and bad window ids", () => {
@@ -78,6 +96,37 @@ describe("validation and argument parsing", () => {
     expect(() => parseAgentsViewArgs(["--session", "--no-attach"])).toThrow(/requires a value/);
     expect(() => parseAgentsViewArgs(["--watch", "12"])).toThrow(/window id/);
     expect(() => parseAgentsViewArgs(["--watch", "@1; kill-server"])).toThrow(/window id/);
+  });
+});
+
+describe("assistant start directory and shell", () => {
+  it("resolves --assistant-cwd to an existing absolute directory (default: the current directory)", () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pa-view-cwd-")));
+    try {
+      fs.mkdirSync(path.join(dir, "proj"));
+      fs.writeFileSync(path.join(dir, "file.txt"), "x");
+      expect(resolveAssistantCwd(undefined, dir)).toBe(dir);
+      expect(resolveAssistantCwd("proj", dir)).toBe(path.join(dir, "proj"));
+      expect(resolveAssistantCwd("./proj/..", dir)).toBe(dir);
+      expect(resolveAssistantCwd(path.join(dir, "proj"), "/")).toBe(path.join(dir, "proj"));
+      expect(() => resolveAssistantCwd("missing", dir)).toThrow(/not an existing directory/);
+      expect(() => resolveAssistantCwd("file.txt", dir)).toThrow(/not an existing directory/);
+      expect(() => resolveAssistantCwd("a\0b", dir)).toThrow(/NUL/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses $SHELL for --interactive-shell when it is an absolute executable, else /bin/sh", () => {
+    expect(resolveInteractiveShell({ SHELL: "/bin/sh" })).toBe("/bin/sh");
+    expect(resolveInteractiveShell({})).toBe("/bin/sh");
+    expect(resolveInteractiveShell({ SHELL: "zsh" })).toBe("/bin/sh");
+    expect(resolveInteractiveShell({ SHELL: "/nonexistent/zsh" })).toBe("/bin/sh");
+  });
+
+  it("builds the assistant argv: one string for the tmux shell, or <shell> -i -c <command> without exec", () => {
+    expect(buildAssistantCommand("pa claude")).toEqual(["pa claude"]);
+    expect(buildAssistantCommand("myalias --flag", "/usr/bin/zsh")).toEqual(["/usr/bin/zsh", "-i", "-c", "myalias --flag"]);
   });
 });
 
@@ -171,7 +220,7 @@ describe("listViewPanes", () => {
 
 describe("openAgentsView", () => {
   const ctlArgv = (id: string) => ["node", "pa.js", "agents-view", "--watch", id];
-  const baseOptions = { assistant: "pa claude", insideTmux: false, controllerArgv: ctlArgv };
+  const baseOptions = { assistant: "pa claude", assistantCwd: "/home/u/proj", insideTmux: false, controllerArgv: ctlArgv };
 
   it("creates session, window options, controller window and layout when the session is missing", async () => {
     const user = fakeUser((args) => {
@@ -183,7 +232,11 @@ describe("openAgentsView", () => {
     const view = await openAgentsView(user, baseOptions);
     expect(view).toEqual({ windowId: "@5", sessionTarget: "=amy", created: true, mode: "session" });
     const create = sub(user.calls, "new-session")[0]!;
-    expect(create).toEqual(["new-session", "-d", "-s", "amy", "-n", "amy", "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa claude"]);
+    // the assistant pane starts in assistantCwd (-c); the controller window and the agent panes get no -c
+    expect(create).toEqual(
+      ["new-session", "-d", "-s", "amy", "-n", "amy", "-c", "/home/u/proj", "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa claude"],
+    );
+    expect(user.calls.filter((call) => call.includes("-c"))).toHaveLength(1);
     expect(user.calls).toContainEqual(["set-option", "-p", "-t", "%9", "@pa_main", "1"]);
     expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@5", "remain-on-exit", "off"]);
     expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@5", "main-pane-width", "50%"]);
@@ -212,8 +265,19 @@ describe("openAgentsView", () => {
     const view = await openAgentsView(user, { ...baseOptions, session: "work" });
     expect(view).toMatchObject({ windowId: "@7", sessionTarget: "=work", created: true });
     expect(user.calls).toContainEqual(
-      ["new-window", "-d", "-t", "=work:", "-n", "amy", "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa claude"],
+      ["new-window", "-d", "-t", "=work:", "-n", "amy", "-c", "/home/u/proj", "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa claude"],
     );
+  });
+
+  it("runs the assistant command through an interactive shell as separate argv elements when asked", async () => {
+    const user = fakeUser((args) => {
+      if (args[0] === "has-session") return fail("can't find session");
+      if (args[0] === "new-session") return ok("@5|%9\n");
+      if (args[0] === "list-windows") return ok("@5|amy\n");
+      return undefined;
+    });
+    await openAgentsView(user, { ...baseOptions, assistant: "clauded --flag", interactiveShell: "/usr/bin/zsh" });
+    expect(sub(user.calls, "new-session")[0]!.slice(-5)).toEqual(["--", "/usr/bin/zsh", "-i", "-c", "clauded --flag"]);
   });
 
   it("inside tmux without a session name it uses a window of the current session", async () => {
@@ -318,7 +382,7 @@ describe("runViewController", () => {
     return { state, user, controller, base };
   }
 
-  it("adds a pane per live session with a read-only nested attach, tags it, and applies the layout once per change", async () => {
+  it("adds a pane per live session with a WRITABLE nested attach, tags it, and applies the layout once per change", async () => {
     const w = world([A, B]);
     const end = await runViewController(w.base((tick) => { if (tick >= 2) w.controller.abort(); }));
     expect(end).toBe("aborted");
@@ -326,10 +390,21 @@ describe("runViewController", () => {
     expect(splits).toHaveLength(2);
     expect(splits[0]).toEqual([
       "split-window", "-d", "-t", "@5", "-P", "-F", "#{pane_id}", "--",
-      "env", "-u", "TMUX", "tmux", "-u", "-S", "/tmp/agents.sock", "attach-session", "-r", "-t", `=${A}`,
+      "env", "-u", "TMUX", "tmux", "-u", "-S", "/tmp/agents.sock", "attach-session", "-t", `=${A}`,
     ]);
     expect(w.state.panes.map((pane) => pane.agent)).toEqual(["", A, B]);
     expect(sub(w.user.calls, "select-layout")).toHaveLength(1);
+    // no -c for agent panes, and the agents server options are never touched
+    expect(w.user.calls.some((call) => call.includes("-c"))).toBe(false);
+  });
+
+  it("attaches read-only (-r) with readOnly", async () => {
+    const w = world([A]);
+    await runViewController({ ...w.base((tick) => { if (tick >= 1) w.controller.abort(); }), readOnly: true });
+    expect(sub(w.user.calls, "split-window")[0]).toEqual([
+      "split-window", "-d", "-t", "@5", "-P", "-F", "#{pane_id}", "--",
+      "env", "-u", "TMUX", "tmux", "-u", "-S", "/tmp/agents.sock", "attach-session", "-r", "-t", `=${A}`,
+    ]);
   });
 
   it("follows sessions that appear and disappear, re-applying the layout when the pane count changes", async () => {

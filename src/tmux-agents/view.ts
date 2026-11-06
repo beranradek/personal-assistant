@@ -1,12 +1,15 @@
 /**
- * `pa agents-view`: one tmux window in the USER's own tmux with the main assistant on the left and one read-only mirror
- * pane per agent session on the right (stacked). A small controller process adds and removes the mirror panes while the
+ * `pa agents-view`: one tmux window in the USER's own tmux with the main assistant on the left and one pane per agent
+ * session on the right (stacked). The agent panes are tmux clients of the agents' server: writable by default (the user can
+ * type into an agent), read-only with `--read-only`. A small controller process adds and removes the panes while the
  * assistant starts and stops agent sessions.
  *
  * This is a user CLI, not an assistant tool: it uses its own tmux runner for the user's tmux (default server, user config)
- * with a fixed subcommand allowlist. The agents' dedicated server is only read (`list-sessions`) and attached read-only.
+ * with a fixed subcommand allowlist. The agents' dedicated server is only listed (`list-sessions`) and attached to.
  */
 import { execFile as nodeExecFile, spawn as nodeSpawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { SESSION_PATTERN } from "./names.js";
 import type { TmuxRunner } from "./runner.js";
 
@@ -138,8 +141,57 @@ export function validateAssistantCommand(command: string): string {
   return trimmed;
 }
 
+/**
+ * Resolve the start directory of the assistant pane: an existing directory, made absolute against `cwd`
+ * (default: the directory `pa agents-view` runs in). Used for the assistant pane only, never for agent panes.
+ */
+export function resolveAssistantCwd(value: string | undefined, cwd: string): string {
+  if (value !== undefined && /[\x00\n\r]/.test(value)) throw new Error("Invalid --assistant-cwd (newline or NUL)");
+  const resolved = path.resolve(cwd, value ?? ".");
+  let isDirectory = false;
+  try {
+    isDirectory = fs.statSync(resolved).isDirectory();
+  } catch {
+    // reported below
+  }
+  if (!isDirectory) throw new Error(`--assistant-cwd is not an existing directory: ${resolved}`);
+  return resolved;
+}
+
+/**
+ * Shell for `--interactive-shell`: `$SHELL` when it is an absolute path to an executable, else `/bin/sh`.
+ * Only zsh and bash are verified to load their rc files (and so aliases) this way.
+ */
+export function resolveInteractiveShell(env: NodeJS.ProcessEnv): string {
+  const candidate = env["SHELL"];
+  if (candidate && path.isAbsolute(candidate) && !candidate.includes("\0")) {
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // fall back
+    }
+  }
+  return "/bin/sh";
+}
+
+/**
+ * argv of the assistant command for tmux. Default: ONE element, which tmux runs through `$SHELL -c` (non-interactive, rc files and
+ * aliases are not loaded). With `interactiveShell`: `<shell> -i -c <command>`, as separate argv elements (no extra shell string),
+ * so the rc files (aliases) load. No `exec` in front: an alias is not expanded after `exec`.
+ */
+export function buildAssistantCommand(assistant: string, interactiveShell?: string): string[] {
+  return interactiveShell ? [interactiveShell, "-i", "-c", assistant] : [assistant];
+}
+
 export interface AgentsViewArgs {
   assistant: string;
+  /** Start directory of the assistant pane (resolved later; default: the current directory). */
+  assistantCwd?: string;
+  /** Run the assistant command in an interactive shell so that aliases work. Default off. */
+  interactiveShell: boolean;
+  /** Agent panes are read-only (`attach -r`). Default: writable. */
+  readOnly: boolean;
   /** Explicit session name. Without it: a new window in the current tmux session when run inside tmux, else session `amy`. */
   session?: string;
   attach: boolean;
@@ -149,7 +201,7 @@ export interface AgentsViewArgs {
 
 /** Parse the arguments after `agents-view` (`--config <path>` already removed). */
 export function parseAgentsViewArgs(args: readonly string[]): AgentsViewArgs {
-  const result: AgentsViewArgs = { assistant: DEFAULT_ASSISTANT_COMMAND, attach: true };
+  const result: AgentsViewArgs = { assistant: DEFAULT_ASSISTANT_COMMAND, interactiveShell: false, readOnly: false, attach: true };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     const value = (): string => {
@@ -158,6 +210,12 @@ export function parseAgentsViewArgs(args: readonly string[]): AgentsViewArgs {
       return next;
     };
     if (arg === "--assistant") result.assistant = validateAssistantCommand(value());
+    else if (arg === "--assistant-cwd") {
+      const dir = value();
+      if (/[\x00\n\r]/.test(dir)) throw new Error("Invalid --assistant-cwd (newline or NUL)");
+      result.assistantCwd = dir;
+    } else if (arg === "--interactive-shell" || arg === "-i") result.interactiveShell = true;
+    else if (arg === "--read-only") result.readOnly = true;
     else if (arg === "--session") result.session = validateViewSession(value());
     else if (arg === "--no-attach") result.attach = false;
     else if (arg === "--watch") {
@@ -273,6 +331,10 @@ export interface OpenViewOptions {
   /** Explicit session name; see `AgentsViewArgs.session`. */
   session?: string;
   assistant: string;
+  /** Absolute start directory of the assistant pane (`-c`); the controller window and agent panes do not get it. */
+  assistantCwd: string;
+  /** Shell for `--interactive-shell` (see `buildAssistantCommand`); undefined runs the command through the tmux shell. */
+  interactiveShell?: string;
   /** True when this process runs inside the user's tmux ($TMUX is set). */
   insideTmux: boolean;
   /** Command (argv) for the hidden controller window; receives the view window id. */
@@ -294,12 +356,16 @@ export async function openAgentsView(user: UserTmux, options: OpenViewOptions): 
   let sessionTarget: string;
   let windowId: string | undefined;
   let mainPaneId: string | undefined;
+  /** Shared tail of `new-session` / `new-window` for the assistant pane: start directory, printed ids, command. */
+  const assistantArgs = [
+    "-c", options.assistantCwd, ...PRINT_CREATED, "--", ...buildAssistantCommand(options.assistant, options.interactiveShell),
+  ];
 
   if (mode === "session") {
     const name = options.session ?? DEFAULT_VIEW_SESSION;
     sessionTarget = `=${name}`;
     if ((await user.run(["has-session", "-t", sessionTarget])).code !== 0) {
-      const create = ["new-session", "-d", "-s", name, "-n", VIEW_WINDOW_NAME, ...PRINT_CREATED, "--", options.assistant];
+      const create = ["new-session", "-d", "-s", name, "-n", VIEW_WINDOW_NAME, ...assistantArgs];
       [windowId, mainPaneId] = mustSucceed(await user.run(create), "new-session").trim().split("|");
     }
   } else {
@@ -310,7 +376,7 @@ export async function openAgentsView(user: UserTmux, options: OpenViewOptions): 
     const existing = (await listWindows(user, sessionTarget)).find((window) => window.name === VIEW_WINDOW_NAME);
     if (existing) windowId = existing.id;
     else {
-      const create = ["new-window", "-d", "-t", `${sessionTarget}:`, "-n", VIEW_WINDOW_NAME, ...PRINT_CREATED, "--", options.assistant];
+      const create = ["new-window", "-d", "-t", `${sessionTarget}:`, "-n", VIEW_WINDOW_NAME, ...assistantArgs];
       [windowId, mainPaneId] = mustSucceed(await user.run(create), "new-window").trim().split("|");
     }
   }
@@ -349,9 +415,11 @@ export interface ViewControllerDeps {
   user: UserTmux;
   /** Live agent sessions on the agents server (names; an absent server gives `[]`). */
   listAgentSessions: () => Promise<string[]>;
-  /** tmux binary and socket for the nested read-only attach inside each mirror pane. */
+  /** tmux binary and socket for the nested attach inside each agent pane. */
   tmuxBinary: string;
   agentSocketPath: string;
+  /** Attach read-only (`attach -r`). Default: writable, so the user can type into the agent. */
+  readOnly?: boolean;
   windowId: string;
   signal: AbortSignal;
   pollMs?: number;
@@ -387,7 +455,8 @@ async function addAgentPane(deps: ViewControllerDeps, session: string): Promise<
   const created = mustSucceed(
     await deps.user.run([
       "split-window", "-d", "-t", deps.windowId, "-P", "-F", "#{pane_id}", "--",
-      "env", "-u", "TMUX", deps.tmuxBinary, "-u", "-S", deps.agentSocketPath, "attach-session", "-r", "-t", `=${session}`,
+      "env", "-u", "TMUX", deps.tmuxBinary, "-u", "-S", deps.agentSocketPath, "attach-session",
+      ...(deps.readOnly ? ["-r"] : []), "-t", `=${session}`,
     ]),
     "split-window",
   ).trim();
@@ -400,6 +469,7 @@ async function addAgentPane(deps: ViewControllerDeps, session: string): Promise<
 /**
  * Keep the view window in sync with the live agent sessions until the window or the assistant pane is gone, tmux stays
  * unreachable, or `signal` aborts. Panes of ended sessions close by themselves (the nested attach exits).
+ * The agents server's options are never changed.
  */
 export async function runViewController(deps: ViewControllerDeps): Promise<ViewControllerEnd> {
   const pollMs = deps.pollMs ?? VIEW_POLL_MS;

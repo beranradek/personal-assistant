@@ -70,6 +70,7 @@ describe("cli", () => {
       expect(parseCommand(["node", "cli.js", "--assistant", "claude", "agents-view"])).toBe("agents-view");
       expect(parseCommand(["node", "cli.js", "--session", "daemon", "--config", "/x/settings.json", "agents-view"])).toBe("agents-view");
       expect(parseCommand(["node", "cli.js", "--assistant", "claude"])).toBeNull();
+      expect(parseCommand(["node", "cli.js", "--assistant-cwd", "daemon", "agents-view", "-i", "--read-only"])).toBe("agents-view");
     });
   });
 

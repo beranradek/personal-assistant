@@ -56,6 +56,10 @@ Add to `~/.personal-assistant/settings.json`, then restart the daemon:
 - **The agent is a privilege jump.** The daemon, tmux and the agent run outside the Agent SDK sandbox. A started agent can run
   any command that you can, once it is approved. That is why bypass mode has three gates (setting, `permissionMode`,
   `confirmBypass`), why answering permission prompts is off by default, and why the skill asks you first.
+- **Typing into an agent yourself is your own action.** The writable panes of `pa agents-view` (and `pa-tmux attach`) let you answer
+  permission prompts and trust dialogs and type anything, as in any terminal. The guards of the `agent_session_*` tools (input guard,
+  prompt and trust refusals, rate limits) apply to the assistant only and are unchanged. Use `--read-only` to look without a risk of
+  typing by mistake.
 - **Choose `allowedRoots` outside every directory the assistant can write** (`security.workspace` and
   `security.additionalWriteDirs`). Otherwise the assistant could plant `.claude/settings.json` (a hook or a `Bash(*)` allow rule)
   in a project and start an agent there: the trust level then equals `exec`. A directory under a writable one is refused
@@ -97,32 +101,75 @@ pa-tmux attach -r -t pa-myproj-1a2b # read-only
 ```
 
 `agent_session_attach` returns the same commands with the real socket path. Detach with `Ctrl-b d`.
+To see the assistant and all agents side by side without attaching by hand, use `pa agents-view` (next section).
 
 ## Agents view: the assistant and its agents on one screen
 
 ```bash
 pa agents-view                                  # assistant (default command: pa claude) on the left, agents on the right
-pa agents-view --assistant "pa terminal"        # another assistant command
+pa agents-view --assistant "claude"             # another assistant command (a full command, see below)
+pa agents-view --assistant-cwd ~/dev/myproj     # start the assistant pane in this directory (default: the current directory)
+pa agents-view -i --assistant "myalias"         # --interactive-shell: your aliases work (slower start, see below)
+pa agents-view --read-only                      # agent panes are read-only (default: you can type into them)
 pa agents-view --session work                   # use (or create) your tmux session `work` instead of `amy`
 pa agents-view --no-attach                      # create the layout only
 ```
 
 One command opens a window of YOUR OWN tmux (not the agents' dedicated server): the assistant runs in the left half and every agent
-session that the assistant starts appears as a read-only pane (`attach -r`) stacked on the right. Panes appear when a session starts
-and disappear when it ends (the nested attach exits). Each pane border shows the session name.
+session that the assistant starts appears as a pane (a tmux client of the agents' server) stacked on the right. Panes appear when a
+session starts and disappear when it ends (the nested attach exits). Each pane border shows the session name.
 
 - Outside tmux it creates (or reuses) the session `amy` and attaches. Inside tmux without `--session` it adds a window `amy` to the
-  current session and selects it. Running the command again reuses the existing view (idempotent).
+  current session and selects it. Running the command again reuses the existing view (idempotent); the options of the first run stay
+  in effect (the controller was started with them).
 - A hidden window `amy-ctl` runs the controller (`pa agents-view --watch <window>`, polls every 2 s). It ends when the view window or
   the assistant pane is gone; closing the assistant pane closes the view window. The agent sessions are never touched.
-- Close a mirror pane by hand (`Ctrl-b x`) and it stays closed while that session lives. The session keeps running.
-- `--assistant` is a shell command line for your tmux (like `tmux new-window "<command>"`); it is typed by you, never by the assistant.
-- The mirror panes are nested tmux clients: press the prefix (`Ctrl-b`) twice to send it to the inner tmux (for example
-  `Ctrl-b Ctrl-b d` detaches the mirror). The inner status line is visible at the bottom of each mirror pane.
-- To type into an agent, use the `pa-tmux attach -t <session>` alias from the section above in another terminal.
+- Close an agent pane by hand (`Ctrl-b x`) and it stays closed while that session lives. The session keeps running.
 - The view needs `tmuxAgents.enabled: true` (otherwise it opens but no agent panes appear) and `tmux` 3.x.
 - It is a user command, not an assistant tool: the assistant cannot run it, and it uses its own tmux runner for your tmux (fixed
-  subcommand allowlist, no shell, except the `--assistant` command that tmux itself runs).
+  subcommand allowlist, no shell, except the `--assistant` command that tmux itself runs). The view never changes options of the
+  agents' tmux server.
+
+### Typing into the agents
+
+The agent panes are writable by default: click or select a pane (`Ctrl-b` and an arrow key, or the mouse when enabled) and type. Focus
+decides which pane receives the keys: the assistant pane or one agent pane. Use `--read-only` for `attach -r` panes (keys typed there
+do not reach the agent).
+
+- The agent has ONE input line. Text you type by hand is not overwritten, and the assistant's `agent_session_send` appends its text
+  after it. Type when the agent is idle or when the assistant is not sending to it. The guards of the assistant tools are
+  unchanged: they apply to the assistant only, what you type yourself is your own action.
+- The agent panes are nested tmux clients: press the prefix (`Ctrl-b`) twice to send it to the inner tmux (for example
+  `Ctrl-b Ctrl-b d` detaches the inner client). The inner status line is visible at the bottom of each agent pane.
+- Window size (checked on tmux 3.6 with the default `window-size latest`): an attached client, writable or read-only, sets the size of
+  the agent's window to the size of its pane. With two clients the window follows the most recently active one, and it keeps the last
+  size after the last client leaves. The assistant reads the screen with `capture-pane -J` (wrapped lines are joined), so a narrower
+  window changes how many columns the agent draws, not how the assistant reads it. To get the original size back run
+  `pa-tmux resize-window -t <session>: -x 200 -y 50` (this makes `window-size` manual for that one window, so later clients no
+  longer resize it). The view itself never sets tmux options on the agents' server.
+
+### The assistant command: directory, aliases, flags
+
+- `--assistant-cwd <dir>` (default: the directory you run `pa agents-view` from) must be an existing directory; relative paths are
+  resolved against the current directory. It is passed to tmux as `-c <dir>` for the assistant pane only, never for agent panes. Use
+  it so that a plain `claude` finds `.mcp.json` in that directory (checked: the pane starts there).
+- `--assistant` is a shell command line for your tmux (like `tmux new-window "<command>"`); you type it, the assistant never does.
+  tmux runs it through the shell named by `$SHELL` with `-c` (checked with zsh, bash and sh): a NON-interactive shell, so `~/.zshrc` and
+  `~/.bashrc` are not read and **aliases are not available** (checked: an alias gives "command not found"). Use the full command,
+  for example `--assistant "claude --dangerously-skip-permissions"` (the flag is spelled `--dangerously-skip-permissions`), or a
+  script on `PATH` such as `~/.local/bin/clauded`. Both are also the fastest start.
+- `--interactive-shell` (short `-i`, default off) makes aliases work: the command runs as `<shell> -i -c "<command>"` with `$SHELL`
+  (fallback `/bin/sh`), as separate arguments, so your rc files are loaded. Checked with zsh and bash (a temporary rc in a private
+  `HOME`; your real rc files were never read); other shells are not verified (the command prints a note). Costs: the start waits for
+  your rc files (measured with an rc that sleeps 1 s: the command started about 1.4 s later with zsh, 1.1 s with bash, against
+  about 0.07 s without the flag); everything your rc prints appears in the assistant pane (checked); anything else your rc does
+  (tools like nvm, prompts) happens too, and the interactive shell stays the parent process of the command (there is no `exec`: an
+  alias is not expanded after `exec`, checked). No job-control warnings appeared in the tmux pane with zsh or bash.
+- A plain `claude` is not the `pa claude` companion: it does not use the launcher-owned settings. It sees the tools
+  `mcp__pa__agent_session_*` only when the `.mcp.json` of the start directory provides the `pa` MCP server and the daemon has
+  `mcp.httpServer.enabled: true`.
+- With bypass permissions (`--dangerously-skip-permissions`) there are no confirmation prompts, not even for `stop` and `recover`.
+  Only the server-side guards remain (settings, roots, `confirmBypass`, input guard).
 
 ## Claude Code companion
 
