@@ -4,13 +4,16 @@
  * type into an agent), read-only with `--read-only`. A small controller process adds and removes the panes while the
  * assistant starts and stops agent sessions.
  *
- * This is a user CLI, not an assistant tool: it uses its own tmux runner for the user's tmux (default server, user config)
- * with a fixed subcommand allowlist. The agents' dedicated server is only listed (`list-sessions`) and attached to.
+ * This is a user CLI, not an assistant tool: no MCP tool reaches it, and `view-cli.ts` refuses to run without a terminal (the
+ * assistant's Bash tool has none, although `pa` is on the Bash allowlist as a whole). It uses its own tmux runner for the user's
+ * tmux (default server, user config) with a fixed subcommand allowlist. The agents' dedicated server is only listed
+ * (`list-sessions`) and attached to.
  */
 import { execFile as nodeExecFile, spawn as nodeSpawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SESSION_PATTERN } from "./names.js";
+import type { Registry } from "./registry.js";
 import type { TmuxRunner } from "./runner.js";
 import { execTmux } from "./tmux-exec.js";
 
@@ -36,13 +39,20 @@ export const USER_TMUX_SUBCOMMANDS = [
 const ALLOWED = new Set<string>(USER_TMUX_SUBCOMMANDS);
 
 export const VIEW_WINDOW_NAME = "amy";
-export const VIEW_CTL_WINDOW_NAME = "amy-ctl";
+/** The controller window is named `amy-ctl-<n>` after the view window id `@<n>`. */
+export const VIEW_CTL_WINDOW_PREFIX = "amy-ctl-";
+/** Window option that marks the view window of `pa agents-view` (windows are matched by tag, not by name). */
+const VIEW_TAG = "@pa_view";
+/** Window option of the controller window: the id of the view window it serves. */
+const CTL_TAG = "@pa_ctl";
 export const DEFAULT_VIEW_SESSION = "amy";
 export const DEFAULT_ASSISTANT_COMMAND = "pa claude";
 /** Controller poll interval. One cheap `list-sessions` and one `list-panes` per tick. */
 export const VIEW_POLL_MS = 2_000;
 /** The controller gives up after this many failing ticks in a row (tmux unreachable). */
 const MAX_CONSECUTIVE_FAILURES = 5;
+/** Upper bound of the retry delay (in ticks) for a session whose pane could not be created. */
+const MAX_RETRY_TICKS = 30;
 const MAIN_PANE_WIDTH = "50%";
 /** Pane border label: the agent session name, or `assistant` for the main pane. */
 const PANE_BORDER_FORMAT = " #{?@pa_agent,#{@pa_agent},assistant} ";
@@ -279,31 +289,42 @@ export async function applyViewLayout(user: UserTmux, windowId: string): Promise
   mustSucceed(await user.run(["select-layout", "-t", windowId, "main-vertical"]), "select-layout");
 }
 
-async function configureViewWindow(user: UserTmux, windowId: string, mainPaneId: string): Promise<void> {
+/**
+ * Tag the new view window (`@pa_view`) and its assistant pane (`@pa_main`) FIRST, then set the window options. Windows are found by
+ * these tags, never by name, so a window of the user that happens to be called `amy` is never reused or killed.
+ * Returns notes for the user (an option that this tmux version does not know).
+ */
+async function configureViewWindow(user: UserTmux, windowId: string, mainPaneId: string): Promise<string[]> {
   const steps: string[][] = [
+    ["set-option", "-w", "-t", windowId, VIEW_TAG, "1"],
     ["set-option", "-p", "-t", mainPaneId, "@pa_main", "1"],
     ["set-option", "-w", "-t", windowId, "remain-on-exit", "off"],
-    ["set-option", "-w", "-t", windowId, "main-pane-width", MAIN_PANE_WIDTH],
     ["set-option", "-w", "-t", windowId, "pane-border-status", "top"],
     ["set-option", "-w", "-t", windowId, "pane-border-format", PANE_BORDER_FORMAT],
   ];
   for (const step of steps) mustSucceed(await user.run(step), step[0]!);
+  // A percentage needs tmux 3.3 or newer. Older tmux keeps its default main pane width: a note, not a failure.
+  const width = await user.run(["set-option", "-w", "-t", windowId, "main-pane-width", MAIN_PANE_WIDTH]);
+  return width.code === 0 ? [] : [`tmux rejected main-pane-width ${MAIN_PANE_WIDTH} (needs tmux 3.3+): the assistant pane keeps the default width.`];
 }
 
 interface WindowRef {
   id: string;
-  name: string;
+  /** Tagged as a view window (`@pa_view=1`). */
+  view: boolean;
+  /** For a controller window: the id of the view window it keeps in sync (`@pa_ctl`). */
+  controllerOf: string;
 }
 
 async function listWindows(user: UserTmux, sessionTarget: string): Promise<WindowRef[]> {
-  const out = mustSucceed(await user.run(["list-windows", "-t", sessionTarget, "-F", "#{window_id}|#{window_name}"]), "list-windows");
-  return out
-    .split("\n")
-    .filter((line) => line.includes("|"))
-    .map((line) => {
-      const [id = "", name = ""] = line.split("|");
-      return { id, name };
-    });
+  const format = `#{window_id}|#{${VIEW_TAG}}|#{${CTL_TAG}}`;
+  const out = mustSucceed(await user.run(["list-windows", "-t", sessionTarget, "-F", format]), "list-windows");
+  const windows: WindowRef[] = [];
+  for (const line of out.split("\n")) {
+    const [id = "", view = "", controllerOf = ""] = line.split("|");
+    if (WINDOW_ID_PATTERN.test(id)) windows.push({ id, view: view === "1", controllerOf });
+  }
+  return windows;
 }
 
 export interface OpenViewOptions {
@@ -327,6 +348,8 @@ export interface OpenedView {
   /** True when the view window was created now (false: an existing view was reused). */
   created: boolean;
   mode: "session" | "window";
+  /** Notes for the user (for example an option that this tmux version rejected). */
+  warnings: string[];
 }
 
 /** Create the view window (and the controller window) when missing. Idempotent. */
@@ -352,7 +375,7 @@ export async function openAgentsView(user: UserTmux, options: OpenViewOptions): 
   }
 
   if (windowId === undefined) {
-    const existing = (await listWindows(user, sessionTarget)).find((window) => window.name === VIEW_WINDOW_NAME);
+    const existing = (await listWindows(user, sessionTarget)).find((window) => window.view);
     if (existing) windowId = existing.id;
     else {
       const create = ["new-window", "-d", "-t", `${sessionTarget}:`, "-n", VIEW_WINDOW_NAME, ...assistantArgs];
@@ -362,15 +385,34 @@ export async function openAgentsView(user: UserTmux, options: OpenViewOptions): 
   if (!windowId || !WINDOW_ID_PATTERN.test(windowId)) throw new Error("tmux did not return a window id");
 
   const created = mainPaneId !== undefined;
-  if (mainPaneId !== undefined) await configureViewWindow(user, windowId, mainPaneId);
-
-  const hasController = (await listWindows(user, sessionTarget)).some((window) => window.name === VIEW_CTL_WINDOW_NAME);
-  if (!hasController) {
-    const create = ["new-window", "-d", "-t", `${sessionTarget}:`, "-n", VIEW_CTL_WINDOW_NAME, "--", ...options.controllerArgv(windowId)];
-    mustSucceed(await user.run(create), "new-window");
+  const warnings: string[] = [];
+  if (mainPaneId !== undefined) {
+    try {
+      warnings.push(...(await configureViewWindow(user, windowId, mainPaneId)));
+    } catch (err) {
+      // A half configured window is never left behind (a rerun would otherwise reuse it).
+      await user.run(["kill-window", "-t", windowId]).catch(() => undefined);
+      throw err;
+    }
   }
+
+  const hasController = (await listWindows(user, sessionTarget)).some((window) => window.controllerOf === windowId);
+  if (!hasController) await startController(user, sessionTarget, windowId, options.controllerArgv(windowId));
   await applyViewLayout(user, windowId);
-  return { windowId, sessionTarget, created, mode };
+  return { windowId, sessionTarget, created, mode, warnings };
+}
+
+/** Hidden controller window `amy-ctl-<n>`, tagged with the id of the view window it serves. */
+async function startController(user: UserTmux, sessionTarget: string, viewWindowId: string, argv: string[]): Promise<void> {
+  const name = `${VIEW_CTL_WINDOW_PREFIX}${viewWindowId.slice(1)}`;
+  const create = ["new-window", "-d", "-t", `${sessionTarget}:`, "-n", name, "-P", "-F", "#{window_id}", "--", ...argv];
+  const controllerId = mustSucceed(await user.run(create), "new-window").trim();
+  if (!WINDOW_ID_PATTERN.test(controllerId)) throw new Error("tmux did not return a window id for the controller");
+  const tagged = await user.run(["set-option", "-w", "-t", controllerId, CTL_TAG, viewWindowId]);
+  if (tagged.code !== 0) {
+    await user.run(["kill-window", "-t", controllerId]).catch(() => undefined);
+    throw new Error(`tmux set-option failed: ${tagged.stderr.trim() || `exit ${tagged.code}`}`);
+  }
 }
 
 /** Show the view: select its window, then attach (outside tmux) or switch the client (inside tmux). */
@@ -417,6 +459,19 @@ export function createAgentSessionLister(runner: Pick<TmuxRunner, "run">): () =>
   };
 }
 
+/**
+ * Limit the live sessions to those that the service also has as RUNNING records. A `pa-...` session on the agents server without a
+ * record is not ours (the service ignores it too), so the view does not attach to it. A missing registry file means no sessions.
+ */
+export function createRegisteredSessionLister(list: () => Promise<string[]>, registry: Pick<Registry, "read">): () => Promise<string[]> {
+  return async () => {
+    const live = await list();
+    if (live.length === 0) return [];
+    const running = new Set((await registry.read()).records.filter((record) => record.state === "running").map((record) => record.name));
+    return live.filter((name) => running.has(name));
+  };
+}
+
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
     if (signal.aborted) return resolve();
@@ -456,33 +511,68 @@ export async function runViewController(deps: ViewControllerDeps): Promise<ViewC
   let state = EMPTY_VIEW_STATE;
   let layoutPaneCount = -1;
   let failures = 0;
+  let tick = 0;
+  /** Sessions whose pane could not be created (for example "no space for new pane"): retried later, with backoff. */
+  const retries = new Map<string, { attempts: number; notBeforeTick: number }>();
 
   while (!deps.signal.aborted) {
+    tick++;
+    let panes: ViewPane[];
+    let live: string[];
     try {
-      const panes = await listViewPanes(deps.user, deps.windowId);
-      if (panes === null) return "window-gone";
-      if (!panes.some((pane) => pane.main)) {
-        await deps.user.run(["kill-window", "-t", deps.windowId]);
-        return "assistant-gone";
-      }
-      const live = await deps.listAgentSessions();
-      const plan = planView(live, new Set(panes.filter((pane) => pane.agent !== "").map((pane) => pane.agent)), state);
-      let paneCount = panes.length;
-      for (const session of plan.toAdd) {
-        await addAgentPane(deps, session);
-        paneCount++;
-      }
-      state = plan.next;
-      if (paneCount !== layoutPaneCount) {
-        await applyViewLayout(deps.user, deps.windowId);
-        layoutPaneCount = paneCount;
-      }
+      const listed = await listViewPanes(deps.user, deps.windowId);
+      if (listed === null) return "window-gone";
+      if (!listed.some((pane) => pane.main)) return await endWithoutAssistant(deps);
+      panes = listed;
+      live = await deps.listAgentSessions();
       failures = 0;
     } catch (err) {
+      // Only failing to LIST (tmux or the agents server unreachable) counts toward giving up.
       deps.onError?.(err);
       if (++failures >= MAX_CONSECUTIVE_FAILURES) return "tmux-unreachable";
+      await sleep(pollMs, deps.signal);
+      continue;
+    }
+
+    const plan = planView(live, new Set(panes.filter((pane) => pane.agent !== "").map((pane) => pane.agent)), state);
+    for (const name of retries.keys()) if (!live.includes(name)) retries.delete(name);
+    let paneCount = panes.length;
+    const failed = new Set<string>();
+    for (const session of plan.toAdd) {
+      if ((retries.get(session)?.notBeforeTick ?? 0) > tick) {
+        failed.add(session);
+        continue;
+      }
+      try {
+        await addAgentPane(deps, session);
+        retries.delete(session);
+        paneCount++;
+      } catch (err) {
+        // One session that cannot get a pane must not block the others or stop the controller.
+        deps.onError?.(err);
+        const attempts = (retries.get(session)?.attempts ?? 0) + 1;
+        retries.set(session, { attempts, notBeforeTick: tick + Math.min(2 ** attempts, MAX_RETRY_TICKS) });
+        failed.add(session);
+      }
+    }
+    // A session without a pane because the add FAILED is not "closed by the user": keep it out of the known set.
+    state = { known: new Set([...plan.next.known].filter((name) => !failed.has(name))), dismissed: plan.next.dismissed };
+    if (paneCount !== layoutPaneCount) {
+      try {
+        await applyViewLayout(deps.user, deps.windowId);
+        layoutPaneCount = paneCount;
+      } catch (err) {
+        deps.onError?.(err);
+      }
     }
     await sleep(pollMs, deps.signal);
   }
   return "aborted";
+}
+
+/** The assistant pane is gone: close the view window, but only when it carries the view tag (never a user's own window). */
+async function endWithoutAssistant(deps: ViewControllerDeps): Promise<ViewControllerEnd> {
+  const tag = await deps.user.run(["display-message", "-p", "-t", deps.windowId, `#{${VIEW_TAG}}`]);
+  if (tag.code === 0 && tag.stdout.trim() === "1") await deps.user.run(["kill-window", "-t", deps.windowId]);
+  return "assistant-gone";
 }

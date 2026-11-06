@@ -7,6 +7,7 @@ import {
   USER_TMUX_SUBCOMMANDS,
   applyViewLayout,
   createAgentSessionLister,
+  createRegisteredSessionLister,
   createUserTmux,
   listViewPanes,
   openAgentsView,
@@ -226,27 +227,37 @@ describe("openAgentsView", () => {
     const user = fakeUser((args) => {
       if (args[0] === "has-session") return fail("can't find session");
       if (args[0] === "new-session") return ok("@5|%9\n");
-      if (args[0] === "list-windows") return ok("@5|amy\n");
+      if (args[0] === "list-windows") return ok("@5|1|\n");
+      if (args[0] === "new-window") return ok("@6\n");
       return undefined;
     });
     const view = await openAgentsView(user, baseOptions);
-    expect(view).toEqual({ windowId: "@5", sessionTarget: "=amy", created: true, mode: "session" });
+    expect(view).toEqual({ windowId: "@5", sessionTarget: "=amy", created: true, mode: "session", warnings: [] });
     const create = sub(user.calls, "new-session")[0]!;
     // the assistant pane starts in assistantCwd (-c); the controller window and the agent panes get no -c
     expect(create).toEqual(
       ["new-session", "-d", "-s", "amy", "-n", "amy", "-c", "/home/u/proj", "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa claude"],
     );
     expect(user.calls.filter((call) => call.includes("-c"))).toHaveLength(1);
-    expect(user.calls).toContainEqual(["set-option", "-p", "-t", "%9", "@pa_main", "1"]);
+    // the view window and the assistant pane are tagged FIRST, then the window options
+    const options = sub(user.calls, "set-option");
+    expect(options.slice(0, 2)).toEqual([
+      ["set-option", "-w", "-t", "@5", "@pa_view", "1"],
+      ["set-option", "-p", "-t", "%9", "@pa_main", "1"],
+    ]);
     expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@5", "remain-on-exit", "off"]);
     expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@5", "main-pane-width", "50%"]);
-    expect(user.calls).toContainEqual(["new-window", "-d", "-t", "=amy:", "-n", "amy-ctl", "--", ...ctlArgv("@5")]);
+    // the controller window is named after the view window id and tagged with it
+    expect(user.calls).toContainEqual(
+      ["new-window", "-d", "-t", "=amy:", "-n", "amy-ctl-5", "-P", "-F", "#{window_id}", "--", ...ctlArgv("@5")],
+    );
+    expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@6", "@pa_ctl", "@5"]);
     expect(user.calls.at(-1)).toEqual(["select-layout", "-t", "@5", "main-vertical"]);
   });
 
-  it("is idempotent: an existing session with both windows is reused and nothing is created", async () => {
+  it("is idempotent: an existing session with a tagged view and controller window is reused and nothing is created", async () => {
     const user = fakeUser((args) => {
-      if (args[0] === "list-windows") return ok("@5|amy\n@6|amy-ctl\n");
+      if (args[0] === "list-windows") return ok("@5|1|\n@6||@5\n");
       return undefined;
     });
     const view = await openAgentsView(user, baseOptions);
@@ -256,10 +267,71 @@ describe("openAgentsView", () => {
     expect(sub(user.calls, "set-option")).toHaveLength(0);
   });
 
+  it("never reuses an untagged window of the user that is named like the view, and creates its own", async () => {
+    const user = fakeUser((args) => {
+      if (args[0] === "list-windows") return ok("@2||\n");
+      if (args[0] === "new-window" && args.includes("amy")) return ok("@9|%13\n");
+      if (args[0] === "new-window") return ok("@10\n");
+      return undefined;
+    });
+    const view = await openAgentsView(user, baseOptions);
+    expect(view).toMatchObject({ windowId: "@9", created: true });
+    expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@9", "@pa_view", "1"]);
+    expect(sub(user.calls, "kill-window")).toHaveLength(0);
+  });
+
+  it("starts a new controller when the old one belongs to another view window", async () => {
+    const user = fakeUser((args) => {
+      if (args[0] === "list-windows") return ok("@5|1|\n@6||@4\n");
+      if (args[0] === "new-window") return ok("@7\n");
+      return undefined;
+    });
+    await openAgentsView(user, baseOptions);
+    expect(user.calls).toContainEqual(["set-option", "-w", "-t", "@7", "@pa_ctl", "@5"]);
+  });
+
+  it("removes a half configured view window when configuring fails, so a rerun starts clean", async () => {
+    const user = fakeUser((args) => {
+      if (args[0] === "has-session") return fail("can't find session");
+      if (args[0] === "new-session") return ok("@5|%9\n");
+      if (args[0] === "set-option" && args[4] === "pane-border-status") return fail("bad option");
+      return undefined;
+    });
+    await expect(openAgentsView(user, baseOptions)).rejects.toThrow(/set-option failed: bad option/);
+    expect(user.calls).toContainEqual(["kill-window", "-t", "@5"]);
+    expect(sub(user.calls, "new-window")).toHaveLength(0);
+  });
+
+  it("removes the controller window when it cannot be tagged", async () => {
+    const user = fakeUser((args) => {
+      if (args[0] === "list-windows") return ok("@5|1|\n");
+      if (args[0] === "new-window") return ok("@6\n");
+      if (args[0] === "set-option" && args[4] === "@pa_ctl") return fail("nope");
+      return undefined;
+    });
+    await expect(openAgentsView(user, baseOptions)).rejects.toThrow(/set-option failed: nope/);
+    expect(user.calls).toContainEqual(["kill-window", "-t", "@6"]);
+  });
+
+  it("only notes (does not fail) when this tmux rejects a percentage main-pane-width", async () => {
+    const user = fakeUser((args) => {
+      if (args[0] === "has-session") return fail("can't find session");
+      if (args[0] === "new-session") return ok("@5|%9\n");
+      if (args[0] === "list-windows") return ok("@5|1|\n");
+      if (args[0] === "new-window") return ok("@6\n");
+      if (args[0] === "set-option" && args[4] === "main-pane-width") return fail("value is invalid: 50%");
+      return undefined;
+    });
+    const view = await openAgentsView(user, baseOptions);
+    expect(view.warnings).toEqual([expect.stringContaining("needs tmux 3.3+")]);
+    expect(view.created).toBe(true);
+  });
+
   it("adds the view window to an existing session that lacks it", async () => {
     const user = fakeUser((args) => {
-      if (args[0] === "list-windows") return ok("@1|shell\n");
+      if (args[0] === "list-windows") return ok("@1||\n");
       if (args[0] === "new-window" && args.includes("amy")) return ok("@7|%11\n");
+      if (args[0] === "new-window") return ok("@12\n");
       return undefined;
     });
     const view = await openAgentsView(user, { ...baseOptions, session: "work" });
@@ -273,7 +345,8 @@ describe("openAgentsView", () => {
     const user = fakeUser((args) => {
       if (args[0] === "has-session") return fail("can't find session");
       if (args[0] === "new-session") return ok("@5|%9\n");
-      if (args[0] === "list-windows") return ok("@5|amy\n");
+      if (args[0] === "list-windows") return ok("@5|1|\n");
+      if (args[0] === "new-window") return ok("@6\n");
       return undefined;
     });
     await openAgentsView(user, { ...baseOptions, assistant: "clauded --flag", interactiveShell: "/usr/bin/zsh" });
@@ -283,14 +356,17 @@ describe("openAgentsView", () => {
   it("inside tmux without a session name it uses a window of the current session", async () => {
     const user = fakeUser((args) => {
       if (args[0] === "display-message") return ok("$3\n");
-      if (args[0] === "list-windows") return ok("@1|shell\n");
+      if (args[0] === "list-windows") return ok("@1||\n");
       if (args[0] === "new-window" && args.includes("amy")) return ok("@8|%12\n");
+      if (args[0] === "new-window") return ok("@13\n");
       return undefined;
     });
     const view = await openAgentsView(user, { ...baseOptions, insideTmux: true });
-    expect(view).toEqual({ windowId: "@8", sessionTarget: "$3", created: true, mode: "window" });
+    expect(view).toEqual({ windowId: "@8", sessionTarget: "$3", created: true, mode: "window", warnings: [] });
     expect(sub(user.calls, "has-session")).toHaveLength(0);
-    expect(user.calls).toContainEqual(["new-window", "-d", "-t", "$3:", "-n", "amy-ctl", "--", ...ctlArgv("@8")]);
+    expect(user.calls).toContainEqual(
+      ["new-window", "-d", "-t", "$3:", "-n", "amy-ctl-8", "-P", "-F", "#{window_id}", "--", ...ctlArgv("@8")],
+    );
   });
 
   it("fails when tmux returns no usable window id", async () => {
@@ -305,7 +381,7 @@ describe("openAgentsView", () => {
 });
 
 describe("showAgentsView", () => {
-  const view = { windowId: "@5", sessionTarget: "=amy", created: false, mode: "session" as const };
+  const view = { windowId: "@5", sessionTarget: "=amy", created: false, mode: "session" as const, warnings: [] };
 
   it("attaches outside tmux and switches the client inside tmux", async () => {
     const outside = fakeUser();
@@ -340,16 +416,51 @@ describe("createAgentSessionLister", () => {
   });
 });
 
+describe("createRegisteredSessionLister", () => {
+  const record = (name: string, state: string) => ({ name, state });
+  const registry = (records: ReturnType<typeof record>[], corrupt = false) =>
+    ({ read: vi.fn(async () => ({ records, corrupt })) }) as unknown as Parameters<typeof createRegisteredSessionLister>[1];
+
+  it("keeps only live sessions that are running records, never a foreign pa- session", async () => {
+    const list = createRegisteredSessionLister(async () => [A, B, "pa-foreign-3333"], registry([record(A, "running"), record(B, "stopped")]));
+    expect(await list()).toEqual([A]);
+  });
+
+  it("shows nothing with an empty or corrupt registry, and does not read the registry without live sessions", async () => {
+    expect(await createRegisteredSessionLister(async () => [A], registry([], true))()).toEqual([]);
+    const reg = registry([record(A, "running")]);
+    expect(await createRegisteredSessionLister(async () => [], reg)()).toEqual([]);
+    expect((reg as unknown as { read: ReturnType<typeof vi.fn> }).read).not.toHaveBeenCalled();
+  });
+
+  it("lets a registry read error through, so that the controller counts it as a failed tick", async () => {
+    const reg = { read: async () => { throw new Error("EACCES"); } } as unknown as Parameters<typeof createRegisteredSessionLister>[1];
+    await expect(createRegisteredSessionLister(async () => [A], reg)()).rejects.toThrow(/EACCES/);
+  });
+});
+
 describe("runViewController", () => {
   /** Scripted world: `panes` is mutated by split-window/kill, `live` by the test. */
   function world(initialLive: string[] = []) {
-    const state = { live: initialLive, panes: [{ paneId: "%1", main: true, agent: "" }], next: 2, windowAlive: true, failLive: false };
+    const state = {
+      live: initialLive,
+      panes: [{ paneId: "%1", main: true, agent: "" }],
+      next: 2,
+      windowAlive: true,
+      failLive: false,
+      /** Value of the window option `@pa_view` (the controller kills only a tagged window). */
+      viewTag: "1",
+      /** Sessions for which `split-window` fails (no space for a new pane). */
+      noSpaceFor: [] as string[],
+    };
     const user = fakeUser((args) => {
       if (args[0] === "list-panes") {
         if (!state.windowAlive) return fail();
         return ok(state.panes.map((pane) => `${pane.paneId}|${pane.main ? "1" : ""}|${pane.agent}`).join("\n"));
       }
+      if (args[0] === "display-message") return ok(`${state.viewTag}\n`);
       if (args[0] === "split-window") {
+        if (state.noSpaceFor.some((name) => args.includes(`=${name}`))) return fail("no space for new pane");
         const paneId = `%${state.next++}`;
         state.panes.push({ paneId, main: false, agent: "" });
         return ok(`${paneId}\n`);
@@ -471,19 +582,71 @@ describe("runViewController", () => {
     expect(await runViewController(w.base(() => {}))).toBe("window-gone");
   });
 
-  it("kills the view window and ends when the assistant pane is gone", async () => {
+  it("kills the TAGGED view window and ends when the assistant pane is gone", async () => {
     const w = world([A]);
     w.state.panes = [{ paneId: "%2", main: false, agent: A }];
+    w.state.viewTag = "1";
     expect(await runViewController(w.base(() => {}))).toBe("assistant-gone");
     expect(w.user.calls).toContainEqual(["kill-window", "-t", "@5"]);
   });
 
-  it("gives up after repeated failures and reports each error", async () => {
+  it("never kills a window that is not tagged as the view", async () => {
+    const w = world([A]);
+    w.state.panes = [{ paneId: "%2", main: false, agent: A }];
+    w.state.viewTag = "";
+    expect(await runViewController(w.base(() => {}))).toBe("assistant-gone");
+    expect(sub(w.user.calls, "kill-window")).toHaveLength(0);
+  });
+
+  it("gives up after repeated failures to LIST and reports each error", async () => {
     const w = world();
     w.state.failLive = true;
     const onError = vi.fn();
     expect(await runViewController({ ...w.base(() => {}), onError })).toBe("tmux-unreachable");
     expect(onError).toHaveBeenCalledTimes(5);
+  });
+
+  it("one session without room for a pane does not block the others or stop the controller, and is retried with backoff", async () => {
+    const w = world([A, B]);
+    const onError = vi.fn();
+    w.state.noSpaceFor = [A];
+    const split = (): number => w.user.calls.filter((call) => call[0] === "split-window" && call.includes(`=${A}`)).length;
+    const end = await runViewController({
+      ...w.base((tick) => {
+        if (tick === 6) w.state.noSpaceFor = [];
+        if (tick >= 30) w.controller.abort();
+      }),
+      onError,
+    });
+    expect(end).toBe("aborted");
+    // B got its pane at once; A failed (reported, not counted toward giving up), then succeeded after the backoff
+    expect(w.state.panes.map((pane) => pane.agent).sort()).toEqual(["", A, B]);
+    expect(onError).toHaveBeenCalled();
+    // not retried on every tick: the delay doubles (2, 4, ...), so far fewer attempts than ticks
+    expect(split()).toBeLessThan(8);
+  });
+
+  it("does not treat a failed add as a pane the user closed (no dismissal)", async () => {
+    const w = world([A]);
+    w.state.noSpaceFor = [A];
+    await runViewController({
+      ...w.base((tick) => {
+        if (tick === 2) w.state.noSpaceFor = [];
+        if (tick >= 12) w.controller.abort();
+      }),
+      onError: () => {},
+    });
+    expect(w.state.panes.some((pane) => pane.agent === A)).toBe(true);
+  });
+
+  it("reports a failing layout call but keeps running", async () => {
+    const w = world([A]);
+    const onError = vi.fn();
+    const original = w.user.run.bind(w.user);
+    w.user.run = async (args) => (args[0] === "select-layout" ? fail("layout failed") : original(args));
+    const end = await runViewController({ ...w.base((tick) => { if (tick >= 2) w.controller.abort(); }), onError });
+    expect(end).toBe("aborted");
+    expect(onError).toHaveBeenCalled();
   });
 
   it("recovers from a transient failure", async () => {

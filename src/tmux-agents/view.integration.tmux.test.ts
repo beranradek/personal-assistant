@@ -159,7 +159,10 @@ describe.skipIf(!tmuxAvailable)("agents view (real tmux, two private servers, wr
   it("creates the view idempotently: assistant pane marked, controller window present", async () => {
     expect(await h.panes()).toEqual([{ paneId: expect.stringMatching(/^%\d+$/), main: true, agent: "" }]);
     const windows = (await h.userRaw("list-windows", "-t", "=viewtest", "-F", "#{window_name}")).stdout ?? "";
-    expect(windows.trim().split("\n").sort()).toEqual(["amy", "amy-ctl"]);
+    expect(windows.trim().split("\n").sort()).toEqual(["amy", `amy-ctl-${h.windowId.slice(1)}`]);
+    // windows are matched by tag: the view window carries @pa_view, the controller window @pa_ctl = the view window id
+    const tags = (await h.userRaw("list-windows", "-t", "=viewtest", "-F", "#{window_id}|#{@pa_view}|#{@pa_ctl}")).stdout ?? "";
+    expect(tags.trim().split("\n").sort()).toEqual([`${h.windowId}|1|`, expect.stringMatching(new RegExp(`^@\\d+\\|\\|${h.windowId}$`))].sort());
 
     const again = await h.open({ assistant: "sleep 600", assistantCwd: workDir, controller: false });
     expect(again).toMatchObject({ windowId: h.windowId, created: false });
@@ -263,7 +266,7 @@ describe.skipIf(!tmuxAvailable)("agents view (real tmux, two private servers, wr
     await h.userRaw("kill-pane", "-t", main.paneId);
     expect(await h.controllerEnd).toBe("assistant-gone");
     const windows = (await h.userRaw("list-windows", "-t", "=viewtest", "-F", "#{window_name}")).stdout ?? "";
-    expect(windows.trim().split("\n")).toEqual(["amy-ctl"]);
+    expect(windows.trim().split("\n")).toEqual([`amy-ctl-${h.windowId.slice(1)}`]);
     // the agent sessions are untouched: the view only attached to them
     expect(await h.agentAlive(SESSION_C)).toBe(true);
   });
