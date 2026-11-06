@@ -96,6 +96,10 @@ export function createBinaryResolver(
           `. Install it, or set tmuxAgents.agentBinaries.${kindId} to its absolute path.`,
       );
     }
+    // The agent may be started as `env PATH=<path> <program> ...`, and `env` reads an argument that contains '=' as an assignment.
+    if (found.file.includes("=")) {
+      throw new TmuxAgentError("AGENT_BINARY_NOT_FOUND", `The path of the agent program must not contain '=': ${found.file}`);
+    }
     cache.set(kindId, found.file);
     deps.onResolved?.(kindId, found.file, found.source);
     return found.file;
@@ -103,13 +107,14 @@ export function createBinaryResolver(
 }
 
 /**
- * `PATH` for the agent session: the directory of the resolved program first, so that wrappers and siblings of the program are
- * found. Returns `undefined` when the directory is already on the `PATH` (nothing to override).
+ * `PATH` for the agent session: the directory of the resolved program is APPENDED, so that wrappers and siblings of the program
+ * are found without letting a user-writable directory such as `~/.local/bin` shadow system tools (`git`, `sh`) for the agent.
+ * Returns `undefined` when the directory is already on the `PATH` (nothing to override).
  */
 export function agentEnvPath(binary: string, basePath: string | undefined): string | undefined {
   if (!path.isAbsolute(binary)) return undefined;
   const dir = path.dirname(binary);
   const entries = (basePath ?? "").split(path.delimiter).filter((entry) => entry !== "");
   if (entries.includes(dir)) return undefined;
-  return [dir, ...entries].join(path.delimiter);
+  return [...entries, dir].join(path.delimiter);
 }

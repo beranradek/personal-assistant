@@ -156,7 +156,7 @@ describe.skipIf(!tmuxAvailable)("tmux integration (real tmux, fake agent)", { ti
     }
   });
 
-  it("finds the program in a well-known location outside the PATH and puts its directory first on the session PATH", async () => {
+  it("finds the program in a well-known location outside the PATH and appends its directory to the session PATH", async () => {
     const installDir = path.join(base, "home", ".local", "bin");
     const pathLog = path.join(base, "agent-path.txt");
     fs.mkdirSync(installDir, { recursive: true });
@@ -183,7 +183,8 @@ describe.skipIf(!tmuxAvailable)("tmux integration (real tmux, fake agent)", { ti
     try {
       const started = await auto.start({ ...startInput("auto"), kind: "wrap" });
       expect(started.state).toBe("idle");
-      expect(fs.readFileSync(pathLog, "utf-8").trim().split(":")[0]).toBe(installDir);
+      // the directory of the program is APPENDED: it cannot shadow system tools, siblings are still found
+      expect(fs.readFileSync(pathLog, "utf-8").trim().split(":").at(-1)).toBe(installDir);
       await auto.stop({ session: started.session, force: true, userConfirmed: true });
     } finally {
       auto.close();

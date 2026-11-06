@@ -74,6 +74,14 @@ describe("createBinaryResolver", () => {
     expect(resolver({}, `${binDir}:${otherDir}`)("claude", "agent")).toBe(first);
   });
 
+  it("rejects a program path that contains '=' (env would read it as an assignment)", () => {
+    const odd = makeExecutable(path.join(tmp, "a=b"), "agent");
+    const err = errorOf(() => resolver({}, path.dirname(odd))("claude", "agent"));
+    expect(err.code).toBe("AGENT_BINARY_NOT_FOUND");
+    expect(err.message).toContain("must not contain '='");
+    expect(errorOf(() => resolver({ claude: odd }, binDir)("claude", "agent")).message).toContain("must not contain '='");
+  });
+
   it("skips non-executable files, directories and relative PATH entries", () => {
     makeExecutable(binDir, "agent", 0o644);
     fs.mkdirSync(path.join(otherDir, "agent"));
@@ -204,15 +212,15 @@ describe("createBinaryResolver", () => {
 });
 
 describe("agentEnvPath", () => {
-  it("prepends the directory of the binary when it is not on the PATH yet", () => {
-    expect(agentEnvPath("/home/u/.local/bin/claude", "/usr/bin:/bin")).toBe("/home/u/.local/bin:/usr/bin:/bin");
+  it("appends the directory of the binary when it is not on the PATH yet, so it cannot shadow system tools", () => {
+    expect(agentEnvPath("/home/u/.local/bin/claude", "/usr/bin:/bin")).toBe("/usr/bin:/bin:/home/u/.local/bin");
   });
 
   it("returns undefined when the directory is already on the PATH", () => {
     expect(agentEnvPath("/usr/bin/claude", "/usr/local/bin:/usr/bin")).toBeUndefined();
   });
 
-  it("returns undefined for a relative program (nothing to prepend)", () => {
+  it("returns undefined for a relative program (nothing to append)", () => {
     expect(agentEnvPath("claude", "/usr/bin")).toBeUndefined();
   });
 

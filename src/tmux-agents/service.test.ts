@@ -152,11 +152,11 @@ describe("TmuxAgentService", () => {
       expect(fake.argv).toEqual(["/opt/agents/claude-claude", "--setting-sources", "user", "--permission-mode", "plan"]);
     });
 
-    it("puts the directory of the resolved binary first on the PATH of the agent (through /usr/bin/env)", async () => {
+    it("appends the directory of the resolved binary to the PATH of the agent (through /usr/bin/env)", async () => {
       const service = make({}, { resolveBinary: () => "/home/u/.local/bin/claude", agentBasePath: "/usr/bin:/bin" });
       const { fake } = await started(service);
       expect(fake.argv).toEqual([
-        "/usr/bin/env", "PATH=/home/u/.local/bin:/usr/bin:/bin", "/home/u/.local/bin/claude", "--setting-sources", "user",
+        "/usr/bin/env", "PATH=/usr/bin:/bin:/home/u/.local/bin", "/home/u/.local/bin/claude", "--setting-sources", "user",
       ]);
     });
 
