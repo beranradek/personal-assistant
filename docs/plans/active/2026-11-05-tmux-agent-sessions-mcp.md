@@ -1,7 +1,7 @@
 # Tmux Agent Sessions MCP - Plan
 
 **Date:** 2026-11-05
-**Status:** Planned (not implemented)
+**Status:** Decisions closed (OD1-OD3), implementation in progress
 **Owner:** Radek Beran
 
 ## Problem
@@ -64,8 +64,10 @@ Non-goals:
 - **D17** - Decision: Skill is a repo template `src/templates/skills/tmux-agents/SKILL.md`, NOT added to `SKILL_FILES`
   (`src/core/workspace.ts:31-33`, copied by the loop at `:114-123` to `<workspace>/.claude/skills/<name>/SKILL.md`). The operator copies
   it there by hand when enabling the feature (operator step 4) | Reason: Do not advertise a disabled feature
-- **D18** - Decision: Do NOT add the new tools to `src/templates/claude-code/settings.json` `permissions.allow` | Reason: Companion plan:
-  state-changing tools stay confirmation-gated. Open decision OD3 (whether Claude Code settings also keep them out)
+- **D18** - Decision: Do NOT change the repo template `src/templates/claude-code/settings.json` `permissions.allow` (a default for every
+  user). The docs give a snippet the operator puts in the live Claude Code settings: allow `list, status, read, attach, start, send,
+  interrupt`; keep `stop` and `recover` confirmation-gated (OD3, decided) | Reason: Radek wants autonomous agent talk; destructive
+  tools keep the prompt
 - **D19** - Decision: Input guard: `send` text may not start (after `trimStart()`) with `!`, `#` or `/` (shell escape, memory note,
   slash commands) except `kind.allowedSlash` (default `["/clear","/compact"]`); C1 control characters are rejected | Reason: `!cmd`
   runs a shell line in Claude Code without a prompt and `/permissions` can add allow rules (finding B1)
@@ -76,17 +78,19 @@ Non-goals:
 
 ## Open owner decisions
 
-These three stay OPEN until Radek decides. The recommendation is the reviewer's.
+OD1, OD2 and OD3 are decided (2026-11-06).
 
-- **OD1 - Dedicated tmux server vs the user's own tmux.** Plan default: dedicated server on its own socket (D7). Recommended: dedicated
-  socket. Reason: the env allowlist (T10) applies only to a server started by us; Amy cannot see or touch Radek's own sessions; the
-  registry and `kill-session` rights stay clean. Cost: Radek attaches with `tmux -S <path> attach`, not plain `tmux attach`.
-- **OD2 - `isWithinDir`: copy vs export.** Plan default: copy the 10-line logic into `roots.ts`. Recommended: copy now, with a test
-  that mirrors the cases of `path-validator.ts`. Reason: the Global Constraints say do not touch `src/security/*`; a later small
-  separate commit can export it and delete the copy.
-- **OD3 - `agent_session_*` stay out of `permissions.allow`.** Plan default: yes, they stay out (D18). Recommended: keep them out for
-  `start/send/interrupt/stop/recover` and allow only the four read-only tools by operator choice. Reason: in Claude Code the
-  permission prompt is the only real confirmation; the SDK agent auto-allows everything anyway (F3).
+- **OD1 - DECIDED: dedicated tmux server on its own socket (D7), plus a documented shell alias.** Reason: the env allowlist (T10)
+  applies only to a server started by us; Amy cannot see or touch Radek's own sessions; the registry and `kill-session` rights stay
+  clean. Cost: Radek attaches with `tmux -S <path> attach`. Mitigation: the docs (Task 10) and operator step 4 give the alias
+  `alias pa-tmux='tmux -S ~/.personal-assistant/data/tmux-agents/tmux.sock'` (adjust when `security.dataDir` or
+  `tmuxAgents.socketPath` differs); then `pa-tmux ls` and `pa-tmux attach -t <session>` work. Radek sets the alias in `~/.zshrc`.
+- **OD2 - DECIDED: copy `isWithinDir` into `roots.ts`**, with a test that mirrors the cases of `path-validator.ts`. Reason: the Global
+  Constraints say do not touch `src/security/*`; a later small separate commit can export it and delete the copy.
+- **OD3 - DECIDED: in Claude Code the operator allows `list, status, read, attach, start, send, interrupt` and keeps `stop` and
+  `recover` confirmation-gated.** Reason: Radek wants the assistant to talk to agents on its own; `stop` and `recover` are destructive
+  (`recover` loses work). Amy (SDK agent) auto-allows all tools anyway (F3); OD3 only affects the interactive Claude Code prompt.
+  The repo template stays unchanged (D18); the docs give the snippet.
 
 ## Findings that change the requirements
 
@@ -679,8 +683,11 @@ Files: `src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.m
    be outside directories Amy can write (otherwise trust equals `exec`), `trustedRoots` semantics, remove `tmux` from
    `security.allowedCommands` (the MCP server runs tmux itself), the HTTP MCP server has no token (local processes are trusted), env
    changes apply only after all sessions stop (server restart), `recover` is a forced restart, enabling for Claude Code (F2), the optional
-   permissions snippet for read-only tools (`mcp__pa__agent_session_list`, `_status`, `_read`, `_attach`), attach command examples,
-   and the PoC results as the acceptance example (see Operator steps).
+   permissions snippet (OD3) allowing `mcp__pa__agent_session_{list,status,read,attach,start,send,interrupt}` and leaving `stop` and
+   `recover` gated, attach command examples,
+   the `pa-tmux` alias section (alias line for `~/.zshrc`, how to derive the socket path from `security.dataDir` or
+   `tmuxAgents.socketPath`, `pa-tmux ls`, `pa-tmux attach -t <session>`, `pa-tmux attach -r -t <session>` for read-only; before the first
+   start `pa-tmux ls` prints `no server running`), and the PoC results as the acceptance example (see Operator steps).
 3. `docs/agent-tools.md`: a new section "Tmux Agent Tools (optional)" with a table of the nine tools.
    `README.md`: one line in "Setup guides". `CLAUDE.md`: one row `tmux-agents/` in the source layout table.
 4. The skill lives as a repo template in `src/templates/skills/tmux-agents/SKILL.md`. Do not add it to `SKILL_FILES` in
@@ -713,13 +720,16 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
    does, remove `tmux` from `security.allowedCommands` in settings (and from the Claude Code hook allowlist).
    Also check that `~/.claude/settings.json` has no broad allow rules (it is inherited by the child through `HOME`).
 2. Claude Code companion: set `"mcp": { "httpServer": { "enabled": true } }` (F2). Check `mcp__pa__agent_session_list` is visible
-   after restarting `claude`. Tools will prompt for approval, as designed (D18). Optionally allow the four read-only tools.
+   after restarting `claude`. Add the OD3 allow snippet from `docs/settings/tmux_agents.md` to the live Claude Code settings; `stop` and `recover` keep
+   prompting.
 3. systemd: run `systemctl --user show pa-daemon.service -p KillMode` (or the system unit). If `control-group`, either set
    `KillMode=process` or accept that sessions die on restart (then reconcile marks them `lost`). Also check
    `~/.personal-assistant/bin/codex-watchdog.sh` does not kill `claude` or `tmux` processes.
 4. Copy the repo template `src/templates/skills/tmux-agents/SKILL.md` to `<workspace>/.claude/skills/tmux-agents/SKILL.md` (the
    `integrations` skill gets there through `SKILL_FILES` in `src/core/workspace.ts:31-33`; this one is opt-in, so copy by hand with
-   `mkdir -p` and `cp`). Make sure `tmux` and `claude` are on the `PATH` that the daemon sees.
+   `mkdir -p` and `cp`). Make sure `tmux` and `claude` are on the `PATH` that the daemon sees. Add the alias to `~/.zshrc`
+   (can be done before the first start): `alias pa-tmux='tmux -S ~/.personal-assistant/data/tmux-agents/tmux.sock'`, then
+   `source ~/.zshrc`. Use the real socket path when it differs.
 5. Try it from Telegram: "start a Claude agent for project X in ~/dev/X, ask it to list the TODOs, then stop it".
    Expect Amy to ask nothing for default mode, to ask before bypass, and to give the attach command on request.
    Check whether Amy sees `ListAgents`/`SendMessage` (F6) and write the result in `memory/` as a note.
@@ -803,4 +813,4 @@ An independent adversarial review found these problems; each is applied as liste
   name suffix retry: D8, Task 5; tmux env at server start: T10; skills location: D17, Task 10, operator step 4
 - **Review confirmations** (in "Findings that change the requirements"): F2 (no `mcp.httpServer.enabled`, no `mcp__pa__*`), F3 (SDK
   auto-allows all tools of registered MCP servers; the gate is settings), F5 (`exec` uses `spawn(shell: true)`, no shared code)
-- **Open owner decisions** stay open: OD1, OD2, OD3 (section "Open owner decisions" with recommendations)
+- **Owner decisions** OD1, OD2, OD3 were decided on 2026-11-06 (section "Open owner decisions")
