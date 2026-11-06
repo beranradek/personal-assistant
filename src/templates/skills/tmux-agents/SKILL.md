@@ -74,4 +74,7 @@ A graceful `agent_session_stop` is refused with `UNKNOWN_STATE` in the same way;
 The result of a failed call has `ok: false` and `error.code`. Common codes: `BUSY` (wait or interrupt), `WAITING_PERMISSION`,
 `WAITING_TRUST` (ask the user), `UNKNOWN_STATE` (read the screen, see above), `ROOT_NOT_ALLOWED` and `ROOT_NOT_TRUSTED`
 (the directory is not allowed in settings: compare it with `allowedRoots`, then tell the user), `TOO_MANY_SESSIONS`
-(stop a session first), `RATE_LIMITED` (wait a moment), `NOT_FOUND` (the session ended: use `agent_session_list`).
+(stop a session first), `RATE_LIMITED` (wait a moment), `NOT_FOUND` (the session ended: use `agent_session_list`),
+`AGENT_BINARY_NOT_FOUND` (the agent program is not installed or not on the PATH of the daemon: tell the user to set
+`tmuxAgents.agentBinaries`; do not try to start it another way). If `start` reports that the session ended right after start,
+tell the user what the hint says; do not retry in a loop.

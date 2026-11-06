@@ -149,6 +149,7 @@ export const DEFAULTS: Config = {
     allowedRoots: [],
     trustedRoots: [],
     enabledKinds: ["claude" as const],
+    agentBinaries: {},
     allowPermissionBypass: false,
     allowAnswerPrompts: false,
     maxSessions: 3,
@@ -320,6 +321,10 @@ function resolveTmuxAgentsPaths(config: Config): void {
   }
   for (const root of t.allowedRoots) {
     if (!path.isAbsolute(root)) throw new Error(`tmuxAgents.allowedRoots entry must be absolute: ${root}`);
+  }
+  t.agentBinaries = Object.fromEntries(Object.entries(t.agentBinaries).map(([kind, file]) => [kind, resolveUserPath(file)]));
+  for (const [kind, file] of Object.entries(t.agentBinaries)) {
+    if (!path.isAbsolute(file)) throw new Error(`tmuxAgents.agentBinaries.${kind} must be an absolute path: ${file}`);
   }
   for (const root of t.trustedRoots) {
     if (!t.allowedRoots.includes(root)) {

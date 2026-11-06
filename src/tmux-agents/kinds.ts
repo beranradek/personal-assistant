@@ -50,9 +50,16 @@ export function getKind(kinds: KindTable, id: string): AgentKind {
   return kind;
 }
 
-export function buildAgentArgv(kinds: KindTable, kindId: string, mode: PermissionMode): string[] {
+/** Argv of the agent: the program (or the resolved `binary` in its place), the fixed flags and the flags of the mode. */
+export function buildAgentArgv(kinds: KindTable, kindId: string, mode: PermissionMode, binary?: string): string[] {
   const kind = getKind(kinds, kindId);
-  return [...kind.command, ...kind.modes[mode]];
+  const [program = kindId, ...fixed] = kind.command;
+  return [binary ?? program, ...fixed, ...kind.modes[mode]];
+}
+
+/** The program of a kind, as written in its table entry (resolved to a path by `createBinaryResolver`). */
+export function agentProgram(kind: AgentKind): string {
+  return kind.command[0] ?? kind.id;
 }
 
 /**

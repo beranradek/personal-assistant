@@ -867,6 +867,21 @@ A second independent review of the fixes above found no HIGH issues. Applied:
 - **Accepted trade-off:** `waitForIdle` may still return early when the agent shows no busy phase within two polls (about 2 s); the
   caller can check with `agent_session_status` or `read`.
 
+## Review fixes, round 3: agent program not on the daemon PATH (2026-11-06)
+
+First live start: the session ended within 3 s because the systemd user `PATH` lacked `~/.local/bin` (`claude` lives there) and
+`start` only said "the agent may have exited". Applied:
+
+- **Setting `tmuxAgents.agentBinaries`** (kind to absolute path, `~` expanded and checked in `loadConfig`).
+- **Pre-flight in `prepareStart`** (`binary.ts`, `createBinaryResolver`): configured path (must be executable, no fallback), an
+  absolute kind command, or a search of the `PATH` of the allowlisted env. Failure is `AGENT_BINARY_NOT_FOUND` with the program, the
+  searched `PATH` and the setting name. It runs before the rate check, any tmux call, registry record, and (for `recover`) before the
+  old session is killed. `buildAgentArgv` replaces the program with the resolved path in ONE place.
+- **Session ended right after start:** `settle` checks `verifyAlive` (marks the record `lost`) and returns a hint with likely causes and
+  the exact command to run by hand. If the session lives but the screen cannot be read, the hint says so.
+- Test seam `resolveBinary` (service tests use a fake runner and do not touch the file system); the integration test uses the real
+  resolver with a bare `node`.
+
 ## Review log (2026-11-05)
 
 An independent adversarial review found these problems; each is applied as listed.

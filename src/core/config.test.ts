@@ -356,6 +356,16 @@ describe("config", () => {
       expect(config.tmuxAgents.socketPath).toBe(path.join(os.homedir(), "s.sock"));
     });
 
+    it("defaults agentBinaries to empty and resolves ~ in its paths", () => {
+      expect(load().tmuxAgents.agentBinaries).toEqual({});
+      const config = load({ agentBinaries: { claude: "~/.local/bin/claude" } });
+      expect(config.tmuxAgents.agentBinaries).toEqual({ claude: path.join(os.homedir(), ".local/bin/claude") });
+    });
+
+    it("rejects a relative agentBinaries path", () => {
+      expect(() => load({ agentBinaries: { claude: "bin/claude" } })).toThrow(/agentBinaries/);
+    });
+
     it("rejects a relative socketPath", () => {
       expect(() => load({ socketPath: "rel/tmux.sock" })).toThrow(/socketPath/);
     });

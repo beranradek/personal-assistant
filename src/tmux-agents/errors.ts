@@ -12,6 +12,7 @@ export const ERROR_CODES = [
   "UNKNOWN_STATE",
   "BYPASS_NOT_ALLOWED",
   "ROOT_NOT_TRUSTED",
+  "AGENT_BINARY_NOT_FOUND",
   "TMUX_ERROR",
   "TIMEOUT",
 ] as const;

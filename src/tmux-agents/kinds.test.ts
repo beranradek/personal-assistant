@@ -28,6 +28,12 @@ describe("kinds", () => {
     expect(claude.detector).toBe("claude@1");
   });
 
+  it("replaces the program with the resolved binary and keeps the flags", () => {
+    expect(buildAgentArgv(KINDS, "claude", "plan", "/home/u/.local/bin/claude")).toEqual([
+      "/home/u/.local/bin/claude", "--setting-sources", "user", "--permission-mode", "plan",
+    ]);
+  });
+
   it("builds argv per permission mode", () => {
     expect(buildAgentArgv(KINDS, "claude", "default")).toEqual(["claude", "--setting-sources", "user"]);
     expect(buildAgentArgv(KINDS, "claude", "acceptEdits")).toEqual([

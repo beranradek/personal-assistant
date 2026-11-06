@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Config } from "../core/types.js";
 import { createAuditLog, type AuditLog } from "./audit.js";
+import { createBinaryResolver, type BinaryResolver } from "./binary.js";
 import { KINDS, type KindTable } from "./kinds.js";
 import { createRegistry, type Registry } from "./registry.js";
 import { createTmuxRunner, type TmuxRunner } from "./runner.js";
@@ -22,6 +23,8 @@ export interface CreateTmuxAgentServiceOptions {
   audit?: AuditLog;
   clock?: Clock;
   random?: () => number;
+  /** Replaces the file system check of the agent program (tests with a fake runner). */
+  resolveBinary?: BinaryResolver;
 }
 
 /**
@@ -43,6 +46,7 @@ export function createTmuxAgentService(
     registry: options.registry ?? createRegistry({ dir }),
     audit: options.audit ?? createAuditLog({ dir, caller: options.caller }),
     kinds,
+    resolveBinary: options.resolveBinary ?? createBinaryResolver(cfg),
     enabledKinds: options.kinds ? Object.keys(kinds) : cfg.enabledKinds,
     redact: options.redact,
     clock: options.clock ?? realClock,

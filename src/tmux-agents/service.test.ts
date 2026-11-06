@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { TmuxAgentsConfigSchema } from "../core/types.js";
 import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
 import type { AuditEntry } from "./audit.js";
+import type { BinaryResolver } from "./binary.js";
 import { TmuxAgentError } from "./errors.js";
 import { FakeClock, FakeTmux } from "./fake-tmux.test-helper.js";
 import { KINDS, type KindTable } from "./kinds.js";
@@ -71,7 +72,7 @@ describe("TmuxAgentService", () => {
 
   function make(
     over: Record<string, unknown> = {},
-    extra: { kinds?: KindTable; registry?: Registry; workspace?: string } = {},
+    extra: { kinds?: KindTable; registry?: Registry; workspace?: string; resolveBinary?: BinaryResolver } = {},
   ): TmuxAgentService {
     const tmuxAgents = TmuxAgentsConfigSchema.parse({
       enabled: true,
@@ -93,6 +94,8 @@ describe("TmuxAgentService", () => {
         registry: extra.registry ?? registry,
         audit: { record: async (entry) => void audits.push(entry) },
         clock,
+        // The production resolver checks the real file system; most tests do not care where `claude` lives.
+        resolveBinary: extra.resolveBinary ?? ((_kind, command) => command),
         random: () => (n++ % 65536) / 65536,
         ...(extra.kinds ? { kinds: extra.kinds } : {}),
       },
@@ -122,6 +125,57 @@ describe("TmuxAgentService", () => {
     const result = await service.start(startInput(over));
     return { result, name: result.session, fake: tmux.byName(result.session) };
   }
+
+  // -------------------------------------------------------------------------
+  // agent binary and an agent that ends right after start
+  // -------------------------------------------------------------------------
+
+  describe("agent binary", () => {
+    it("fails before any tmux call and writes no record when the binary is not found", async () => {
+      const service = make({}, {
+        resolveBinary: () => {
+          throw new TmuxAgentError("AGENT_BINARY_NOT_FOUND", "claude not found; set tmuxAgents.agentBinaries.claude");
+        },
+      });
+      expect(await codeOf(service.start(startInput()))).toBe("AGENT_BINARY_NOT_FOUND");
+      expect(tmux.calls).toEqual([]);
+      expect((await registry.read()).records).toEqual([]);
+    });
+
+    it("starts the resolved binary with the flags of the kind and mode", async () => {
+      const service = make({}, { resolveBinary: (kind, command) => `/opt/agents/${kind}-${command}` });
+      const { fake } = await started(service, { permissionMode: "plan" });
+      expect(fake.argv).toEqual(["/opt/agents/claude-claude", "--setting-sources", "user", "--permission-mode", "plan"]);
+    });
+
+    it("checks the binary of a recover before the old session is killed", async () => {
+      let found = true;
+      const service = make({}, {
+        resolveBinary: (_kind, command) => {
+          if (!found) throw new TmuxAgentError("AGENT_BINARY_NOT_FOUND", "claude not found");
+          return command;
+        },
+      });
+      const { name } = await started(service);
+      found = false;
+      expect(await codeOf(service.recover({ session: name, userConfirmed: true }))).toBe("AGENT_BINARY_NOT_FOUND");
+      expect(tmux.callsOf("kill-session")).toEqual([]);
+    });
+
+    it("marks the session lost and explains what to check when it ended right after start", async () => {
+      tmux.override = (args) =>
+        args[0] === "capture-pane" || args[0] === "display-message" ? failed("can't find pane") : undefined;
+      const service = make();
+      const result = await service.start(startInput());
+      expect(result.state).toBe("unknown");
+      expect(result.hint).toMatch(/ended right after start/);
+      expect(result.hint).toContain("claude --setting-sources user");
+      expect(result.hint).toContain("tmuxAgents.agentBinaries");
+      const [record] = (await registry.read()).records;
+      expect(record?.state).toBe("lost");
+      expect(record?.endedAt).toBeDefined();
+    });
+  });
 
   // -------------------------------------------------------------------------
   // factory
@@ -238,12 +292,13 @@ describe("TmuxAgentService", () => {
       expect(tmux.callsOf("kill-session")).toHaveLength(0);
     });
 
-    it("hints when the screen cannot be captured after start", async () => {
+    it("hints when the screen cannot be captured after start but the session is alive", async () => {
       const service = make();
       tmux.override = (args) => (args[0] === "capture-pane" ? failed("can't find pane") : undefined);
       const { result } = await started(service);
       expect(result.state).toBe("unknown");
-      expect(result.hint).toMatch(/exited/);
+      expect(result.hint).toMatch(/could not be read yet/);
+      expect((await registry.read()).records[0]?.state).toBe("running");
     });
 
     it.each([

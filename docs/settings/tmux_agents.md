@@ -38,6 +38,7 @@ Add to `~/.personal-assistant/settings.json`, then restart the daemon:
 | `allowedRoots` | `[]` | Where agents may start. Elsewhere: `ROOT_NOT_ALLOWED` (lists them). Also in `agent_session_list` |
 | `trustedRoots` | `[]` | Entries of `allowedRoots` that may lie under a directory the assistant can write (see below) |
 | `enabledKinds` | `["claude"]` | Agent kinds that may start. Only `claude` exists |
+| `agentBinaries` | `{}` | Absolute path of the agent program per kind, `~` allowed: `{"claude": "~/.local/bin/claude"}` (see below) |
 | `allowPermissionBypass` | `false` | Allow `permissionMode: "bypass"` (also needs `confirmBypass: true` in the call) |
 | `allowAnswerPrompts` | `false` | Allow `send` to answer a permission prompt of the agent (never a trust dialog) |
 | `maxSessions` | `3` | Maximum running sessions (counted from the registry and from tmux) |
@@ -146,6 +147,21 @@ an existing settings file; for an existing install add the snippet by hand.
 - **tmux config and socket directory.** Every tmux call runs with `-f /dev/null -u`, so `~/.tmux.conf` is ignored and tmux uses
   UTF-8 without a UTF-8 `LANG`. The socket directory must be owned by the daemon user and not writable by group or others,
   or the first call fails.
+
+## Agent program and `PATH`
+
+tmux and so the agent get only the allowlisted environment, including the `PATH` of the daemon. A systemd user service often has a
+short `PATH` without `~/.local/bin`, where the native `claude` installer puts the program. Then the agent session would end right after
+start. Therefore `start` checks the program BEFORE it creates a session and fails with `AGENT_BINARY_NOT_FOUND`, naming the program, the
+searched `PATH` and the setting. Fix it with the absolute path:
+
+```json
+"tmuxAgents": { "agentBinaries": { "claude": "~/.local/bin/claude" } }
+```
+
+The configured file must be executable (there is no fallback to the `PATH`). Without the setting the `PATH` is searched. Find the path with
+`which claude`. If a session still ends right after start (not logged in, wrong flags, crash), `start` marks it `lost` and the hint
+contains the exact command: run it by hand in the project directory to see the error.
 
 ## Skill
 

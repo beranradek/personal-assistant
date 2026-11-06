@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { createLogger } from "../core/logger.js";
 import type { AuditEntry } from "./audit.js";
 import { TmuxAgentError } from "./errors.js";
-import { buildAgentArgv, getKind, resolvePermissionMode, type AgentKind, type PermissionMode } from "./kinds.js";
+import { agentProgram, buildAgentArgv, getKind, resolvePermissionMode, type AgentKind, type PermissionMode } from "./kinds.js";
 import { buildSessionName, isSingleLine, validateProject, validateText } from "./names.js";
 import { pruneTerminal, reconcile, type LiveSession, type SessionRecord } from "./registry.js";
 import { resolveStartDirectory } from "./roots.js";
@@ -49,6 +49,11 @@ function tmuxError(result: TmuxRunResult, what: string): TmuxAgentError {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Quote a word only when the shell would otherwise split or expand it (readable commands in hints). */
+function shellWord(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : shellQuote(value);
 }
 
 function errorCode(err: unknown): string {
@@ -241,8 +246,10 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
       trustedRoots: cfg.trustedRoots,
       writableDirs: [deps.config.security.workspace, ...deps.config.security.additionalWriteDirs],
     });
+    // Pre-flight: no tmux call, registry record or kill of a replaced session happens when the program is missing.
+    const argv = buildAgentArgv(kinds, kind.id, mode, deps.resolveBinary(kind.id, agentProgram(kind)));
     if (options.checkRate) await assertStartRate();
-    return { project: input.project, kind, mode, cwd, argv: buildAgentArgv(kinds, kind.id, mode) };
+    return { project: input.project, kind, mode, cwd, argv };
   }
 
   /**
@@ -333,7 +340,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   }
 
   /** Wait for the TUI to draw, then report the detected state (outside the start serialization: it only reads). */
-  async function settle(record: SessionRecord) {
+  async function settle(record: SessionRecord, argv: readonly string[]) {
     await clock.sleep(START_SETTLE_MS);
     let state: AgentState = "unknown";
     let hint: string | undefined;
@@ -341,7 +348,13 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
       state = (await screenState(record)).status.state;
     } catch (err) {
       log.warn({ err, session: record.name }, "Could not capture the screen after start");
-      hint = "No screen yet; the agent may have exited. Check with agent_session_status.";
+      // verifyAlive marks the record `lost` when the session is gone.
+      const alive = await verifyAlive(record).catch(() => false);
+      hint = alive
+        ? "The screen could not be read yet. Check with agent_session_status."
+        : `The agent session ended right after start (the record is now lost). Likely causes: the agent program exited at once ` +
+          `(wrong path or flags, not logged in, crash). Run the exact command by hand in ${shellWord(record.cwd)} to see the error: ` +
+          `${argv.map(shellWord).join(" ")}. If the program is not found, set tmuxAgents.agentBinaries.${record.kind}.`;
     }
     if (state === "waiting_trust") {
       hint = "The agent shows a trust dialog. Report it to the user and recommend agent_session_attach; do not confirm it.";
@@ -520,13 +533,13 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   const service: TmuxAgentService = {
     async start(input) {
       return audited({ action: "start", project: input.project, kind: input.kind, permissionMode: input.permissionMode }, async (entry) => {
-        const record = await serializedStart(async () => {
+        const { record, argv } = await serializedStart(async () => {
           const prepared = await prepareStart(input, { checkRate: true });
           // Reserved before the tmux call: concurrent and failed starts count against minStartIntervalMs too.
           lastStartAt = clock.now();
-          return register(prepared, entry);
+          return { record: await register(prepared, entry), argv: prepared.argv };
         });
-        return toStartResult(await settle(record));
+        return toStartResult(await settle(record, argv));
       });
     },
 
@@ -693,7 +706,7 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
         }
         await markEnded(old.name, "stopped");
         const record = await serializedStart(() => register(prepared, entry, old.name));
-        return { ...toStartResult(await settle(record)), oldSession: old.name, method: "force-restart" as const };
+        return { ...toStartResult(await settle(record, prepared.argv)), oldSession: old.name, method: "force-restart" as const };
       });
     },
 

@@ -1,6 +1,7 @@
 /** Public types of the tmux agent service: dependencies, results and the service interface. */
 import type { Config } from "../core/types.js";
 import type { AuditLog } from "./audit.js";
+import type { BinaryResolver } from "./binary.js";
 import type { KindTable, PermissionMode } from "./kinds.js";
 import type { Registry, SessionState } from "./registry.js";
 import type { TmuxRunner } from "./runner.js";
@@ -33,6 +34,8 @@ export interface ServiceDeps {
   registry: Registry;
   audit: AuditLog;
   kinds: KindTable;
+  /** Pre-flight check of the agent program (throws `AGENT_BINARY_NOT_FOUND`). */
+  resolveBinary: BinaryResolver;
   /** Kind ids that `start` accepts. */
   enabledKinds: readonly string[];
   redact: (text: string) => string;

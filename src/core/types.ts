@@ -336,6 +336,8 @@ export const TmuxAgentsConfigSchema = z.object({
   /** Subset of allowedRoots that may lie under security.workspace or security.additionalWriteDirs. */
   trustedRoots: z.array(z.string()).default([]),
   enabledKinds: z.array(z.enum(["claude"])).default(["claude"]),
+  /** Absolute path of the agent program per kind (`~` allowed in settings). Default: the kind's program from the PATH. */
+  agentBinaries: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), z.string().min(1)).default({}),
   allowPermissionBypass: z.boolean().default(false),
   allowAnswerPrompts: z.boolean().default(false),
   maxSessions: z.number().int().min(1).max(10).default(3),
