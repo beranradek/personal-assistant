@@ -41,7 +41,7 @@ export interface TmuxRunResult {
   noServer: boolean;
 }
 
-/** The single entry point for every tmux call of the module. It prepends `-f /dev/null -S <socketPath>`. */
+/** The single entry point for every tmux call of the module. It prepends `-f /dev/null -u -S <socketPath>`. */
 export interface TmuxRunner {
   readonly socketPath: string;
   run(args: readonly string[], options?: TmuxRunOptions): Promise<TmuxRunResult>;
@@ -112,7 +112,8 @@ export function createTmuxRunner(config: RunnerConfig, deps: TmuxRunnerDeps = {}
         const child = execFile(
           config.tmuxBinary,
           // `-f /dev/null`: never read ~/.tmux.conf or /etc/tmux.conf (options such as destroy-unattached, run-shell hooks).
-          ["-f", "/dev/null", "-S", config.socketPath, ...args],
+          // `-u`: always UTF-8, also without a UTF-8 LANG (systemd): the screen detectors rely on characters like ❯ and ✻.
+          ["-f", "/dev/null", "-u", "-S", config.socketPath, ...args],
           {
             env,
             timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,

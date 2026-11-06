@@ -40,22 +40,16 @@ export interface HttpMcpServerHandle {
   close(): Promise<void>;
 }
 
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
-
 /**
  * Defense against DNS rebinding and cross-site requests: the server has no authentication, so only requests that
- * name a loopback `Host` with our port, and carry no `Origin` (non-browser clients) or a loopback `Origin`, are served.
+ * name a loopback `Host` with our port, and carry no `Origin` (non-browser clients) or an `Origin` that is exactly this
+ * server (same host and port), are served. A page from another local port (a dev server) is refused.
  */
 export function isAllowedRequest(headers: http.IncomingHttpHeaders, port: number): boolean {
   const host = headers.host;
   if (!host || !["127.0.0.1", "localhost"].some((name) => host === `${name}:${port}`)) return false;
   const origin = headers.origin;
-  if (origin === undefined) return true;
-  try {
-    return LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
-  } catch {
-    return false;
-  }
+  return origin === undefined || origin === `http://${host}`;
 }
 
 export async function startHttpMcpServer(

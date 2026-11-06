@@ -326,7 +326,7 @@ equals `exec`. The socket path must stay below about 100 characters (unix socket
 ## Tool contracts (Zod, Task 7 uses them)
 
 All results are JSON text. Success: `{ ok: true, ... }`. Failure: `isError: true`, `{ ok: false, error: { code, message } }`.
-Error codes: `DISABLED, INVALID_INPUT, ROOT_NOT_ALLOWED, TOO_MANY_SESSIONS, RATE_LIMITED, NOT_FOUND, NOT_OWNED,
+Error codes: `INVALID_INPUT, ROOT_NOT_ALLOWED, TOO_MANY_SESSIONS, RATE_LIMITED, NOT_FOUND, NOT_OWNED,
 BUSY, WAITING_PERMISSION, WAITING_TRUST, BYPASS_NOT_ALLOWED, ROOT_NOT_TRUSTED, TMUX_ERROR, TIMEOUT`.
 
 ```ts
@@ -397,7 +397,7 @@ Files: `src/tmux-agents/names.ts`, `kinds.ts`, `roots.ts` (+ tests).
 
 1. Tests first:
    - `names.test.ts`: `validateProject` accepts `my-proj`, rejects `""`, `A`, `-x`, `a b`, `a;b`, `$(x)`, 33 chars, unicode, `..`.
-     `buildSessionName("my-proj", rand)` gives `pa-my-proj-<4hex>`. `isOwnedName` rejects `pa-x`, `PA-x-1a2b`, `pa-x-1a2bz`.
+     `buildSessionName("my-proj", rand)` gives `pa-my-proj-<4hex>`. `SESSION_PATTERN` rejects `pa-x`, `PA-x-1a2b`, `pa-x-1a2bz`.
      `validateText` rejects `\x1b`, `\x00`, `\x7f`, C1 `\u009b` (and any U+0080-U+009F); accepts tab, newline, Czech text, emoji;
      rejects empty and over-limit. B1 cases (code `INVALID_INPUT`): `validateText("!rm -rf x")`, `"  !ls"`, `" /permissions"`,
      `"/config"`, `"# note"` and `"\n/permissions"` are rejected (check runs after `trimStart()`); `"/clear"` and `"/compact"` pass
@@ -844,6 +844,25 @@ All applied in the commits after `ef83e88`; tests first, `npx vitest run src/tmu
 - **Smaller:** orphan session after a `new-session` timeout is found by name and killed by id; `recover` audit has `session` (old) and
   `newSession`; `send` returns `sent: true` plus a `hint` when the screen cannot be read after typing.
 - **Not done:** a bearer token for the HTTP MCP server (still out of scope); the lock stays a directory lock (see above).
+
+## Review fixes, round 2 (2026-11-06)
+
+A second independent review of the fixes above found no HIGH issues. Applied:
+
+- **Graceful `stop` on an unrecognized screen** is refused with `UNKNOWN_STATE` (same reason as `send`: Enter could confirm a dialog).
+  The forced path with `userConfirmed` stays. The reaper already required `idle`.
+- **Runner:** `-u` after `-f /dev/null`, so tmux uses UTF-8 without a UTF-8 `LANG` (systemd); the idle detector needs `❯`. The
+  integration test starts a service with `LANG`, `LC_ALL`, `LC_CTYPE` set to `C` and expects `idle` and `❯`. Caveat: on tmux 3.6
+  here the test also passes without `-u`, so the risk is not reproduced; `-u` stays as a cheap safeguard.
+- **Registry pruning:** `list` prunes old terminal records also when no session runs (one locked write, no tmux call).
+- **HTTP MCP Origin:** an `Origin` must equal `http://<Host header>` (same host and port); a page from another local port is refused.
+  No `Origin` still passes (non-browser clients).
+- **Dead code:** removed the unused `DISABLED` error code (a disabled feature registers no tools) and `isOwnedName`. `creatorPid`
+  and `instanceId` stay (plan owner record) and are marked diagnostic only.
+- **Send:** a missing record gives `NOT_FOUND` (was `RATE_LIMITED`); the send slot is given back when typing fails.
+- **Orphans:** `new-session` that throws for any reason (timeout, maxBuffer, spawn error) triggers the orphan check by name.
+- **Accepted trade-off:** `waitForIdle` may still return early when the agent shows no busy phase within two polls (about 2 s); the
+  caller can check with `agent_session_status` or `read`.
 
 ## Review log (2026-11-05)
 

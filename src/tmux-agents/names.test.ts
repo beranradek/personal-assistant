@@ -4,7 +4,6 @@ import {
   PROJECT_PATTERN,
   SESSION_PATTERN,
   buildSessionName,
-  isOwnedName,
   isSingleLine,
   validateProject,
   validateText,
@@ -51,10 +50,9 @@ describe("session names", () => {
     expect(code(() => buildSessionName("A b"))).toBe("INVALID_INPUT");
   });
 
-  it("isOwnedName accepts only the exact shape", () => {
-    expect(isOwnedName("pa-x-1a2b")).toBe(true);
+  it("SESSION_PATTERN accepts only the exact shape", () => {
     for (const bad of ["pa-x", "PA-x-1a2b", "pa-x-1a2bz", "pa-x-1a2b; ls", "foo", ""]) {
-      expect(isOwnedName(bad)).toBe(false);
+      expect(SESSION_PATTERN.test(bad)).toBe(false);
     }
   });
 });

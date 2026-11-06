@@ -214,6 +214,18 @@ describe("TmuxAgentService", () => {
       expect((await registry.read()).records).toEqual([]);
     });
 
+    it("kills an orphan when new-session fails after tmux created the session (for example maxBuffer)", async () => {
+      const service = make();
+      tmux.override = (args) => {
+        if (args[0] !== "new-session") return undefined;
+        tmux.addSession(args[args.indexOf("-s") + 1]!);
+        throw new TmuxAgentError("TMUX_ERROR", "tmux new-session produced too much output");
+      };
+      expect(await codeOf(service.start(startInput()))).toBe("TMUX_ERROR");
+      expect(tmux.sessions.size).toBe(0);
+      expect((await registry.read()).records).toEqual([]);
+    });
+
     it("leaves a foreign session alone when new-session times out and no session with our name exists", async () => {
       const service = make();
       tmux.addSession("other");
@@ -441,6 +453,17 @@ describe("TmuxAgentService", () => {
       }));
       await service.reconcile();
       expect((await registry.read()).records.map((r) => r.name)).toEqual([name, "pa-old-0003"]);
+    });
+
+    it("list prunes old terminal records even when no session is running", async () => {
+      const service = make();
+      const { name } = await started(service);
+      await service.stop({ session: name, force: true, userConfirmed: true });
+      clock.t += 8 * 24 * 60 * 60 * 1000;
+      tmux.calls.length = 0;
+      expect((await service.list({ includeStopped: true })).sessions).toEqual([]);
+      expect((await registry.read()).records).toEqual([]);
+      expect(tmux.calls).toEqual([]); // nothing to sync, so no tmux call
     });
 
     it("marks vanished sessions lost with an endedAt time", async () => {
@@ -718,6 +741,34 @@ describe("TmuxAgentService", () => {
       await expect(service.send(sendInput(name, "now"))).resolves.toMatchObject({ sent: true });
     });
 
+    it("a send whose typing fails gives the send slot back", async () => {
+      const service = make({ minSendIntervalMs: 1_500 });
+      const { name } = await started(service);
+      await service.send(sendInput(name, "one"));
+      const before = (await registry.read()).records[0]!.lastInputAt;
+      clock.t += 2_000;
+      tmux.override = (args) => (args[0] === "send-keys" && args.includes("-l") ? failed("pane gone") : undefined);
+      expect(await codeOf(service.send(sendInput(name, "two")))).toBe("TMUX_ERROR");
+      expect((await registry.read()).records[0]!.lastInputAt).toBe(before);
+      tmux.override = undefined;
+      await expect(service.send(sendInput(name, "three"))).resolves.toMatchObject({ sent: true });
+    });
+
+    it("a send to a session that vanished from the registry is NOT_FOUND, not RATE_LIMITED", async () => {
+      let wipe = false;
+      const wiping: Registry = {
+        ...registry,
+        mutate: async (fn) => {
+          if (wipe) await registry.mutate(() => ({ records: [], result: undefined }));
+          return registry.mutate(fn);
+        },
+      };
+      const service = make({}, { registry: wiping });
+      const { name } = await started(service);
+      wipe = true; // the record disappears (manual repair) between the checks and the slot reservation
+      expect(await codeOf(service.send(sendInput(name, "hello")))).toBe("NOT_FOUND");
+    });
+
     it("rate limits before any tmux call", async () => {
       const service = make({ minSendIntervalMs: 1_500 });
       const { name } = await started(service);
@@ -806,6 +857,18 @@ describe("TmuxAgentService", () => {
       fake.screen = BUSY;
       expect(await codeOf(service.stop({ session: name, force: false }))).toBe("BUSY");
       expect(tmux.callsOf("kill-session")).toHaveLength(0);
+    });
+
+    it("refuses a graceful stop on an unrecognized screen: Enter could confirm a dialog", async () => {
+      const service = make();
+      const { name, fake } = await started(service);
+      fake.screen = EMPTY;
+      tmux.calls.length = 0;
+      expect(await codeOf(service.stop({ session: name, force: false }))).toBe("UNKNOWN_STATE");
+      expect(tmux.callsOf("send-keys")).toHaveLength(0);
+      expect(tmux.callsOf("kill-session")).toHaveLength(0);
+      // the forced path with confirmation still works
+      await expect(service.stop({ session: name, force: true, userConfirmed: true })).resolves.toMatchObject({ method: "forced" });
     });
 
     it("force without userConfirmed is INVALID_INPUT", async () => {

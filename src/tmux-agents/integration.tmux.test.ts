@@ -37,10 +37,10 @@ describe.skipIf(!tmuxAvailable)("tmux integration (real tmux, fake agent)", { ti
 
   const tmux = async (...args: string[]) => run("tmux", ["-S", socket, ...args]).catch((err: { stdout?: string; stderr?: string }) => err);
 
-  function makeService(): TmuxAgentService {
+  function makeService(socketPath = socket): TmuxAgentService {
     const tmuxAgents = TmuxAgentsConfigSchema.parse({
       enabled: true,
-      socketPath: socket,
+      socketPath,
       allowedRoots: [root],
       minStartIntervalMs: 0,
       minSendIntervalMs: 0,
@@ -131,6 +131,29 @@ describe.skipIf(!tmuxAvailable)("tmux integration (real tmux, fake agent)", { ti
     const [session] = (await service.list({ includeStopped: false })).sessions;
     const result = await tmux("list-sessions", "-F", "#{session_name} #{session_attached}");
     expect(`${result.stdout ?? ""}`.split("\n")).toContain(`${session!.session} 0`);
+  });
+
+  // `-u` is a safeguard: tmux 3.6 on the dev machine also passes this test without it, so it proves no regression, not the need.
+  it("captures non-ASCII screen characters (❯) when the daemon runs in the C locale", async () => {
+    const lang = ["LANG", "LC_ALL", "LC_CTYPE"] as const;
+    const saved = lang.map((name) => [name, process.env[name]] as const);
+    for (const name of lang) process.env[name] = "C";
+    const otherSocket = path.join(base, "nolang.sock");
+    let other: TmuxAgentService | undefined;
+    try {
+      other = makeService(otherSocket); // the runner copies the environment, now with the C locale
+      const started = await other.start(startInput("nolang"));
+      expect(started.state).toBe("idle"); // the idle detector needs the ❯ prompt character
+      expect((await other.read({ session: started.session, lines: 20 })).output).toContain("❯");
+      await other.stop({ session: started.session, force: true, userConfirmed: true });
+    } finally {
+      for (const [name, value] of saved) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      other?.close();
+      await run("tmux", ["-S", otherSocket, "kill-server"]).catch(() => undefined);
+    }
   });
 
   it("text ending in ';' arrives unchanged (tmux would eat it as a command separator)", async () => {

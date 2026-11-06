@@ -25,10 +25,6 @@ export function buildSessionName(project: string, rand?: () => number): string {
   return `pa-${project}-${value.toString(16).padStart(4, "0")}`;
 }
 
-export function isOwnedName(name: string): boolean {
-  return SESSION_PATTERN.test(name);
-}
-
 export function isSingleLine(text: string): boolean {
   return !text.includes("\n");
 }

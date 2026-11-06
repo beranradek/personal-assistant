@@ -20,8 +20,9 @@ export const SessionRecordSchema = z.strictObject({
   cwd: z.string().min(1),
   permissionMode: z.enum(PERMISSION_MODES),
   createdAt: z.string().min(1),
+  /** Diagnostic only (plan owner record): pid of the creating process. Never used for decisions. */
   creatorPid: z.number().int(),
-  /** Id of the service instance that created the record. */
+  /** Diagnostic only: id of the service instance that created the record. Never used for decisions. */
   instanceId: z.string().min(1),
   tmuxSessionId: z.string().regex(/^\$\d+$/),
   tmuxPaneId: z.string().regex(/^%\d+$/),

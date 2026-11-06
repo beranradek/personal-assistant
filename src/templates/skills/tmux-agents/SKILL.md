@@ -65,6 +65,7 @@ unknown wording that shows a numbered menu or "Esc to cancel" is also reported a
 If the state is `unknown` (the screen is not recognized: the agent may still start or show a dialog), `agent_session_send`
 refuses with `UNKNOWN_STATE`. Read the screen with `agent_session_read` first. Only when it shows a normal agent prompt, retry
 with `allowUnknownState: true`. When it shows a dialog, report it to the user. Never use `allowUnknownState` to answer a dialog.
+A graceful `agent_session_stop` is refused with `UNKNOWN_STATE` in the same way; read the screen and ask the user before a forced stop.
 
 ## Errors
 

@@ -55,7 +55,7 @@ describe("createTmuxRunner", () => {
     const result = await make(exec).run(["has-session", "-t", "$1"]);
     expect(result).toEqual({ code: 0, stdout: "ok\n", stderr: "", noServer: false });
     expect(exec.calls[0]!.file).toBe("tmux-bin");
-    expect(exec.calls[0]!.args).toEqual(["-f", "/dev/null", "-S", socketPath, "has-session", "-t", "$1"]);
+    expect(exec.calls[0]!.args).toEqual(["-f", "/dev/null", "-u", "-S", socketPath, "has-session", "-t", "$1"]);
     expect(exec.calls[0]!.options).not.toHaveProperty("shell");
   });
 
@@ -97,7 +97,7 @@ describe("createTmuxRunner", () => {
     const exec = fakeExec();
     const runner = make(exec);
     for (const sub of ALLOWED_SUBCOMMANDS) await runner.run([sub]);
-    expect(exec.calls.map((c) => c.args[4])).toEqual([...ALLOWED_SUBCOMMANDS]);
+    expect(exec.calls.map((c) => c.args[5])).toEqual([...ALLOWED_SUBCOMMANDS]);
   });
 
   it("refuses an argument that ends with a semicolon (tmux command separator)", async () => {
@@ -124,7 +124,7 @@ describe("createTmuxRunner", () => {
   it("never reads the user's tmux config", async () => {
     const exec = fakeExec();
     await make(exec).run(["list-sessions"]);
-    expect(exec.calls[0]!.args.slice(0, 2)).toEqual(["-f", "/dev/null"]);
+    expect(exec.calls[0]!.args.slice(0, 3)).toEqual(["-f", "/dev/null", "-u"]);
   });
 
   it("refuses a socket directory that others can write into", async () => {

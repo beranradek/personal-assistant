@@ -1,6 +1,5 @@
 /** Error codes returned by the `agent_session_*` tools. */
 export const ERROR_CODES = [
-  "DISABLED",
   "INVALID_INPUT",
   "ROOT_NOT_ALLOWED",
   "TOO_MANY_SESSIONS",

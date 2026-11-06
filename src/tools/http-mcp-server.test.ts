@@ -483,18 +483,25 @@ describe("startHttpMcpServer", () => {
       expect(res.status).toBe(200);
     });
 
-    it("rejects an Origin that is not loopback", async () => {
+    it("rejects an Origin that is not this server (foreign site, other local port, other host name)", async () => {
       handle = await startHttpMcpServer(makeDeps(), 0);
-      for (const origin of ["https://evil.example", "http://127.0.0.1.evil.example", "null", "not a url"]) {
-        const res = await httpRequest(handle.port, { headers: { Origin: origin } });
+      const origins = [
+        "https://evil.example", "http://127.0.0.1.evil.example", "null", "not a url",
+        "http://localhost:3000", `http://127.0.0.1:${handle.port + 1}`, `http://localhost:${handle.port}`, "http://127.0.0.1",
+      ];
+      for (const origin of origins) {
+        const res = await httpRequest(handle.port, { headers: { Host: `127.0.0.1:${handle.port}`, Origin: origin } });
         expect(res.status).toBe(403);
       }
     });
 
-    it("accepts a loopback Origin and no Origin at all", async () => {
+    it("accepts an Origin equal to the Host (same host and port) and no Origin at all", async () => {
       handle = await startHttpMcpServer(makeDeps(), 0);
-      const withOrigin = await httpRequest(handle.port, { headers: { Origin: "http://localhost:3000" } });
-      expect(withOrigin.status).toBe(200);
+      for (const name of ["127.0.0.1", "localhost"]) {
+        const host = `${name}:${handle.port}`;
+        const res = await httpRequest(handle.port, { headers: { Host: host, Origin: `http://${host}` } });
+        expect(res.status).toBe(200);
+      }
       const without = await httpRequest(handle.port);
       expect(without.status).toBe(200);
     });
@@ -508,5 +515,11 @@ describe("isAllowedRequest", () => {
     expect(isAllowedRequest({ host: "localhost" }, 9)).toBe(false);
     expect(isAllowedRequest({}, 9)).toBe(false);
     expect(isAllowedRequest({ host: "evil.example:9" }, 9)).toBe(false);
+  });
+
+  it("allows an Origin only when it names exactly the Host", () => {
+    expect(isAllowedRequest({ host: "localhost:9", origin: "http://localhost:9" }, 9)).toBe(true);
+    expect(isAllowedRequest({ host: "localhost:9", origin: "http://localhost:3000" }, 9)).toBe(false);
+    expect(isAllowedRequest({ host: "localhost:9", origin: "http://127.0.0.1:9" }, 9)).toBe(false);
   });
 });

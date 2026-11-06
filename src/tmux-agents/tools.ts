@@ -149,7 +149,8 @@ export const TMUX_TOOLS: readonly TmuxToolDefinition[] = [
   defineTool({
     name: "stop",
     description:
-      "Stop a session: sends /exit and kills it after a grace period. Refused while the agent is busy or waiting. " +
+      "Stop a session: sends /exit and kills it after a grace period. " +
+      "Refused while the agent is busy, waiting or shows an unrecognized screen. " +
       "force kills at once and needs userConfirmed: ask the user first, unfinished work is lost.",
     shape: stopShape,
     annotations: DESTRUCTIVE,

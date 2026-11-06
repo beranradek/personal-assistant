@@ -246,18 +246,18 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   }
 
   /**
-   * After a `new-session` timeout tmux may still have created the session. It would be live without a record: it counts
-   * against `maxSessions`, is never reaped and cannot be stopped. The name was generated a moment ago on our dedicated
-   * server, so a live session with exactly this name is ours: kill it by id. Failures are only logged.
+   * After a `new-session` call that threw (timeout, maxBuffer) tmux may still have created the session. It would be live
+   * without a record: it counts against `maxSessions`, is never reaped and cannot be stopped. The name was generated a
+   * moment ago on our dedicated server, so a live session with exactly this name is ours: kill it by id. Failures are only logged.
    */
   async function removeOrphan(name: string): Promise<void> {
     try {
       const orphan = (await listLive()).find((l) => l.name === name);
       if (!orphan) return;
-      log.warn({ name, sessionId: orphan.sessionId }, "new-session timed out but the session exists; killing the orphan");
+      log.warn({ name, sessionId: orphan.sessionId }, "new-session failed but the session exists; killing the orphan");
       await killVerified(orphan.sessionId);
     } catch (err) {
-      log.warn({ err, name }, "Could not check for an orphan session after a new-session timeout");
+      log.warn({ err, name }, "Could not check for an orphan session after a failed new-session");
     }
   }
 
@@ -271,7 +271,8 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
           "-P", "-F", NEW_SESSION_FORMAT, "--", ...p.argv,
         ]);
       } catch (err) {
-        if (errorCode(err) === "TIMEOUT") await removeOrphan(name);
+        // The runner throws on a timeout, an exceeded maxBuffer or a spawn failure: tmux may still have created the session.
+        await removeOrphan(name);
         throw err;
       }
       if (result.code === 0) {
@@ -387,6 +388,10 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
     return result;
   }
 
+  /** Drop old terminal records (one locked write, no tmux call). */
+  const pruneOldRecords = () =>
+    registry.mutate((current) => ({ records: pruneTerminal(current, clock.now()), result: undefined }));
+
   // ---- stop -----------------------------------------------------------------
 
   async function stopSession(record: SessionRecord, force: boolean): Promise<StopResult> {
@@ -424,18 +429,37 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
   /**
    * Reserve the send slot: rate limit and `lastInputAt` in one locked step (also across processes). Called only after
    * all refusals (busy, waiting, unknown) passed, so a refused send does not use up the slot or reset the reaper clock.
+   * Returns the previous `lastInputAt`, so the caller can give the slot back when nothing was typed.
    */
-  async function reserveSend(name: string): Promise<void> {
-    const allowed = await registry.mutate((records) => {
+  async function reserveSend(name: string): Promise<string | undefined> {
+    type Reservation = "missing" | "limited" | { previous: string | undefined };
+    const reservation = await registry.mutate<Reservation>((records) => {
       const record = records.find((r) => r.name === name);
-      if (!record || sentTooSoon(record)) return { records, result: false };
-      const now = clock.now();
+      if (!record) return { records, result: "missing" };
+      if (sentTooSoon(record)) return { records, result: "limited" };
+      const now = new Date(clock.now()).toISOString();
       return {
-        records: records.map((r) => (r.name === name ? { ...r, lastInputAt: new Date(now).toISOString() } : r)),
-        result: true,
+        records: records.map((r) => (r.name === name ? { ...r, lastInputAt: now } : r)),
+        result: { previous: record.lastInputAt },
       };
     });
-    if (!allowed) throw rateLimitedSend();
+    if (reservation === "missing") throw new TmuxAgentError("NOT_FOUND", `Unknown session: ${name}`);
+    if (reservation === "limited") throw rateLimitedSend();
+    return reservation.previous;
+  }
+
+  /** Give a reserved send slot back: the typing failed, so nothing was sent and the reaper clock must not move. */
+  async function releaseSend(name: string, previous: string | undefined): Promise<void> {
+    await registry
+      .mutate((records) => ({
+        records: records.map((r) => {
+          if (r.name !== name) return r;
+          const { lastInputAt: _reserved, ...rest } = r;
+          return previous === undefined ? rest : { ...rest, lastInputAt: previous };
+        }),
+        result: undefined,
+      }))
+      .catch((err: unknown) => log.warn({ err, session: name }, "Could not release the send slot"));
   }
 
   async function pressEnter(record: SessionRecord): Promise<void> {
@@ -508,9 +532,12 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
 
     async list({ includeStopped }) {
       let snapshot = await registry.read();
-      if (snapshot.records.some(isRunning)) {
+      // Sync with tmux when something may have vanished; prune old terminal records in any case (no tmux call needed).
+      const hasOldRecords = pruneTerminal(snapshot.records, clock.now()).length !== snapshot.records.length;
+      const refresh = snapshot.records.some(isRunning) ? syncWithTmux : hasOldRecords ? pruneOldRecords : undefined;
+      if (refresh) {
         try {
-          await syncWithTmux();
+          await refresh();
           snapshot = await registry.read();
         } catch (err) {
           log.warn({ err }, "Could not refresh session states from tmux");
@@ -583,8 +610,14 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
           );
         }
 
-        await reserveSend(record.name);
-        const mode = await typeText(record, text);
+        const previousInput = await reserveSend(record.name);
+        let mode: "keys" | "paste";
+        try {
+          mode = await typeText(record, text);
+        } catch (err) {
+          await releaseSend(record.name, previousInput);
+          throw err;
+        }
         const budget = Math.min(input.waitForIdleMs, cfg.maxWaitMs);
         if (budget <= 0) return { session: record.name, sent: true, mode, state: status.state, waited: false, timedOut: false };
 
@@ -623,7 +656,15 @@ export function createService(deps: ServiceDeps): TmuxAgentService {
         const record = await requireRunning(session);
         if (!force) {
           const { status } = await screenState(record);
-          if (status.state !== "idle" && status.state !== "unknown") {
+          // Same rule as `send`: on an unrecognized screen Enter could confirm the default answer of a dialog.
+          if (status.state === "unknown") {
+            throw new TmuxAgentError(
+              "UNKNOWN_STATE",
+              "The screen is not recognized (the agent may show a dialog); read it with agent_session_read, " +
+                "then ask the user (agent_session_attach) about a forced stop",
+            );
+          }
+          if (status.state !== "idle") {
             throw new TmuxAgentError("BUSY", `The agent is ${status.state}; wait, interrupt it, or ask the user about a forced stop`);
           }
         }

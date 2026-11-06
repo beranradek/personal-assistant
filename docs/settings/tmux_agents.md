@@ -67,8 +67,9 @@ Add to `~/.personal-assistant/settings.json`, then restart the daemon:
   are allowed) and may not contain control characters.
 - **Output is untrusted data** (prompt injection). It is redacted with the conservative patterns, so long hashes may be masked
   (`redacted: true`).
-- **The HTTP MCP server has no authentication.** It listens on `127.0.0.1` only and checks the `Host` and `Origin` headers, but
-  any local process can call it, as it can already call `exec`.
+- **The HTTP MCP server has no authentication.** It listens on `127.0.0.1` only. It requires a `Host` of `127.0.0.1:<port>` or
+  `localhost:<port>` and, when an `Origin` header is present, an `Origin` equal to that host (a page from another local port is
+  refused). Any local process can still call it, as it can already call `exec`.
 - **The assistant confirms with you through chat only.** Literals such as `confirmBypass` and `userConfirmed` are written by the
   model, so they are a speed bump. The real barriers are these settings and, in Claude Code, the permission prompt.
 - **Environment changes need a tmux restart.** The agent environment is fixed when the tmux server starts (first session). After
@@ -131,15 +132,19 @@ The repository template for the Claude Code settings is not changed.
 
 - **Unrecognized screen.** `send` refuses with `UNKNOWN_STATE` while the screen matches no known state (the agent may start or
   show a dialog). A numbered menu or an "Esc to cancel" footer counts as `waiting_permission`. The caller reads the screen, then
-  retries with `allowUnknownState: true`; that flag never overrides a dialog.
+  retries with `allowUnknownState: true`; that flag never overrides a dialog. A graceful `stop` is refused the same way (it types
+  `/exit` and Enter); use a forced stop with `userConfirmed` after you looked at the screen.
+- **Waiting for the answer.** `waitForIdleMs` can return early when the agent shows no busy phase within about 2 seconds and the
+  screen stays unchanged. Check with `agent_session_status` or `agent_session_read` when the result looks incomplete.
 - **Input guard.** No line of a message may start with `!`, `#` or `/` (a pasted line can be submitted on its own when the
   agent does not use bracketed paste). Only `/clear` and `/compact` pass, as a single line.
 - **Stop and recover verify the kill.** After `kill-session` the service checks that the session is gone. If not, the call fails
   with `TMUX_ERROR` and the record stays `running` (no hidden orphan).
 - **Registry.** Stopped and lost records are dropped 7 days after they ended. The registry lock of a dead process is taken over
   after 2 seconds (10 seconds for a live pid).
-- **tmux config and socket directory.** Every tmux call runs with `-f /dev/null`, so `~/.tmux.conf` is ignored. The socket directory
-  must be owned by the daemon user and not writable by group or others, or the first call fails.
+- **tmux config and socket directory.** Every tmux call runs with `-f /dev/null -u`, so `~/.tmux.conf` is ignored and tmux uses
+  UTF-8 without a UTF-8 `LANG`. The socket directory must be owned by the daemon user and not writable by group or others,
+  or the first call fails.
 
 ## Skill
 
