@@ -1,7 +1,12 @@
 import * as path from "node:path";
 import type { Config, SearchResult } from "../core/types.js";
 import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
-import { createEmbeddingProvider, type EmbeddingProvider } from "./embeddings.js";
+import { createLogger } from "../core/logger.js";
+import {
+  createConfiguredEmbeddingProvider,
+  createEmbeddingProvider,
+  type EmbeddingProvider,
+} from "./embeddings.js";
 import { createVectorStore, type VectorStore } from "./vector-store.js";
 import { createIndexer, type Indexer } from "./indexer.js";
 import { createRobustMemorySearch } from "./robust-search.js";
@@ -12,7 +17,9 @@ import { createMemoryServer } from "../tools/memory-server.js";
 import { lintMemoryKnowledgeBase } from "./linter.js";
 import type { MemorySearchFilters } from "./metadata.js";
 
-type MemorySearchFn = (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
+const log = createLogger("memory");
+
+type MemorySearchFn =(query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
 type RedactFn = (text: string) => string;
 
 type StartupMemoryDeps = {
@@ -44,6 +51,8 @@ export type StartupMemoryServices = {
 export async function initializeStartupMemoryServices(args: {
   config: Config;
   onEpisodeWarn?: (err: unknown) => void;
+  /** Runs before every memory search (e.g. to index changed files). Errors are ignored. */
+  beforeSearch?: () => Promise<void>;
   deps?: StartupMemoryDeps;
 }): Promise<StartupMemoryServices> {
   const createEmbeddingProviderImpl = args.deps?.createEmbeddingProvider ?? createEmbeddingProvider;
@@ -53,11 +62,20 @@ export async function initializeStartupMemoryServices(args: {
   const createRedactorImpl = args.deps?.createRedactor ?? createRedactor;
   const createMemoryServerImpl = args.deps?.createMemoryServer ?? createMemoryServer;
 
-  const embedder = await createEmbeddingProviderImpl();
+  const embeddingSettings = args.config.memory.embedding;
+  // Production default: lazy + isolated worker process. An injected loader (tests) or isolate=false
+  // loads the model in this process instead.
+  const useIsolatedWorker =
+    embeddingSettings.lazyLoad && embeddingSettings.isolate === true && !args.deps?.createEmbeddingProvider;
+  const embedder = await createConfiguredEmbeddingProvider(embeddingSettings, {
+    create: useIsolatedWorker ? undefined : createEmbeddingProviderImpl,
+    onLoad: () => log.info("Embedding model loaded"),
+    onUnload: () => log.info("Embedding model unloaded (idle)"),
+  });
   const dbPath = path.join(args.config.security.dataDir, "vectors.db");
   const store = createVectorStoreImpl(dbPath, embedder.dimensions);
   const indexer = createIndexerImpl(store, embedder);
-  const searchMemory = createRobustMemorySearchImpl({
+  const baseSearchMemory = createRobustMemorySearchImpl({
     workspaceDir: args.config.security.workspace,
     extraPaths: args.config.memory.extraPaths,
     store,
@@ -71,6 +89,13 @@ export async function initializeStartupMemoryServices(args: {
       recencyHalfLifeDays: args.config.memory.search.recencyHalfLifeDays,
     },
   });
+  const beforeSearch = args.beforeSearch;
+  const searchMemory: MemorySearchFn = beforeSearch
+    ? async (query, maxResults, filters) => {
+        await beforeSearch().catch(() => undefined);
+        return baseSearchMemory(query, maxResults, filters);
+      }
+    : baseSearchMemory;
   const redact = createRedactorImpl(CONSERVATIVE_PATTERNS);
 
   let warningTriggered = false;

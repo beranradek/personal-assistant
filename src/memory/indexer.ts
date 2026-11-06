@@ -71,7 +71,11 @@ function splitOversizedChunk(
 }
 
 export interface Indexer {
-  syncFiles(filePaths: string[]): Promise<void>;
+  /**
+   * Index the given files. By default files tracked earlier but missing from `filePaths` are
+   * removed from the index; pass `{ prune: false }` when `filePaths` is only a subset.
+   */
+  syncFiles(filePaths: string[], options?: { prune?: boolean }): Promise<void>;
   markDirty(): void;
   isDirty(): boolean;
   syncIfDirty(filePaths: string[]): Promise<void>;
@@ -218,16 +222,19 @@ export function createIndexer(
   let aborted = false;
 
   return {
-    async syncFiles(filePaths: string[]): Promise<void> {
+    async syncFiles(filePaths: string[], options?: { prune?: boolean }): Promise<void> {
       const currentPathSet = new Set(filePaths);
 
-      // Find previously tracked files that are no longer in the current set
-      const trackedPaths = store.getTrackedFilePaths();
-      for (const trackedPath of trackedPaths) {
-        if (!currentPathSet.has(trackedPath)) {
-          // File was removed from sync list - clean up
-          store.deleteChunksForFile(trackedPath);
-          store.deleteFileHash(trackedPath);
+      // Find previously tracked files that are no longer in the current set. Skipped when the
+      // caller passes only a subset of the files (e.g. the sync before a search).
+      if (options?.prune !== false) {
+        const trackedPaths = store.getTrackedFilePaths();
+        for (const trackedPath of trackedPaths) {
+          if (!currentPathSet.has(trackedPath)) {
+            // File was removed from sync list - clean up
+            store.deleteChunksForFile(trackedPath);
+            store.deleteFileHash(trackedPath);
+          }
         }
       }
 
@@ -238,6 +245,21 @@ export function createIndexer(
         if (aborted) {
           log.info("Indexing aborted by shutdown");
           return;
+        }
+
+        // Cheap pre-check: same size and mtime as when it was last indexed means unchanged,
+        // so skip reading and hashing the file.
+        const knownMeta = store.getFileMeta(filePath);
+        if (knownMeta) {
+          const quickStat = await fs.stat(filePath).catch(() => null);
+          if (
+            quickStat &&
+            Math.floor(quickStat.mtimeMs) === knownMeta.mtime &&
+            quickStat.size === knownMeta.size
+          ) {
+            log.debug({ filePath }, "File size and mtime unchanged, skipping");
+            continue;
+          }
         }
 
         const file = await readTextFileSafely(filePath);
@@ -253,12 +275,11 @@ export function createIndexer(
         // Check if the file has changed since last sync
         const existingHash = store.getFileHash(filePath);
         if (existingHash === hash) {
+          // Content is the same (e.g. touched only): remember the new mtime so the next check is cheap.
+          store.setFileHash(filePath, hash, Math.floor(stat.mtimeMs), stat.size);
           log.debug({ filePath }, "File unchanged, skipping");
           continue;
         }
-
-        // Delete old chunks for this file
-        store.deleteChunksForFile(filePath);
 
         // Extract searchable text (JSONL audit logs get role+content extraction)
         const searchableText = preprocessContent(filePath, content);
@@ -267,15 +288,20 @@ export function createIndexer(
         const chunks = chunkText(searchableText, { tokens: 400, overlap: 80 });
 
         if (chunks.length === 0) {
-          // Empty file - just update the hash
+          // Empty file - drop old chunks and update the hash
+          store.deleteChunksForFile(filePath);
           store.setFileHash(filePath, hash, Math.floor(stat.mtimeMs), stat.size);
           log.debug({ filePath }, "Empty file, hash updated");
           continue;
         }
 
-        // Embed all chunks
+        // Embed all chunks BEFORE touching the store, so a failed embedding (e.g. the worker died)
+        // leaves the previous chunks of this file in place.
         const chunkTexts = chunks.map((c) => c.text);
         const embeddings = await embedder.embedBatch(chunkTexts);
+
+        // Replace the old chunks for this file
+        store.deleteChunksForFile(filePath);
 
         // Upsert each chunk to the store (skip chunks with empty embeddings)
         for (let i = 0; i < chunks.length; i++) {

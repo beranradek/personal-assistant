@@ -27,6 +27,8 @@ import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
 import { collectMemoryFiles } from "./memory/collect-files.js";
 import { createMemoryWatcher } from "./memory/watcher.js";
+import { createMemorySync, type MemorySync } from "./memory/sync.js";
+import { createLazyIntegApiSupervisor, type LazyIntegApiSupervisor } from "./integ-api/lazy-supervisor.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
 import { createBackend } from "./backends/factory.js";
 import { initializeStartupMemoryServices } from "./memory/startup-services.js";
@@ -81,8 +83,8 @@ type DaemonCoreRuntime = {
   store: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["store"];
   embedder: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["embedder"];
   indexer: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["indexer"];
-  memoryWatcher: ReturnType<typeof createMemoryWatcher>;
-  memorySyncTimer: ReturnType<typeof setInterval>;
+  memoryWatcher: ReturnType<typeof createMemoryWatcher> | null;
+  memorySyncTimer: ReturnType<typeof setInterval> | null;
   getCurrentSyncPromise: () => Promise<void> | null;
   stopMemorySync: () => void;
   warningTriggered: boolean;
@@ -110,69 +112,64 @@ async function createDaemonCoreFromConfig(args: {
   const createBackendImpl = args.deps?.createBackend ?? createBackend;
 
   let warningTriggered = false;
+  // Index changed memory files right before each search, so results are fresh without a
+  // frequent background re-index (which would keep waking the embedding model).
+  let memorySync: MemorySync | null = null;
   const { embedder, store, indexer, searchMemory, redact, memoryServer, episodeStore, listEpisodes, insertEpisode, searchEpisodesVector, fallbackTriggered, episodicSurfaceExposed } =
     await initializeStartupMemoryServicesImpl({
       config: args.config,
+      beforeSearch: () => memorySync?.syncIfStale() ?? Promise.resolve(),
       onEpisodeWarn: (err) => {
         warningTriggered = true;
         log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
       },
     });
 
-  const memoryFiles = collectMemoryFilesImpl(
-    args.config.security.workspace,
-    args.config.memory.extraPaths,
-    {
-      indexDailyLogs: args.config.memory.indexDailyLogs,
-      dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
-    },
-  );
-  indexer.syncFiles(memoryFiles).catch((err) => {
-    log.error({ err }, "Initial memory indexing failed (non-fatal)");
+  const syncConfig = args.config.memory.sync;
+  memorySync = createMemorySync({
+    indexer,
+    collectFiles: () =>
+      collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
+        indexDailyLogs: args.config.memory.indexDailyLogs,
+        dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
+      }),
+    // Daily logs change on every turn, so searches only check the knowledge files; the logs are
+    // picked up by the background interval sync.
+    collectSearchFiles: () =>
+      collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
+        indexDailyLogs: false,
+        dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
+      }),
+    minIntervalMs: Math.round(syncConfig.beforeSearchMinIntervalSeconds * 1000),
   });
+  const activeMemorySync = memorySync;
+  // Startup sync only embeds files that changed since the last run (size/mtime check), so it
+  // does not load the model when nothing changed.
+  activeMemorySync.sync("startup");
 
-  let syncInProgress = false;
-  let memorySyncStopped = false;
-  let currentSyncPromise: Promise<void> | null = null;
-  const getCurrentSyncPromise = () => currentSyncPromise;
+  const getCurrentSyncPromise = () => activeMemorySync.getCurrentSyncPromise();
+
+  // Optional immediate re-index on every change in MEMORY.md and memory/ (off by default).
+  const memoryWatcher = syncConfig.watch
+    ? createMemoryWatcherImpl(args.config.security.workspace, () => {
+        activeMemorySync.sync("watcher");
+      })
+    : null;
+
+  // Background catch-up for files that search does not touch (e.g. daily logs). 0 disables it.
+  const memorySyncTimer =
+    syncConfig.intervalMinutes > 0
+      ? setInterval(() => {
+          activeMemorySync.sync("periodic");
+        }, Math.round(syncConfig.intervalMinutes * 60_000))
+      : null;
+  memorySyncTimer?.unref();
+
   const stopMemorySync = () => {
-    memorySyncStopped = true;
-    clearInterval(memorySyncTimer);
-    memoryWatcher.close();
-    indexer.abort();
+    if (memorySyncTimer) clearInterval(memorySyncTimer);
+    memoryWatcher?.close();
+    activeMemorySync.stop();
   };
-  const syncMemoryFiles = async (reason: string) => {
-    if (memorySyncStopped) return;
-    if (syncInProgress) return;
-    syncInProgress = true;
-    const run = async () => {
-      try {
-        const files = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
-          indexDailyLogs: args.config.memory.indexDailyLogs,
-          dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
-        });
-        log.info({ fileCount: files.length, reason }, "Reindexing memory files");
-        await indexer.syncFiles(files);
-      } catch (err) {
-        log.error({ err, reason }, "Reindex failed");
-      } finally {
-        syncInProgress = false;
-        currentSyncPromise = null;
-      }
-    };
-    currentSyncPromise = run();
-    await currentSyncPromise;
-  };
-
-  const memoryWatcher = createMemoryWatcherImpl(args.config.security.workspace, () => {
-    syncMemoryFiles("watcher");
-  });
-
-  const MEMORY_RESYNC_INTERVAL_MS = 10 * 60_000;
-  const memorySyncTimer = setInterval(() => {
-    syncMemoryFiles("periodic");
-  }, MEMORY_RESYNC_INTERVAL_MS);
-  memorySyncTimer.unref();
 
   const memoryContent = await readMemoryFilesImpl(args.config.security.workspace, {
     includeHeartbeat: true,
@@ -387,21 +384,17 @@ export async function startDaemon(configDir: string): Promise<void> {
   // Shared shutdown flag (used by child process restart logic and shutdown handler)
   let shuttingDown = false;
 
-  // 2. Fork integ-api server as child process (if enabled)
+  // 2. integ-api server as a child process (if enabled). With lazyStart (default) the daemon owns
+  // the public port and starts the child on the first request, stopping it when idle.
   let integApiChild: ChildProcess | null = null;
+  let lazyIntegApi: LazyIntegApiSupervisor | null = null;
 
   if (config.integApi.enabled) {
     const cliEntry = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "cli.js");
-    let backoffMs = 1_000;
-    const MAX_BACKOFF_MS = 30_000;
-    let lastStartedAt = 0;
-    const UPTIME_RESET_MS = 60_000;
-
-    const spawnIntegApi = () => {
-      lastStartedAt = Date.now();
+    const forkIntegApi = (extraEnv: NodeJS.ProcessEnv = {}): ChildProcess => {
       const child = fork(cliEntry, ["--config", path.join(configDir, "settings.json"), "integapi", "serve"], {
         stdio: ["ignore", "pipe", "pipe", "ipc"],
-        env: { ...process.env },
+        env: { ...process.env, ...extraEnv },
       });
       child.stdout?.on("data", (data: Buffer) => {
         log.info({ source: "integ-api" }, data.toString().trimEnd());
@@ -409,23 +402,48 @@ export async function startDaemon(configDir: string): Promise<void> {
       child.stderr?.on("data", (data: Buffer) => {
         log.error({ source: "integ-api" }, data.toString().trimEnd());
       });
-      child.on("exit", (code, signal) => {
-        if (shuttingDown) return;
-        log.warn({ code, signal }, "integ-api child exited, restarting...");
-        // Reset backoff if it was up for long enough
-        if (Date.now() - lastStartedAt >= UPTIME_RESET_MS) {
-          backoffMs = 1_000;
-        }
-        setTimeout(() => {
-          integApiChild = spawnIntegApi();
-        }, backoffMs);
-        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
-      });
       return child;
     };
 
-    integApiChild = spawnIntegApi();
-    log.info({ port: config.integApi.port }, "integ-api child process forked");
+    if (config.integApi.lazyStart.enabled) {
+      lazyIntegApi = createLazyIntegApiSupervisor({
+        bind: config.integApi.bind,
+        port: config.integApi.port,
+        idleMs: Math.round(config.integApi.lazyStart.idleMinutes * 60_000),
+        startChild: (internalPort) => forkIntegApi({ PA_INTEG_API_PORT: String(internalPort) }),
+      });
+      await lazyIntegApi.start();
+      log.info(
+        { port: config.integApi.port, idleMinutes: config.integApi.lazyStart.idleMinutes },
+        "integ-api lazy listener started (child starts on first request)",
+      );
+    } else {
+      let backoffMs = 1_000;
+      const MAX_BACKOFF_MS = 30_000;
+      let lastStartedAt = 0;
+      const UPTIME_RESET_MS = 60_000;
+
+      const spawnIntegApi = () => {
+        lastStartedAt = Date.now();
+        const child = forkIntegApi();
+        child.on("exit", (code, signal) => {
+          if (shuttingDown) return;
+          log.warn({ code, signal }, "integ-api child exited, restarting...");
+          // Reset backoff if it was up for long enough
+          if (Date.now() - lastStartedAt >= UPTIME_RESET_MS) {
+            backoffMs = 1_000;
+          }
+          setTimeout(() => {
+            integApiChild = spawnIntegApi();
+          }, backoffMs);
+          backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+        });
+        return child;
+      };
+
+      integApiChild = spawnIntegApi();
+      log.info({ port: config.integApi.port }, "integ-api child process forked");
+    }
   }
 
   const {
@@ -662,6 +680,11 @@ export async function startDaemon(configDir: string): Promise<void> {
     // Close shared HTTP MCP server (Codex backend only)
     if (httpMcpServer) {
       await httpMcpServer.close();
+    }
+
+    // Stop the lazy integ-api listener (and its child, if running)
+    if (lazyIntegApi) {
+      await lazyIntegApi.stop().catch((err) => log.error({ err }, "Error stopping lazy integ-api"));
     }
 
     // Stop integ-api child process

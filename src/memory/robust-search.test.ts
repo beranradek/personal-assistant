@@ -19,6 +19,9 @@ function createEmptyStore(): VectorStore {
     getFileHash() {
       return null;
     },
+    getFileMeta() {
+      return null;
+    },
     setFileHash() {},
     getTrackedFilePaths() {
       return [];
@@ -79,6 +82,27 @@ describe("createRobustMemorySearch", () => {
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].path).toBe(notePath);
     expect(results[0].startLine).toBe(1);
+  });
+
+  it("uses the text fallback instead of failing when the embedding model cannot load", async () => {
+    const notePath = path.join(workspaceDir, "memory", "note.md");
+    fs.writeFileSync(notePath, "Zdroje dobře využitelného vápníku\n");
+    fs.writeFileSync(path.join(workspaceDir, "MEMORY.md"), "# Memory\n");
+    embedder.embed = async () => {
+      throw new Error("model download failed");
+    };
+
+    const search = createRobustMemorySearch({
+      workspaceDir,
+      extraPaths: [],
+      store,
+      embedder,
+      config: { vectorWeight: 0.7, keywordWeight: 0.3, minScore: 0.35, maxResults: 6 },
+    });
+
+    const results = await search("vapnik");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].path).toBe(notePath);
   });
 
   it("skips binary files passed via extraPaths during fallback search", async () => {

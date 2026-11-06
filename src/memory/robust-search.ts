@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { createLogger } from "../core/logger.js";
 import { hybridSearch, type HybridSearchConfig } from "./hybrid-search.js";
 import { collectMemoryFiles } from "./collect-files.js";
 import type { SearchResult } from "../core/types.js";
@@ -10,6 +11,8 @@ import {
   parseMemoryMetadata,
   type MemorySearchFilters,
 } from "./metadata.js";
+
+const log = createLogger("robust-search");
 
 function stripDiacritics(input: string): string {
   return input.normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -141,10 +144,17 @@ export function createRobustMemorySearch(deps: {
   ): Promise<SearchResult[]> => {
     const resultLimit = maxResults ?? deps.config.maxResults;
     const candidateLimit = hasFilters(filters) ? resultLimit * 8 : resultLimit;
-    const results = await hybridSearch(query, deps.store, deps.embedder, {
-      ...deps.config,
-      maxResults: candidateLimit,
-    });
+    // The embedding model loads on first use. If that fails (offline first download, missing file,
+    // dead worker) fall back to the plain-text search instead of failing the whole tool call.
+    let results: SearchResult[] = [];
+    try {
+      results = await hybridSearch(query, deps.store, deps.embedder, {
+        ...deps.config,
+        maxResults: candidateLimit,
+      });
+    } catch (err) {
+      log.warn({ err }, "Semantic memory search unavailable, using text fallback");
+    }
 
     const indexedResults = await filterIndexedResults(results, filters);
     if (indexedResults.length >= resultLimit || (indexedResults.length > 0 && results.length > 0 && !hasFilters(filters))) {

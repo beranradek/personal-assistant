@@ -2,7 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Config } from "../core/types.js";
 import type { EpisodeRecord } from "./episodes/types.js";
 
-vi.mock("./embeddings.js", () => ({
+vi.mock("./embeddings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./embeddings.js")>()),
   createEmbeddingProvider: vi.fn(),
 }));
 
@@ -66,6 +67,8 @@ function makeConfig(): Config {
         chunkOverlap: 80,
       },
       extraPaths: [],
+      embedding: { lazyLoad: false, idleUnloadMinutes: 10, dimensions: 768, model: "" },
+      sync: { intervalMinutes: 30, watch: false, beforeSearchMinIntervalSeconds: 30 },
     },
     mcpServers: {},
     codex: {
@@ -110,6 +113,47 @@ function makeBaseServices() {
 describe("initializeStartupMemoryServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("with lazyLoad does not load the model at startup and uses the configured dimensions", async () => {
+    const config = makeConfig();
+    config.memory.embedding = {
+      lazyLoad: true,
+      isolate: false,
+      idleUnloadMinutes: 10,
+      dimensions: 768,
+      model: "hf:custom/model.gguf",
+    };
+    const { embedder, store, indexer, searchMemory, redact } = makeBaseServices();
+
+    vi.mocked(createEmbeddingProvider).mockResolvedValue(embedder as any);
+    vi.mocked(createVectorStore).mockReturnValue(store as any);
+    vi.mocked(createIndexer).mockReturnValue(indexer as any);
+    vi.mocked(createRobustMemorySearch).mockReturnValue(searchMemory);
+    vi.mocked(createRedactor).mockReturnValue(redact);
+    vi.mocked(initializeEpisodeMemoryRuntime).mockReturnValue({
+      episodeStore: undefined,
+      memoryServerDeps: {},
+      assistantAvailable: true,
+      fallbackTriggered: false,
+    } as any);
+
+    const result = await initializeStartupMemoryServices({
+      config,
+      deps: { createMemoryServer: vi.fn(() => ({})) as any },
+    });
+
+    expect(createEmbeddingProvider).not.toHaveBeenCalled();
+    expect(createVectorStore).toHaveBeenCalledWith("/tmp/data/vectors.db", 768);
+    expect(result.embedder.dimensions).toBe(768);
+
+    await result.embedder.embed("hello");
+    expect(createEmbeddingProvider).toHaveBeenCalledOnce();
+    expect(createEmbeddingProvider).toHaveBeenCalledWith({ modelUri: "hf:custom/model.gguf" });
+    expect(embedder.embed).toHaveBeenCalledWith("hello");
+
+    await result.embedder.close();
+    expect(embedder.close).toHaveBeenCalledOnce();
   });
 
   it("builds shared memory startup services and forwards episodic runtime outputs", async () => {

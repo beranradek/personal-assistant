@@ -100,7 +100,14 @@ async function runServe(config: Config): Promise<void> {
 
   const { loadStoredProfiles } = await import("./auth/loader.js");
 
-  const server = createIntegApiServer(config.integApi);
+  // The daemon's lazy supervisor owns the public port and starts this process on an internal
+  // loopback port (PA_INTEG_API_PORT). Standalone runs keep using the configured port.
+  const portOverride = Number(process.env["PA_INTEG_API_PORT"]);
+  const listenConfig =
+    Number.isInteger(portOverride) && portOverride > 0
+      ? { ...config.integApi, bind: "127.0.0.1", port: portOverride }
+      : config.integApi;
+  const server = createIntegApiServer(listenConfig);
   const credStore = createCredentialStore(config.security.dataDir);
   const authMgr = createAuthManager(credStore);
 
@@ -125,7 +132,7 @@ async function runServe(config: Config): Promise<void> {
   }
 
   await server.start();
-  console.log(`integ-api server listening on ${config.integApi.bind}:${config.integApi.port}`);
+  console.log(`integ-api server listening on ${listenConfig.bind}:${listenConfig.port}`);
 
   // Graceful shutdown
   const shutdown = async () => {

@@ -204,6 +204,49 @@ describe("config", () => {
       expect(config.reflection.episodeSignals.maxRecentEpisodes).toBe(25);
       expect(config.reflection.episodeSignals.maxTopItems).toBe(DEFAULTS.reflection.episodeSignals.maxTopItems);
     });
+
+    it("defaults to a lazy isolated embedding model, 30 min background sync, sync before search and lazy integ-api", () => {
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), "{}");
+
+      const config = loadConfig(tmpDir);
+
+      expect(config.memory.embedding).toEqual({
+        lazyLoad: true,
+        isolate: true,
+        idleUnloadMinutes: 10,
+        dimensions: 768,
+        model: "",
+      });
+      expect(config.memory.sync).toEqual({
+        intervalMinutes: 30,
+        watch: false,
+        beforeSearchMinIntervalSeconds: 0,
+      });
+      expect(config.integApi.lazyStart).toEqual({ enabled: true, idleMinutes: 15 });
+    });
+
+    it("merges memory.sync, memory.embedding and integApi.lazyStart overrides over defaults", () => {
+      const partial = {
+        memory: { sync: { intervalMinutes: 0, watch: true }, embedding: { idleUnloadMinutes: 2 } },
+        integApi: { lazyStart: { enabled: false } },
+      };
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(partial));
+
+      const config = loadConfig(tmpDir);
+
+      expect(config.memory.sync.intervalMinutes).toBe(0);
+      expect(config.memory.sync.watch).toBe(true);
+      expect(config.memory.sync.beforeSearchMinIntervalSeconds).toBe(0);
+      expect(config.memory.embedding.idleUnloadMinutes).toBe(2);
+      expect(config.memory.embedding.lazyLoad).toBe(true);
+      expect(config.integApi.lazyStart.enabled).toBe(false);
+      expect(config.integApi.lazyStart.idleMinutes).toBe(15);
+    });
+
+    it("rejects invalid memory.sync values", () => {
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify({ memory: { sync: { intervalMinutes: -5 } } }));
+      expect(() => loadConfig(tmpDir)).toThrow();
+    });
   });
 
   describe("resolveUserPath", () => {

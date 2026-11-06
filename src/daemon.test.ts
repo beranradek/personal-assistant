@@ -22,7 +22,8 @@ vi.mock("./core/agent-runner.js", () => ({
   runAgentTurn: vi.fn(),
 }));
 
-vi.mock("./memory/embeddings.js", () => ({
+vi.mock("./memory/embeddings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./memory/embeddings.js")>()),
   createEmbeddingProvider: vi.fn(),
 }));
 
@@ -232,6 +233,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
         chunkOverlap: 80,
       },
       extraPaths: [],
+      embedding: { lazyLoad: false, idleUnloadMinutes: 10, dimensions: 768, model: "" },
+      sync: { intervalMinutes: 30, watch: false, beforeSearchMinIntervalSeconds: 30 },
     },
     mcpServers: {},
     codex: {

@@ -33,7 +33,48 @@ Files live under `~/.personal-assistant/workspace/`:
 | `memory/` | Recursive OKF-lite Markdown knowledge graph (created and maintained by the agent) |
 | `.claude/skills/` | Reusable workflow descriptions (skills) |
 
-`MEMORY.md`, every Markdown file recursively below `memory/`, and configured `extraPaths` are chunked and indexed into `vectors.db` on startup and whenever the file watcher detects changes. Other root-level workspace Markdown files are not implicitly indexed.
+`MEMORY.md`, every Markdown file recursively below `memory/`, and configured `extraPaths` are chunked and indexed into `vectors.db`.
+Only files whose size or mtime changed are read and re-embedded (an edit that keeps both the size and the millisecond mtime, for
+example `cp -p` of a same-size file, is not noticed until the file changes again). Indexing runs on startup, right before each
+`memory_search` (knowledge files only, a cheap size/mtime check) and in the background every 30 minutes (also covers daily logs, which
+change on every turn). If the embedding model cannot load, `memory_search` falls back to plain text search. Other root-level
+workspace Markdown files are not implicitly indexed.
+
+#### Embedding model memory use
+
+The local embedding model (EmbeddingGemma-300M, about 600-800 MiB RSS while loaded) is loaded on first use and stopped after 10 idle
+minutes. By default it runs in a separate worker process (`src/memory/embedding-worker.ts`). Unloading a model inside the main
+process left about 800 MiB allocated (measured), while stopping the worker process returns all of it.
+
+```jsonc
+{
+  "memory": {
+    "embedding": {
+      "lazyLoad": true,        // load on first use instead of at startup
+      "isolate": true,         // run the model in a worker process that exits when idle
+      "idleUnloadMinutes": 10, // 0 = keep the model loaded once it is loaded
+      "dimensions": 768,       // vector size of the model; changing the model needs a new vectors.db
+      "model": ""              // node-llama-cpp URI or file path, "" = EmbeddingGemma-300M Q8_0
+    },
+    "sync": {
+      "intervalMinutes": 30,                // background re-index of changed files, 0 = off
+      "watch": false,                       // true = also re-index (debounced) on every change in MEMORY.md and memory/
+      "beforeSearchMinIntervalSeconds": 0   // minimum gap between "index changed files before search" checks (0 = every search)
+    }
+  },
+  "integApi": {
+    "lazyStart": { "enabled": true, "idleMinutes": 15 } // start the integ-api child on the first request
+  }
+}
+```
+
+With `integApi.lazyStart` the daemon listens on `integApi.port` and forwards each TCP connection to the integ-api child, which it
+starts on the first connection and stops after `idleMinutes` without open connections. Clients (MCP proxy, `pa integapi ...`)
+are unchanged. The child listens on an internal loopback port given by `PA_INTEG_API_PORT`.
+
+Notes: the first request after an idle period waits for the child to start (a few seconds). The child sees every caller as
+127.0.0.1, so its per-IP rate limit is shared by all clients. Do not run `pa integapi serve` by hand while the daemon runs (the
+daemon owns the public port); set `integApi.lazyStart.enabled` to `false` to get the previous always-running child.
 
 ### OKF-lite knowledge graph
 

@@ -189,9 +189,10 @@ async function runClaudeCompanion(configDir: string, rawArgs: string[]): Promise
 async function startMcpServer(configDir: string): Promise<void> {
   // Dynamic imports to avoid loading heavy deps at CLI parse time
   const [
-    { createEmbeddingProvider },
+    { createConfiguredEmbeddingProvider },
     { createVectorStore },
     { createIndexer },
+    { createMemorySync },
     { createRobustMemorySearch },
     { lintMemoryKnowledgeBase },
     { createCronToolManager },
@@ -204,6 +205,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     import("./memory/embeddings.js"),
     import("./memory/vector-store.js"),
     import("./memory/indexer.js"),
+    import("./memory/sync.js"),
     import("./memory/robust-search.js"),
     import("./memory/linter.js"),
     import("./cron/tool.js"),
@@ -217,25 +219,32 @@ async function startMcpServer(configDir: string): Promise<void> {
   const config = loadConfig(configDir);
   await ensureWorkspace(config);
 
-  // Initialize memory system
-  const embedder = await createEmbeddingProvider();
+  // Initialize memory system. The model loads on the first search and is released when idle,
+  // so a short-lived stdio server does not hold it in memory.
+  const embedder = await createConfiguredEmbeddingProvider(config.memory.embedding);
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
-  const memoryFiles = collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
-    indexDailyLogs: config.memory.indexDailyLogs,
-    dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
-  });
-  // Run file sync in the background. When pa runs as a daemon, the daemon's
-  // own indexer already handles periodic reindexing, so we must not block
-  // MCP server startup on a potentially long sync (would exceed codex's
-  // startup_timeout_sec and cause every turn to fail).
-  indexer.syncFiles(memoryFiles).catch(() => {
-    // Ignore errors — search will work with whatever is already indexed.
+  // Changed files are indexed right before a search (never at startup: a long sync would exceed
+  // codex's startup_timeout_sec and cause every turn to fail). The wait is capped.
+  const memorySync = createMemorySync({
+    indexer,
+    collectFiles: () =>
+      collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
+        indexDailyLogs: config.memory.indexDailyLogs,
+        dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
+      }),
+    // Daily logs change on every turn; the daemon's background sync indexes them.
+    collectSearchFiles: () =>
+      collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
+        indexDailyLogs: false,
+        dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
+      }),
+    minIntervalMs: Math.round(config.memory.sync.beforeSearchMinIntervalSeconds * 1000),
   });
 
-  const searchMemory = createRobustMemorySearch({
+  const baseSearchMemory = createRobustMemorySearch({
     workspaceDir: config.security.workspace,
     extraPaths: config.memory.extraPaths,
     store,
@@ -249,6 +258,10 @@ async function startMcpServer(configDir: string): Promise<void> {
       recencyHalfLifeDays: config.memory.search.recencyHalfLifeDays,
     },
   });
+  const searchMemory: typeof baseSearchMemory = async (query, maxResults, filters) => {
+    await memorySync.syncIfStale();
+    return baseSearchMemory(query, maxResults, filters);
+  };
 
   // Create cron manager
   const cronStorePath = path.join(config.security.dataDir, "cron-jobs.json");

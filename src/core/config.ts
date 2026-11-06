@@ -103,6 +103,8 @@ export const DEFAULTS: Config = {
     extraPaths: [],
     indexDailyLogs: true,
     dailyLogRetentionDays: 90,
+    embedding: { lazyLoad: true, isolate: true, idleUnloadMinutes: 10, dimensions: 768, model: "" },
+    sync: { intervalMinutes: 30, watch: false, beforeSearchMinIntervalSeconds: 0 },
   },
   reflection: {
     enabled: true,
@@ -122,6 +124,7 @@ export const DEFAULTS: Config = {
     port: 19100,
     bind: "127.0.0.1",
     inboundRateLimit: 100,
+    lazyStart: { enabled: true, idleMinutes: 15 },
     contentFilter: { redactPatterns: [], maxBodyLength: 50000 },
     services: {
       gmail: { enabled: false, scopes: [], userEmails: [] },

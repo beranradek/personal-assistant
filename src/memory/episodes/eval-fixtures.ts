@@ -236,6 +236,7 @@ function createEvalStartupDeps() {
       searchKeyword: () => [],
       deleteChunksForFile: () => {},
       getFileHash: () => null,
+      getFileMeta: () => null,
       setFileHash: () => {},
       getTrackedFilePaths: () => [],
       deleteFileHash: () => {},

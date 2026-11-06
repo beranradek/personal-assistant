@@ -37,6 +37,8 @@ export interface VectorStore {
   searchKeyword(query: string, limit: number): KeywordSearchResult[];
   deleteChunksForFile(filePath: string): void;
   getFileHash(filePath: string): string | null;
+  /** Size and mtime (ms, floored) recorded when the file was last indexed, or null if not tracked. */
+  getFileMeta(filePath: string): { mtime: number; size: number } | null;
   setFileHash(
     filePath: string,
     hash: string,
@@ -247,6 +249,10 @@ export function createVectorStore(
     `SELECT hash FROM files WHERE path = ?`,
   );
 
+  const getFileMetaStmt = db.prepare(
+    `SELECT mtime, size FROM files WHERE path = ?`,
+  );
+
   const upsertFileHashStmt = db.prepare(`
     INSERT INTO files (path, hash, mtime, size)
     VALUES (@path, @hash, @mtime, @size)
@@ -399,6 +405,13 @@ export function createVectorStore(
         | { hash: string }
         | undefined;
       return row?.hash ?? null;
+    },
+
+    getFileMeta(filePath: string): { mtime: number; size: number } | null {
+      const row = getFileMetaStmt.get(filePath) as
+        | { mtime: number; size: number }
+        | undefined;
+      return row ? { mtime: row.mtime, size: row.size } : null;
     },
 
     setFileHash(

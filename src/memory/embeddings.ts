@@ -1,4 +1,4 @@
-import { getLlama, resolveModelFile } from "node-llama-cpp";
+import { createProcessEmbeddingProvider, isEmbeddingWorkerBroken } from "./embedding-process.js";
 
 // ─── Public interface ────────────────────────────────────────────────
 
@@ -35,9 +35,14 @@ const DEFAULT_MODEL_URI =
  */
 export async function createEmbeddingProvider(options?: {
   modelPath?: string;
+  /** node-llama-cpp model URI (`hf:...`) or file path. Empty/undefined = built-in default. */
+  modelUri?: string;
 }): Promise<EmbeddingProvider> {
+  // Imported on demand: the heavy native library is only loaded in the process that runs the model.
+  const { getLlama, resolveModelFile } = await import("node-llama-cpp");
   const modelPath =
-    options?.modelPath ?? (await resolveModelFile(DEFAULT_MODEL_URI));
+    options?.modelPath ??
+    (await resolveModelFile(options?.modelUri?.trim() || DEFAULT_MODEL_URI));
 
   const llama = await getLlama();
   const model = await llama.loadModel({
@@ -74,6 +79,164 @@ export async function createEmbeddingProvider(options?: {
       await model.dispose();
     },
   };
+}
+
+// ─── Lazy provider (load on first use, unload when idle) ─────────────
+
+export interface LazyEmbeddingProvider extends EmbeddingProvider {
+  /** True while the underlying model is loaded in memory. */
+  isLoaded(): boolean;
+}
+
+/**
+ * Wrap an expensive embedding provider so the model is loaded only when embedding work is
+ * requested and released again after `idleUnloadMs` without work.
+ *
+ * `dimensions` must be known up front (the vector table is created before any embedding runs).
+ * When the model loads, its real dimension is checked against it.
+ */
+export function createLazyEmbeddingProvider(options: {
+  dimensions: number;
+  create: () => Promise<EmbeddingProvider>;
+  /** Unload after this idle time in ms. 0/undefined = never unload once loaded. */
+  idleUnloadMs?: number;
+  onLoad?: () => void;
+  onUnload?: () => void;
+}): LazyEmbeddingProvider {
+  const idleUnloadMs = options.idleUnloadMs ?? 0;
+  let inner: EmbeddingProvider | null = null;
+  let loading: Promise<EmbeddingProvider> | null = null;
+  let inflight = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  const clearIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  const unload = async (): Promise<void> => {
+    if (!inner || inflight > 0) return;
+    const provider = inner;
+    inner = null;
+    await provider.close();
+    options.onUnload?.();
+  };
+
+  const scheduleIdleUnload = () => {
+    clearIdleTimer();
+    if (idleUnloadMs <= 0 || !inner || inflight > 0) return;
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      unload().catch(() => undefined);
+    }, idleUnloadMs);
+    idleTimer.unref();
+  };
+
+  const acquire = async (): Promise<EmbeddingProvider> => {
+    if (closed) throw new Error("Embedding provider is closed");
+    if (inner) return inner;
+    if (!loading) {
+      loading = options
+        .create()
+        .then(async (provider) => {
+          if (provider.dimensions !== options.dimensions) {
+            await provider.close();
+            throw new Error(
+              `Embedding model has ${provider.dimensions} dimensions but memory.embedding.dimensions is ` +
+                `${options.dimensions}. Fix the setting (and rebuild vectors.db when changing the model).`,
+            );
+          }
+          if (closed) {
+            await provider.close();
+            throw new Error("Embedding provider is closed");
+          }
+          inner = provider;
+          options.onLoad?.();
+          return provider;
+        })
+        .finally(() => {
+          loading = null;
+        });
+    }
+    return loading;
+  };
+
+  const run = async <T>(work: (provider: EmbeddingProvider) => Promise<T>): Promise<T> => {
+    inflight++;
+    clearIdleTimer();
+    let provider: EmbeddingProvider | null = null;
+    try {
+      provider = await acquire();
+      return await work(provider);
+    } catch (err) {
+      // A dead or stuck worker cannot recover: drop it so the next call starts a fresh one.
+      if (provider && inner === provider && isEmbeddingWorkerBroken(err)) {
+        inner = null;
+        await provider.close().catch(() => undefined);
+        options.onUnload?.();
+      }
+      throw err;
+    } finally {
+      inflight--;
+      scheduleIdleUnload();
+    }
+  };
+
+  return {
+    dimensions: options.dimensions,
+    isLoaded: () => inner !== null,
+    embed: (text) => run((p) => p.embed(text)),
+    embedBatch: (texts) => run((p) => p.embedBatch(texts)),
+    async close(): Promise<void> {
+      if (closed) return;
+      closed = true;
+      clearIdleTimer();
+      if (loading) await loading.catch(() => undefined);
+      if (inner) {
+        const provider = inner;
+        inner = null;
+        await provider.close();
+        options.onUnload?.();
+      }
+    },
+  };
+}
+
+/**
+ * Build the embedding provider described by `memory.embedding` settings: lazy (load on first use,
+ * unload when idle) or eager (load now). `create` is injectable for tests.
+ */
+export async function createConfiguredEmbeddingProvider(
+  settings: {
+    lazyLoad: boolean;
+    isolate?: boolean;
+    idleUnloadMinutes: number;
+    dimensions: number;
+    model: string;
+  },
+  options?: {
+    /** Overrides the model loader (tests). Takes precedence over `isolate`. */
+    create?: typeof createEmbeddingProvider;
+    onLoad?: () => void;
+    onUnload?: () => void;
+  },
+): Promise<EmbeddingProvider> {
+  // Lazy + isolate: the model runs in a worker process that exits when idle, which returns all of
+  // its memory to the OS. In-process dispose leaves most of it allocated.
+  const create =
+    options?.create ?? (settings.lazyLoad && settings.isolate ? createProcessEmbeddingProvider : createEmbeddingProvider);
+  const createFromSettings = () => create({ modelUri: settings.model });
+  if (!settings.lazyLoad) return createFromSettings();
+  return createLazyEmbeddingProvider({
+    dimensions: settings.dimensions,
+    create: createFromSettings,
+    idleUnloadMs: Math.round(settings.idleUnloadMinutes * 60_000),
+    onLoad: options?.onLoad,
+    onUnload: options?.onUnload,
+  });
 }
 
 // ─── Mock provider (deterministic, for unit tests) ───────────────────

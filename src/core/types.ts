@@ -178,11 +178,55 @@ export const SearchConfigSchema = z.object({
   recencyHalfLifeDays: z.number().int().positive().default(7),
 });
 
+export const EmbeddingConfigSchema = z.object({
+  /**
+   * Load the embedding model on first use (search or indexing of changed files) instead of at
+   * daemon startup. Saves the model's RAM while the daemon is idle. Default: true.
+   */
+  lazyLoad: z.boolean().default(true),
+  /**
+   * Unload the model after this many minutes without embedding work (0 = keep it loaded once
+   * loaded). Only applies when lazyLoad is true. Default: 10.
+   */
+  idleUnloadMinutes: z.number().nonnegative().default(10),
+  /**
+   * Run the model in a separate worker process that exits when idle. Freeing the model inside the
+   * main process leaves most of its memory allocated (measured: ~800 MiB stayed after unload),
+   * a worker process returns all of it. Only applies when lazyLoad is true. Default: true.
+   */
+  isolate: z.boolean().default(true),
+  /**
+   * Embedding vector size of the configured model. Must be known without loading the model
+   * (the vector table is created at startup). 768 = EmbeddingGemma-300M. Changing it for a
+   * different model requires rebuilding vectors.db.
+   */
+  dimensions: z.number().int().positive().default(768),
+  /** Model URI or file path for node-llama-cpp. Empty = built-in default (EmbeddingGemma-300M Q8_0). */
+  model: z.string().default(""),
+});
+
+export const MemorySyncConfigSchema = z.object({
+  /**
+   * Background re-index period in minutes (0 = disabled). Only changed files (by size and mtime)
+   * are re-embedded. Search also syncs changed files right before it runs. Default: 30.
+   */
+  intervalMinutes: z.number().nonnegative().default(30),
+  /** Re-index (debounced) on every change in MEMORY.md and memory/. Wakes the model often. Default: false. */
+  watch: z.boolean().default(false),
+  /**
+   * Minimum seconds between "sync changed files before search" checks. The check only compares
+   * size and mtime of the knowledge files, so 0 (check on every search) is cheap. Default: 0.
+   */
+  beforeSearchMinIntervalSeconds: z.number().nonnegative().default(0),
+});
+
 export const MemoryConfigSchema = z.object({
   search: SearchConfigSchema,
   extraPaths: z.array(z.string()),
   indexDailyLogs: z.boolean().default(true),
   dailyLogRetentionDays: z.number().int().positive().default(90),
+  embedding: EmbeddingConfigSchema.default(() => EmbeddingConfigSchema.parse({})),
+  sync: MemorySyncConfigSchema.default(() => MemorySyncConfigSchema.parse({})),
 });
 
 export const McpServerConfigSchema = z.record(z.string(), z.unknown());
@@ -244,6 +288,16 @@ export const IntegApiConfigSchema = z.object({
   port: z.number().int().positive().default(19100),
   bind: z.string().default("127.0.0.1"),
   inboundRateLimit: z.number().int().positive().default(100),
+  /**
+   * Start the integ-api child process on the first request and stop it after it is idle,
+   * instead of keeping it running all the time. The daemon listens on `port` and forwards
+   * connections to the child on an internal port, so clients do not change. Default: true.
+   */
+  lazyStart: z.object({
+    enabled: z.boolean().default(true),
+    /** Stop the child after this many minutes without open connections. Default: 15. */
+    idleMinutes: z.number().positive().default(15),
+  }).default(() => ({ enabled: true, idleMinutes: 15 })),
   contentFilter: IntegApiContentFilterConfigSchema.default(() =>
     IntegApiContentFilterConfigSchema.parse({}),
   ),

@@ -280,6 +280,82 @@ describe("Indexer", () => {
       expect(store.getFileHash(file)).not.toBeNull();
     });
 
+    it("skips unchanged files by size and mtime without embedding or reading them again", async () => {
+      const file = createTempFile("quick.md", "# Title\nsome stable text");
+      await indexer.syncFiles([file]);
+
+      let embedCalls = 0;
+      const originalEmbedBatch = embedder.embedBatch.bind(embedder);
+      embedder.embedBatch = async (texts: string[]) => {
+        embedCalls++;
+        return originalEmbedBatch(texts);
+      };
+
+      const meta = store.getFileMeta(file);
+      expect(meta).not.toBeNull();
+      expect(meta?.size).toBe(fs.statSync(file).size);
+
+      await indexer.syncFiles([file]);
+      expect(embedCalls).toBe(0);
+    });
+
+    it("re-embeds a file when its size or mtime changed and the content differs", async () => {
+      const file = createTempFile("changing.md", "# Title\nfirst version");
+      await indexer.syncFiles([file]);
+      const hashBefore = store.getFileHash(file);
+
+      fs.writeFileSync(file, "# Title\nsecond, longer version of the text", "utf-8");
+      await indexer.syncFiles([file]);
+
+      expect(store.getFileHash(file)).not.toBe(hashBefore);
+      expect(store.searchKeyword("longer", 5).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("does not embed when only the mtime changed (same content) and remembers the new mtime", async () => {
+      const file = createTempFile("touched.md", "# Title\nsame content");
+      await indexer.syncFiles([file]);
+
+      let embedCalls = 0;
+      const originalEmbedBatch = embedder.embedBatch.bind(embedder);
+      embedder.embedBatch = async (texts: string[]) => {
+        embedCalls++;
+        return originalEmbedBatch(texts);
+      };
+
+      const future = new Date(Date.now() + 60_000);
+      fs.utimesSync(file, future, future);
+      await indexer.syncFiles([file]);
+
+      expect(embedCalls).toBe(0);
+      expect(store.getFileMeta(file)?.mtime).toBe(Math.floor(fs.statSync(file).mtimeMs));
+    });
+
+    it("keeps tracked files that are missing from the list when prune is false", async () => {
+      const kept = createTempFile("kept.md", "# Kept\nstays indexed");
+      const other = createTempFile("other.md", "# Other\nanother file");
+      await indexer.syncFiles([kept, other]);
+
+      await indexer.syncFiles([other], { prune: false });
+      expect(store.getFileHash(kept)).not.toBeNull();
+
+      await indexer.syncFiles([other]);
+      expect(store.getFileHash(kept)).toBeNull();
+    });
+
+    it("keeps the previous chunks of a file when embedding the new content fails", async () => {
+      const file = createTempFile("fragile.md", "# Title\noriginal searchable text");
+      await indexer.syncFiles([file]);
+      expect(store.searchKeyword("original", 5).length).toBeGreaterThanOrEqual(1);
+
+      embedder.embedBatch = async () => {
+        throw new Error("embedding worker exited");
+      };
+      fs.writeFileSync(file, "# Title\nreplacement text that is a bit longer", "utf-8");
+
+      await expect(indexer.syncFiles([file])).rejects.toThrow("embedding worker exited");
+      expect(store.searchKeyword("original", 5).length).toBeGreaterThanOrEqual(1);
+    });
+
     it("only re-indexes files whose hash changed since last sync", async () => {
       const file = createTempFile("stable.ts", "const a = 1;");
 
