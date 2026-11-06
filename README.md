@@ -160,6 +160,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
   - Gmail unreads: categorized unread email overview with multi-account support
 - Slack integration (unread messages feed): `docs/settings/slack_integration.md`
   - Copy and use src/templates/skills/integrations/SKILL.md so the assistant knows how to use these services 
+- Tmux agent sessions (optional, run project coding agents from the assistant): `docs/settings/tmux_agents.md`
 - Telegram adapter: `docs/settings/telegram_configuration.md`
 - Slack adapter (bidirectional chat): `docs/settings/slack_configuration.md`
 - GitHub Webhook adapter: `docs/settings/github_webhook_configuration.md`

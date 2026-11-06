@@ -57,6 +57,7 @@ For Telegram and Slack adapters, the queue uses `streamAgentTurn()` to stream in
 | `heartbeat/` | Periodic scheduler (node-cron within active hours), system event buffer, prompt generation |
 | `cron/` | User-created scheduled jobs: CRUD tool, node-cron timer, JSON file persistence |
 | `exec/` | Background process spawning with in-memory registry and completion events |
+| `tmux-agents/` | Optional `agent_session_*` tools: project coding agents in tmux sessions (service, registry, runner, screen detectors, tool table). Off by default |
 | `tools/` | MCP servers: `memory-server` (memory_search tool) and `assistant-server` (cron_list, cron_create, cron_update, cron_remove, exec, process tools) |
 | `templates/` | Workspace seed files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md) with Czech variants in `cs/` |
 

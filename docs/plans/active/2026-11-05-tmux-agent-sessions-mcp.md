@@ -1,7 +1,7 @@
 # Tmux Agent Sessions MCP - Plan
 
 **Date:** 2026-11-05
-**Status:** Decisions closed (OD1-OD3), implementation in progress
+**Status:** Implemented 2026-11-06 (Tasks 1-10). Operator steps (below) are still open; move to `completed/` after them
 **Owner:** Radek Beran
 
 ## Problem
@@ -787,6 +787,38 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
 - Streaming session output into Telegram or Slack.
 - Bearer token for the HTTP MCP server (follow-up; Task 8 adds only the Host/Origin check).
 - Making the daemon the only registry writer (stdio process calls it over HTTP); possible later simplification of the lock (D14).
+
+## Implementation notes (2026-11-06)
+
+Verified on a real tmux 3.6 (integration test `src/tmux-agents/integration.tmux.test.ts`, fake agent):
+
+- Id targets work: `-t $N` for `has-session`, `kill-session`, `display-message`; `-t %N` for `send-keys`, `capture-pane`, `paste-buffer`.
+  `new-session -P -F "#{session_id} #{pane_id} #{session_created}"` prints the three fields. The agent command is passed as several
+  argv elements after `--` (the `--` is new). `load-buffer -` reads stdin. `has-session -t '=<name>'` parses (attach command).
+- **New finding: tmux eats a trailing `;` of an argv element** (it is a command separator; `abc;` becomes `abc`, `def\;` becomes
+  `def;`). The runner refuses any argument that ends with `;`. `send` sends the trailing semicolons of a single line as
+  `send-keys -H 3b`; multi-line text goes through the paste buffer, where the text is in stdin and unaffected.
+- After `kill-server` the socket file can stay behind; connecting then reports `no server running` (or `error connecting` when the
+  file is gone). Both are mapped to `noServer`.
+
+Deviations from the plan text:
+
+- Extra files for DRY: `errors.ts` (error class and codes), `schemas.ts` (Zod shapes shared by tools and service), `types.ts`
+  (service interface, results, clock), `startup.ts` (shared start logic of daemon and `pa mcp-server`: log, tmux allowlist WARN,
+  reconcile, reaper), `fake-tmux.test-helper.ts` (in-memory tmux for unit tests; excluded from the build in `tsconfig.json`).
+- `createTmuxAgentService(config, options)` reads the data directory from `config.security.dataDir` (no `dataDir` option). The
+  service has `close()` (clears the reaper timer, kills nothing) instead of `stop()`, to avoid confusion with `agent_session_stop`.
+- `agent_session_stop` with `force` kills at once and reports method `forced` (a third value next to `graceful` and
+  `kill-after-grace`): a busy agent would not read `/exit`.
+- `validateText` also rejects a lone CR (CRLF is normalized to LF) and allows a slash command of the kind only as a single line.
+- The reaper is started by the daemon only (`startTmuxAgentService(..., { reaper: true })`); `pa mcp-server` passes `reaper: false`.
+- `cli.test.ts` was not extended: `startMcpServer` is private and untested; the "only when enabled" rule lives in
+  `startTmuxAgentService` and is covered by `startup.test.ts`.
+- The daemon test now removes the `unhandledRejection` listeners that each `startDaemon` call adds (MaxListeners warning).
+- `kind` in the `start` input is a free lowercase id validated against the enabled kinds (not a Zod enum), so that a test-only
+  kind can be injected; with an injected kind table all its kinds are enabled.
+- Fixtures `claude-permission.txt` and `claude-trust.txt` are still guesses (operator step 6). The fake agent uses the
+  alternate screen so that a redraw leaves no stale lines in the tmux history.
 
 ## Review log (2026-11-05)
 

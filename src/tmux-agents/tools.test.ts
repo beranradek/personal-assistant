@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
 import { z } from "zod";
 import { TmuxAgentError } from "./errors.js";
 import { TMUX_TOOLS, findTmuxTool, toMcpDefinition } from "./tools.js";
@@ -115,6 +116,39 @@ describe("TMUX_TOOLS", () => {
         expect(payload.error.code).toBe("INVALID_INPUT");
       }
       expect(rejecting).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("skill and docs", () => {
+    const read = (relative: string) => fs.readFileSync(new URL(relative, import.meta.url), "utf-8");
+    const files: Record<string, string> = {
+      "SKILL.md": read("../templates/skills/tmux-agents/SKILL.md"),
+      "agent-tools.md": read("../../docs/agent-tools.md"),
+      "tmux_agents.md": read("../../docs/settings/tmux_agents.md"),
+    };
+
+    it.each(Object.keys(files))("%s mentions only tools that exist", (name) => {
+      const mentioned = new Set(files[name]!.match(/agent_session_\w+/g) ?? []);
+      expect(mentioned.size).toBeGreaterThan(0);
+      for (const tool of mentioned) expect(NAMES).toContain(tool);
+    });
+
+    it("the tools table in agent-tools.md lists all nine tools", () => {
+      for (const name of NAMES) expect(files["agent-tools.md"]).toContain(`\`${name}\``);
+    });
+
+    it("the skill has the frontmatter fields", () => {
+      expect(files["SKILL.md"]).toMatch(/^---\nname: "tmux-agents"\ndescription: ".+"\nversion: "\d{4}-\d{2}-\d{2}"\n---\n/);
+    });
+
+    it("the new text has no line over 140 characters and no em dash", () => {
+      const toolsSection = files["agent-tools.md"]!.split("## Tmux Agent Tools (optional)")[1]!.split("\n---")[0]!;
+      for (const text of [files["SKILL.md"]!, files["tmux_agents.md"]!, toolsSection]) {
+        for (const line of text.split("\n")) {
+          expect(line.length).toBeLessThanOrEqual(140);
+          expect(line).not.toContain("—");
+        }
+      }
     });
   });
 

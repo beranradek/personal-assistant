@@ -34,6 +34,24 @@ matches the former action instead: `list` → `cron_list`, `add` → `cron_creat
 `cron_update`, and `remove` → `cron_remove`. This lets MCP hosts recognize `cron_list` as a
 read-only operation while keeping mutations explicit.
 
+## Tmux Agent Tools (optional)
+
+Disabled by default. With `tmuxAgents.enabled=true` the assistant can run project coding agents in tmux sessions that this
+server owns. Claude backend: in-process server `tmuxagents` (`mcp__tmuxagents__agent_session_*`). Claude Code companion and Codex:
+`mcp__pa__agent_session_*` through the HTTP MCP server. Setup and security notes: `docs/settings/tmux_agents.md`.
+
+| Tool | Description |
+|------|-------------|
+| `agent_session_start` | Start an agent (kind `claude`) in an allowed project directory. Bypass mode needs settings and confirmation. |
+| `agent_session_list` | List sessions started by this server. Read-only. |
+| `agent_session_status` | Alive, and busy, idle, waiting_permission, waiting_trust or unknown (heuristic with confidence). Read-only. |
+| `agent_session_read` | Last screen lines, redacted, marked as untrusted data. Read-only. |
+| `agent_session_send` | Type a message and press Enter, optionally wait until idle. Text may not start with `!`, `#`, `/`. |
+| `agent_session_interrupt` | Press Ctrl-C in the session. |
+| `agent_session_stop` | Graceful `/exit`, kill after a grace period. `force` needs `userConfirmed`. Destructive. |
+| `agent_session_recover` | Forced restart in the same directory, kind and mode; work is lost. Needs `userConfirmed`. Destructive. |
+| `agent_session_attach` | Return the shell command to attach to the session yourself (never run by the tool). Read-only. |
+
 ---
 
 ## Claude Code Backend
