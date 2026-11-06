@@ -29,18 +29,21 @@ import { claudeCompanionSettingsPath, installClaudeCodeTemplates } from "./claud
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude-security-hook", "claude"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude-security-hook", "claude", "agents-view"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
+/** Options whose value must not be mistaken for a command (for example `--assistant claude`). */
+const VALUE_OPTIONS = new Set(["--config", "--assistant", "--session", "--watch"]);
+
 /**
- * Parse the subcommand from argv, skipping --config and its value.
+ * Parse the subcommand from argv, skipping option values (`--config <path>`, `--assistant <cmd>`, ...).
  * Returns the command string or null if not found/invalid.
  */
 export function parseCommand(argv: string[]): Command | null {
   const args = argv.slice(2); // skip node and script path
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--config") {
-      i++; // skip the next arg (the path)
+    if (VALUE_OPTIONS.has(args[i]!)) {
+      i++; // skip the next arg (the option value)
       continue;
     }
     if (VALID_COMMANDS.includes(args[i] as Command)) {
@@ -61,6 +64,7 @@ Commands:
   claude-context        Print safe SessionStart context for Claude Code
   claude-security-hook  Apply PA's PreToolUse security policy for Claude Code
   claude                Start Claude Code in workspace-restricted companion mode
+  agents-view           tmux view: assistant left, agent sessions right [--assistant <cmd>] [--session <name>] [--no-attach]
   integapi <sub>        Integ-API commands (serve, list, health, gmail, calendar, auth)
   reflect               Run daily reflection for yesterday (or --date YYYY-MM-DD)
   episode-eval          Run the built-in episodic memory evaluation fixture corpus [--json] [--output <path>]
@@ -453,6 +457,24 @@ async function main(): Promise<void> {
     case "claude":
       await runClaudeCompanion(configDir, args);
       break;
+    case "agents-view": {
+      const { runAgentsView } = await import("./tmux-agents/view-cli.js");
+      const viewArgs: string[] = [];
+      let configPath: string | undefined;
+      let afterCommand = false;
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === "--config") { configPath = args[++i]; continue; }
+        if (!afterCommand && args[i] === "agents-view") { afterCommand = true; continue; }
+        viewArgs.push(args[i]!);
+      }
+      try {
+        process.exitCode = await runAgentsView(configDir, viewArgs, configPath);
+      } catch (err) {
+        console.error(`agents-view: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
+      }
+      break;
+    }
     case "reflect": {
       const targetDate = parseReflectDate(process.argv);
       await runReflect(configDir, targetDate);

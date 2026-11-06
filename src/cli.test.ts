@@ -63,6 +63,14 @@ describe("cli", () => {
     it('parses "claude" companion subcommand', () => {
       expect(parseCommand(["node", "cli.js", "claude"])).toBe("claude");
     });
+
+    it('parses "agents-view" and does not take option values for commands', () => {
+      expect(parseCommand(["node", "cli.js", "agents-view"])).toBe("agents-view");
+      expect(parseCommand(["node", "cli.js", "agents-view", "--assistant", "claude"])).toBe("agents-view");
+      expect(parseCommand(["node", "cli.js", "--assistant", "claude", "agents-view"])).toBe("agents-view");
+      expect(parseCommand(["node", "cli.js", "--session", "daemon", "--config", "/x/settings.json", "agents-view"])).toBe("agents-view");
+      expect(parseCommand(["node", "cli.js", "--assistant", "claude"])).toBeNull();
+    });
   });
 
   it("builds a restricted Claude Code invocation with explicit companion config", () => {

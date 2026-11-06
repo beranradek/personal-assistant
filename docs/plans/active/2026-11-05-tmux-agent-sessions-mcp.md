@@ -936,6 +936,34 @@ box, footer) changes between captures, so no overlap was found. Changed (`extrac
 - Known limit: the hint and footer patterns are those of Claude Code 2.1.319; an unknown hint line directly above the box stays in the
   output (harmless).
 
+## Task 11: `pa agents-view` (2026-11-06)
+
+Radek wants one simple command that shows the main assistant and the agents it starts on one screen. Implemented in
+`src/tmux-agents/view.ts` (runner for the user's tmux, layout, controller, pure `planView`), `view-cli.ts` (command) and wired in
+`src/cli.ts` (`agents-view`; `parseCommand` skips the values of `--assistant`, `--session`, `--watch`).
+
+- Layout in the USER's tmux (not the agents' socket): window `amy` with `main-vertical` (assistant left, `main-pane-width 50%`, the
+  mirror panes stacked on the right), hidden window `amy-ctl` with the controller. Mirror pane = `env -u TMUX tmux -u -S <agents socket>
+  attach-session -r -t =<session>` (read-only). Panes are tagged with the pane options `@pa_main` and `@pa_agent`; the pane border
+  format shows the session name.
+- Controller (poll 2 s): `list-sessions` on the agents server (only names that match the session pattern) and `list-panes` of the view
+  window; adds a pane per session without one, re-applies the layout when the pane count changes. Ended sessions: the nested attach
+  exits and the pane closes (`remain-on-exit off`). A mirror pane closed by hand is not re-added while the session lives (in-memory
+  `dismissed` set, cleared when the session ends). It ends when the window or the assistant pane is gone (then it kills the view
+  window) or after 5 failing ticks in a row.
+- Own runner `createUserTmux` with a fixed allowlist (`has-session, new-session, new-window, split-window, select-layout, select-pane,
+  select-window, list-panes, list-windows, list-sessions, set-option, attach-session, switch-client, display-message, kill-window`),
+  `execFile`, no shell, no `;`-ended arguments. Only the `--assistant` string is run by tmux's shell, and it is typed by the user.
+  Reading the agents' sessions reuses `createTmuxRunner` through `createAgentSessionLister`, which can only run `list-sessions`.
+- Real tmux 3.6 confirmed: `main-pane-width 50%` is accepted, `pane-border-format` with `#{?@pa_agent,...}` works, nested read-only attach
+  mirrors the agent screen, typed keys do not reach the agent, and the layout fills the right side again when a pane goes away.
+- Deviations from the first sketch: the window names are `amy` and `amy-ctl` (the control window shares the user's session, so a bare
+  `ctl` would be ambiguous); the registry is not consulted (the agents' server only holds sessions that this feature created, and a name
+  filter is enough); `select-pane -T` is not used (it would steal the focus); the border format shows the name instead.
+- Tests: `view.test.ts` (fake tmux: validation, runner allowlist, `planView`, open/idempotence, controller add/remove/dismiss/no server/
+  failures/abort), `view-cli.test.ts`, `view.integration.tmux.test.ts` (two private real tmux servers and the fake agent: panes appear,
+  stack, disappear, are not re-added after a manual close, the controller ends with the assistant pane; nothing is left afterwards).
+
 ## Review log (2026-11-05)
 
 An independent adversarial review found these problems; each is applied as listed.

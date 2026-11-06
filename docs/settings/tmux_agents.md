@@ -98,6 +98,32 @@ pa-tmux attach -r -t pa-myproj-1a2b # read-only
 
 `agent_session_attach` returns the same commands with the real socket path. Detach with `Ctrl-b d`.
 
+## Agents view: the assistant and its agents on one screen
+
+```bash
+pa agents-view                                  # assistant (default command: pa claude) on the left, agents on the right
+pa agents-view --assistant "pa terminal"        # another assistant command
+pa agents-view --session work                   # use (or create) your tmux session `work` instead of `amy`
+pa agents-view --no-attach                      # create the layout only
+```
+
+One command opens a window of YOUR OWN tmux (not the agents' dedicated server): the assistant runs in the left half and every agent
+session that the assistant starts appears as a read-only pane (`attach -r`) stacked on the right. Panes appear when a session starts
+and disappear when it ends (the nested attach exits). Each pane border shows the session name.
+
+- Outside tmux it creates (or reuses) the session `amy` and attaches. Inside tmux without `--session` it adds a window `amy` to the
+  current session and selects it. Running the command again reuses the existing view (idempotent).
+- A hidden window `amy-ctl` runs the controller (`pa agents-view --watch <window>`, polls every 2 s). It ends when the view window or
+  the assistant pane is gone; closing the assistant pane closes the view window. The agent sessions are never touched.
+- Close a mirror pane by hand (`Ctrl-b x`) and it stays closed while that session lives. The session keeps running.
+- `--assistant` is a shell command line for your tmux (like `tmux new-window "<command>"`); it is typed by you, never by the assistant.
+- The mirror panes are nested tmux clients: press the prefix (`Ctrl-b`) twice to send it to the inner tmux (for example
+  `Ctrl-b Ctrl-b d` detaches the mirror). The inner status line is visible at the bottom of each mirror pane.
+- To type into an agent, use the `pa-tmux attach -t <session>` alias from the section above in another terminal.
+- The view needs `tmuxAgents.enabled: true` (otherwise it opens but no agent panes appear) and `tmux` 3.x.
+- It is a user command, not an assistant tool: the assistant cannot run it, and it uses its own tmux runner for your tmux (fixed
+  subcommand allowlist, no shell, except the `--assistant` command that tmux itself runs).
+
 ## Claude Code companion
 
 The tools reach Claude Code as `mcp__pa__agent_session_*` through the localhost HTTP MCP server. Enable it first:
