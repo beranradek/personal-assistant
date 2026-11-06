@@ -141,6 +141,9 @@ async function runServe(config: Config): Promise<void> {
   };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
+  // Forked by the daemon with an IPC channel: if the daemon dies (even SIGKILL) the channel closes
+  // and this child must not stay behind holding its port.
+  process.once("disconnect", shutdown);
 }
 
 // ---------------------------------------------------------------------------

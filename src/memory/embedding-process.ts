@@ -66,13 +66,16 @@ export async function createProcessEmbeddingProvider(options?: {
 
   const terminate = (): Promise<void> =>
     new Promise<void>((resolve) => {
-      if (exited) return resolve();
+      // A worker that failed to spawn has no pid and may never emit "exit".
+      if (exited || child.pid === undefined) return resolve();
       const killTimer = setTimeout(() => child.kill("SIGKILL"), killTimeoutMs);
       killTimer.unref();
-      child.once("exit", () => {
+      const done = () => {
         clearTimeout(killTimer);
         resolve();
-      });
+      };
+      child.once("exit", done);
+      child.once("error", done);
       child.kill("SIGTERM");
     });
 
@@ -135,6 +138,7 @@ export async function createProcessEmbeddingProvider(options?: {
 
   return {
     dimensions,
+    isAlive: () => !closed && !exited && broken === null,
     async embed(text: string): Promise<number[]> {
       const response = await request({ op: "embed", text }, requestTimeoutMs);
       if (!response.vector) throw new Error("embedding worker returned no vector");

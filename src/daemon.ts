@@ -27,7 +27,7 @@ import { ensureWorkspace } from "./core/workspace.js";
 import { readMemoryFiles } from "./memory/files.js";
 import { collectMemoryFiles } from "./memory/collect-files.js";
 import { createMemoryWatcher } from "./memory/watcher.js";
-import { createMemorySync, type MemorySync } from "./memory/sync.js";
+import { createConfiguredMemorySync, type MemorySync } from "./memory/sync.js";
 import { createLazyIntegApiSupervisor, type LazyIntegApiSupervisor } from "./integ-api/lazy-supervisor.js";
 import { buildAgentOptions } from "./core/agent-runner.js";
 import { createBackend } from "./backends/factory.js";
@@ -83,8 +83,6 @@ type DaemonCoreRuntime = {
   store: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["store"];
   embedder: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["embedder"];
   indexer: Awaited<ReturnType<typeof initializeStartupMemoryServices>>["indexer"];
-  memoryWatcher: ReturnType<typeof createMemoryWatcher> | null;
-  memorySyncTimer: ReturnType<typeof setInterval> | null;
   getCurrentSyncPromise: () => Promise<void> | null;
   stopMemorySync: () => void;
   warningTriggered: boolean;
@@ -126,23 +124,12 @@ async function createDaemonCoreFromConfig(args: {
     });
 
   const syncConfig = args.config.memory.sync;
-  memorySync = createMemorySync({
+  const activeMemorySync = createConfiguredMemorySync({
+    config: args.config,
     indexer,
-    collectFiles: () =>
-      collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
-        indexDailyLogs: args.config.memory.indexDailyLogs,
-        dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
-      }),
-    // Daily logs change on every turn, so searches only check the knowledge files; the logs are
-    // picked up by the background interval sync.
-    collectSearchFiles: () =>
-      collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths, {
-        indexDailyLogs: false,
-        dailyLogRetentionDays: args.config.memory.dailyLogRetentionDays,
-      }),
-    minIntervalMs: Math.round(syncConfig.beforeSearchMinIntervalSeconds * 1000),
+    collectFiles: collectMemoryFilesImpl,
   });
-  const activeMemorySync = memorySync;
+  memorySync = activeMemorySync;
   // Startup sync only embeds files that changed since the last run (size/mtime check), so it
   // does not load the model when nothing changed.
   activeMemorySync.sync("startup");
@@ -291,8 +278,6 @@ async function createDaemonCoreFromConfig(args: {
     store,
     embedder,
     indexer,
-    memoryWatcher,
-    memorySyncTimer,
     getCurrentSyncPromise,
     stopMemorySync,
     warningTriggered,
@@ -412,11 +397,17 @@ export async function startDaemon(configDir: string): Promise<void> {
         idleMs: Math.round(config.integApi.lazyStart.idleMinutes * 60_000),
         startChild: (internalPort) => forkIntegApi({ PA_INTEG_API_PORT: String(internalPort) }),
       });
-      await lazyIntegApi.start();
-      log.info(
-        { port: config.integApi.port, idleMinutes: config.integApi.lazyStart.idleMinutes },
-        "integ-api lazy listener started (child starts on first request)",
-      );
+      try {
+        await lazyIntegApi.start();
+        log.info(
+          { port: config.integApi.port, idleMinutes: config.integApi.lazyStart.idleMinutes },
+          "integ-api lazy listener started (child starts on first request)",
+        );
+      } catch (err) {
+        // e.g. EADDRINUSE because an old process still holds the port: the daemon itself keeps running.
+        log.error({ err, port: config.integApi.port }, "integ-api listener could not start; integrations unavailable");
+        lazyIntegApi = null;
+      }
     } else {
       let backoffMs = 1_000;
       const MAX_BACKOFF_MS = 30_000;
@@ -454,8 +445,6 @@ export async function startDaemon(configDir: string): Promise<void> {
     router,
     cronManager,
     episodeStore,
-    memoryWatcher,
-    memorySyncTimer,
     getCurrentSyncPromise,
     stopMemorySync,
     backend,

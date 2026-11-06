@@ -330,6 +330,58 @@ describe("Indexer", () => {
       expect(store.getFileMeta(file)?.mtime).toBe(Math.floor(fs.statSync(file).mtimeMs));
     });
 
+    function longMarkdown(paragraphs: number): string {
+      // ~1500 chars per paragraph, so each paragraph ends up in its own chunk
+      return Array.from({ length: paragraphs }, (_, i) => `## Part ${i}\n${`word${i} `.repeat(250)}\n`).join("\n");
+    }
+
+    it("embeds a large file in slices of at most 8 chunks per request", async () => {
+      const file = createTempFile("large.md", longMarkdown(20));
+      const sliceSizes: number[] = [];
+      const originalEmbedBatch = embedder.embedBatch.bind(embedder);
+      embedder.embedBatch = async (texts: string[]) => {
+        sliceSizes.push(texts.length);
+        return originalEmbedBatch(texts);
+      };
+
+      await indexer.syncFiles([file]);
+
+      expect(sliceSizes.length).toBeGreaterThan(1);
+      expect(Math.max(...sliceSizes)).toBeLessThanOrEqual(8);
+      expect(store.getFileHash(file)).not.toBeNull();
+    });
+
+    it("skips a single chunk the model rejects and indexes the rest of the file", async () => {
+      const file = createTempFile("one-bad-chunk.md", longMarkdown(6));
+      const originalEmbedBatch = embedder.embedBatch.bind(embedder);
+      embedder.embedBatch = async (texts: string[]) => {
+        if (texts.some((t) => t.includes("word3 "))) throw new Error("input is longer than the context");
+        return originalEmbedBatch(texts);
+      };
+
+      await indexer.syncFiles([file]);
+
+      expect(store.getFileHash(file)).not.toBeNull();
+      expect(store.searchKeyword("word1", 5).length).toBeGreaterThanOrEqual(1);
+      expect(store.searchKeyword("word3", 5)).toHaveLength(0);
+    });
+
+    it("stops between slices when aborted and leaves the file unindexed", async () => {
+      const file = createTempFile("aborted.md", longMarkdown(20));
+      const originalEmbedBatch = embedder.embedBatch.bind(embedder);
+      let calls = 0;
+      embedder.embedBatch = async (texts: string[]) => {
+        calls++;
+        indexer.abort();
+        return originalEmbedBatch(texts);
+      };
+
+      await indexer.syncFiles([file]);
+
+      expect(calls).toBe(1);
+      expect(store.getFileHash(file)).toBeNull();
+    });
+
     it("keeps tracked files that are missing from the list when prune is false", async () => {
       const kept = createTempFile("kept.md", "# Kept\nstays indexed");
       const other = createTempFile("other.md", "# Other\nanother file");

@@ -72,6 +72,9 @@ With `integApi.lazyStart` the daemon listens on `integApi.port` and forwards eac
 starts on the first connection and stops after `idleMinutes` without open connections. Clients (MCP proxy, `pa integapi ...`)
 are unchanged. The child listens on an internal loopback port given by `PA_INTEG_API_PORT`.
 
+`pa mcp-server` (stdio) uses the same settings, including `memory.embedding.model`, but releases its model worker after at most 2 idle
+minutes and exits when its stdin closes.
+
 Notes: the first request after an idle period waits for the child to start (a few seconds). The child sees every caller as
 127.0.0.1, so its per-IP rate limit is shared by all clients. Do not run `pa integapi serve` by hand while the daemon runs (the
 daemon owns the public port); set `integApi.lazyStart.enabled` to `false` to get the previous always-running child.

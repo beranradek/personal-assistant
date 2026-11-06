@@ -1,4 +1,6 @@
 import { createLogger } from "../core/logger.js";
+import type { Config } from "../core/types.js";
+import { collectMemoryFiles } from "./collect-files.js";
 import type { Indexer } from "./indexer.js";
 
 const log = createLogger("memory-sync");
@@ -16,6 +18,32 @@ export interface MemorySync {
   getCurrentSyncPromise(): Promise<void> | null;
   /** Refuse new runs and abort the one in progress. */
   stop(): void;
+}
+
+/**
+ * Memory sync for a running assistant process, set up from `settings.json`: a full file set for
+ * startup/background runs, and the knowledge files only (no daily logs, which change on every turn)
+ * right before a search. Shared by the daemon, terminal mode and `pa mcp-server`.
+ */
+export function createConfiguredMemorySync(args: {
+  config: Config;
+  indexer: Pick<Indexer, "syncFiles" | "abort">;
+  /** Injectable for tests. */
+  collectFiles?: typeof collectMemoryFiles;
+}): MemorySync {
+  const { config } = args;
+  const collect = args.collectFiles ?? collectMemoryFiles;
+  const filesWith = (indexDailyLogs: boolean) => () =>
+    collect(config.security.workspace, config.memory.extraPaths, {
+      indexDailyLogs,
+      dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
+    });
+  return createMemorySync({
+    indexer: args.indexer,
+    collectFiles: filesWith(config.memory.indexDailyLogs),
+    collectSearchFiles: filesWith(false),
+    minIntervalMs: Math.round(config.memory.sync.beforeSearchMinIntervalSeconds * 1000),
+  });
 }
 
 export function createMemorySync(args: {

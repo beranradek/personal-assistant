@@ -62,13 +62,8 @@ export async function initializeStartupMemoryServices(args: {
   const createRedactorImpl = args.deps?.createRedactor ?? createRedactor;
   const createMemoryServerImpl = args.deps?.createMemoryServer ?? createMemoryServer;
 
-  const embeddingSettings = args.config.memory.embedding;
-  // Production default: lazy + isolated worker process. An injected loader (tests) or isolate=false
-  // loads the model in this process instead.
-  const useIsolatedWorker =
-    embeddingSettings.lazyLoad && embeddingSettings.isolate === true && !args.deps?.createEmbeddingProvider;
-  const embedder = await createConfiguredEmbeddingProvider(embeddingSettings, {
-    create: useIsolatedWorker ? undefined : createEmbeddingProviderImpl,
+  const embedder = await createConfiguredEmbeddingProvider(args.config.memory.embedding, {
+    create: createEmbeddingProviderImpl,
     onLoad: () => log.info("Embedding model loaded"),
     onUnload: () => log.info("Embedding model unloaded (idle)"),
   });
@@ -122,8 +117,9 @@ export async function initializeStartupMemoryServices(args: {
             startLine: 0,
             endLine: 0,
           });
-        } catch {
+        } catch (err) {
           // Non-fatal: keyword search still works without the vector
+          log.warn({ err, episodeId: episode.id }, "Episode vector could not be stored");
         }
       }
     : undefined;

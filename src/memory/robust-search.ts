@@ -14,6 +14,9 @@ import {
 
 const log = createLogger("robust-search");
 
+/** Longest wait for the semantic (embedding) part of a search before the text fallback is used. */
+const SEMANTIC_SEARCH_TIMEOUT_MS = 30_000;
+
 function stripDiacritics(input: string): string {
   return input.normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
@@ -136,6 +139,8 @@ export function createRobustMemorySearch(deps: {
   store: VectorStore;
   embedder: EmbeddingProvider;
   config: HybridSearchConfig;
+  /** Override of the semantic-search timeout (tests). */
+  semanticTimeoutMs?: number;
 }) {
   return async (
     query: string,
@@ -146,14 +151,24 @@ export function createRobustMemorySearch(deps: {
     const candidateLimit = hasFilters(filters) ? resultLimit * 8 : resultLimit;
     // The embedding model loads on first use. If that fails (offline first download, missing file,
     // dead worker) fall back to the plain-text search instead of failing the whole tool call.
+    // A model that is still loading (first download) must not block the tool call for minutes either.
     let results: SearchResult[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      results = await hybridSearch(query, deps.store, deps.embedder, {
-        ...deps.config,
-        maxResults: candidateLimit,
-      });
+      results = await Promise.race([
+        hybridSearch(query, deps.store, deps.embedder, { ...deps.config, maxResults: candidateLimit }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`semantic search did not finish within ${SEMANTIC_SEARCH_TIMEOUT_MS} ms`)),
+            deps.semanticTimeoutMs ?? SEMANTIC_SEARCH_TIMEOUT_MS,
+          );
+          timer.unref();
+        }),
+      ]);
     } catch (err) {
       log.warn({ err }, "Semantic memory search unavailable, using text fallback");
+    } finally {
+      if (timer) clearTimeout(timer);
     }
 
     const indexedResults = await filterIndexedResults(results, filters);

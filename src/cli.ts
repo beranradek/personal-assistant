@@ -17,7 +17,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { resolveConfigDir, loadConfig, DEFAULTS } from "./core/config.js";
-import { collectMemoryFiles } from "./memory/collect-files.js";
 import { ensureWorkspace } from "./core/workspace.js";
 import { createTerminalSession, runTerminalRepl } from "./terminal.js";
 import { startDaemon } from "./daemon.js";
@@ -192,7 +191,7 @@ async function startMcpServer(configDir: string): Promise<void> {
     { createConfiguredEmbeddingProvider },
     { createVectorStore },
     { createIndexer },
-    { createMemorySync },
+    { createConfiguredMemorySync },
     { createRobustMemorySearch },
     { lintMemoryKnowledgeBase },
     { createCronToolManager },
@@ -221,28 +220,20 @@ async function startMcpServer(configDir: string): Promise<void> {
 
   // Initialize memory system. The model loads on the first search and is released when idle,
   // so a short-lived stdio server does not hold it in memory.
-  const embedder = await createConfiguredEmbeddingProvider(config.memory.embedding);
+  // Such a server is short-lived and may run next to the daemon's own model worker, so it releases
+  // its worker after 2 idle minutes at most (0 = keep, as configured).
+  const { idleUnloadMinutes } = config.memory.embedding;
+  const embedder = await createConfiguredEmbeddingProvider({
+    ...config.memory.embedding,
+    idleUnloadMinutes: idleUnloadMinutes > 0 ? Math.min(idleUnloadMinutes, 2) : 0,
+  });
   const dbPath = path.join(config.security.dataDir, "vectors.db");
   const store = createVectorStore(dbPath, embedder.dimensions);
   const indexer = createIndexer(store, embedder);
 
   // Changed files are indexed right before a search (never at startup: a long sync would exceed
   // codex's startup_timeout_sec and cause every turn to fail). The wait is capped.
-  const memorySync = createMemorySync({
-    indexer,
-    collectFiles: () =>
-      collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
-        indexDailyLogs: config.memory.indexDailyLogs,
-        dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
-      }),
-    // Daily logs change on every turn; the daemon's background sync indexes them.
-    collectSearchFiles: () =>
-      collectMemoryFiles(config.security.workspace, config.memory.extraPaths, {
-        indexDailyLogs: false,
-        dailyLogRetentionDays: config.memory.dailyLogRetentionDays,
-      }),
-    minIntervalMs: Math.round(config.memory.sync.beforeSearchMinIntervalSeconds * 1000),
-  });
+  const memorySync = createConfiguredMemorySync({ config, indexer });
 
   const baseSearchMemory = createRobustMemorySearch({
     workspaceDir: config.security.workspace,
@@ -304,6 +295,8 @@ async function startMcpServer(configDir: string): Promise<void> {
 
   process.once("SIGTERM", cleanup);
   process.once("SIGINT", cleanup);
+  // The MCP client closed our stdin (it exited or finished its turn): release the model worker and exit.
+  process.stdin.once("end", () => void cleanup());
 
   await runStdioServer(server);
 }

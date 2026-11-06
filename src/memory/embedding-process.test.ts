@@ -8,6 +8,7 @@ type Request = { id: number; op: "init" | "embed" | "embedBatch"; text?: string;
 
 /** A scriptable stand-in for the worker child process. */
 class FakeWorker extends EventEmitter {
+  pid = 4242;
   killed: NodeJS.Signals[] = [];
   requests: Request[] = [];
   /** Return a response for a request, or undefined to stay silent. */
@@ -102,7 +103,44 @@ describe("createProcessEmbeddingProvider", () => {
   });
 });
 
+describe("createProcessEmbeddingProvider spawn failures", () => {
+  it("does not hang when the worker cannot be spawned (no pid, no exit event)", async () => {
+    const worker = new FakeWorker();
+    worker.pid = undefined as unknown as number;
+    worker.respond = () => undefined;
+    const creating = createProcessEmbeddingProvider({ forkWorker: () => worker.asChild(), initTimeoutMs: 100 });
+    queueMicrotask(() => worker.emit("error", new Error("spawn ENOENT")));
+    await expect(creating).rejects.toThrow();
+  });
+
+  it("reports isAlive() false once the worker exited", async () => {
+    const worker = new FakeWorker();
+    const provider = await createProcessEmbeddingProvider({ forkWorker: () => worker.asChild() });
+    expect(provider.isAlive?.()).toBe(true);
+    worker.emit("exit", 1, null);
+    expect(provider.isAlive?.()).toBe(false);
+  });
+});
+
 describe("lazy provider with an isolated worker", () => {
+  it("replaces a worker that died while idle before the next call", async () => {
+    const workers: FakeWorker[] = [];
+    const lazy = createLazyEmbeddingProvider({
+      dimensions: 3,
+      create: () => {
+        const worker = new FakeWorker();
+        workers.push(worker);
+        return createProcessEmbeddingProvider({ forkWorker: () => worker.asChild() });
+      },
+    });
+    await lazy.embed("a");
+    workers[0]!.emit("exit", 137, null); // killed (e.g. OOM) while idle
+
+    await expect(lazy.embed("b")).resolves.toEqual([1, 0, 0]);
+    expect(workers).toHaveLength(2);
+    await lazy.close();
+  });
+
   it("starts a fresh worker after the previous one died", async () => {
     const workers: FakeWorker[] = [];
     const lazy = createLazyEmbeddingProvider({

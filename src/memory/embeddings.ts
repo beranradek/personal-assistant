@@ -11,6 +11,8 @@ export interface EmbeddingProvider {
   embedBatch(texts: string[]): Promise<number[][]>;
   dimensions: number;
   close(): Promise<void>;
+  /** False when the provider can no longer work (e.g. its worker process died while idle). */
+  isAlive?(): boolean;
 }
 
 // ─── L2 normalisation helper ─────────────────────────────────────────
@@ -137,6 +139,13 @@ export function createLazyEmbeddingProvider(options: {
 
   const acquire = async (): Promise<EmbeddingProvider> => {
     if (closed) throw new Error("Embedding provider is closed");
+    if (inner && inner.isAlive?.() === false) {
+      // The worker died while idle: replace it now instead of failing the next call.
+      const dead = inner;
+      inner = null;
+      await dead.close().catch(() => undefined);
+      options.onUnload?.();
+    }
     if (inner) return inner;
     if (!loading) {
       loading = options
@@ -212,14 +221,16 @@ export function createLazyEmbeddingProvider(options: {
 export async function createConfiguredEmbeddingProvider(
   settings: {
     lazyLoad: boolean;
-    isolate?: boolean;
+    isolate: boolean;
     idleUnloadMinutes: number;
     dimensions: number;
     model: string;
   },
   options?: {
-    /** Overrides the model loader (tests). Takes precedence over `isolate`. */
+    /** Loads the model inside this process (used when not lazy or not isolated). Injectable for tests. */
     create?: typeof createEmbeddingProvider;
+    /** Starts the isolated worker (used when lazy and isolated). Injectable for tests. */
+    createIsolated?: typeof createProcessEmbeddingProvider;
     onLoad?: () => void;
     onUnload?: () => void;
   },
@@ -227,7 +238,9 @@ export async function createConfiguredEmbeddingProvider(
   // Lazy + isolate: the model runs in a worker process that exits when idle, which returns all of
   // its memory to the OS. In-process dispose leaves most of it allocated.
   const create =
-    options?.create ?? (settings.lazyLoad && settings.isolate ? createProcessEmbeddingProvider : createEmbeddingProvider);
+    settings.lazyLoad && settings.isolate
+      ? (options?.createIsolated ?? createProcessEmbeddingProvider)
+      : (options?.create ?? createEmbeddingProvider);
   const createFromSettings = () => create({ modelUri: settings.model });
   if (!settings.lazyLoad) return createFromSettings();
   return createLazyEmbeddingProvider({

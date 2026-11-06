@@ -3,10 +3,14 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { createLogger } from "../core/logger.js";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { isEmbeddingWorkerBroken } from "./embedding-process.js";
 import type { VectorStore } from "./vector-store.js";
 import { readTextFileSafely } from "./text-file.js";
 
 const log = createLogger("indexer");
+
+/** Chunks embedded per request to the embedding provider (see `embedInSlices`). */
+const EMBED_SLICE_SIZE = 8;
 
 // ─── Public interfaces ──────────────────────────────────────────────
 
@@ -221,6 +225,41 @@ export function createIndexer(
   let dirty = false;
   let aborted = false;
 
+  /**
+   * Embed texts in small slices: one slow request per slice (not per file) keeps worker timeouts
+   * bounded, lets search queries interleave and lets shutdown abort between slices. A chunk the
+   * model rejects on its own (e.g. longer than its context) is skipped with a warning; if every
+   * chunk of a slice fails the failure is systemic and is rethrown. Returns null when aborted.
+   */
+  async function embedInSlices(filePath: string, texts: string[]): Promise<number[][] | null> {
+    const vectors: number[][] = [];
+    for (let start = 0; start < texts.length; start += EMBED_SLICE_SIZE) {
+      if (aborted) return null;
+      const slice = texts.slice(start, start + EMBED_SLICE_SIZE);
+      try {
+        vectors.push(...(await embedder.embedBatch(slice)));
+        continue;
+      } catch (err) {
+        if (isEmbeddingWorkerBroken(err)) throw err;
+        const recovered: number[][] = [];
+        let failures = 0;
+        for (const [offset, text] of slice.entries()) {
+          try {
+            recovered.push(...(await embedder.embedBatch([text])));
+          } catch (chunkErr) {
+            if (isEmbeddingWorkerBroken(chunkErr)) throw chunkErr;
+            failures++;
+            log.warn({ filePath, chunkIndex: start + offset, err: chunkErr }, "Chunk could not be embedded, skipping");
+            recovered.push([]);
+          }
+        }
+        if (failures === slice.length) throw err;
+        vectors.push(...recovered);
+      }
+    }
+    return vectors;
+  }
+
   return {
     async syncFiles(filePaths: string[], options?: { prune?: boolean }): Promise<void> {
       const currentPathSet = new Set(filePaths);
@@ -297,8 +336,11 @@ export function createIndexer(
 
         // Embed all chunks BEFORE touching the store, so a failed embedding (e.g. the worker died)
         // leaves the previous chunks of this file in place.
-        const chunkTexts = chunks.map((c) => c.text);
-        const embeddings = await embedder.embedBatch(chunkTexts);
+        const embeddings = await embedInSlices(filePath, chunks.map((c) => c.text));
+        if (!embeddings) {
+          log.info("Indexing aborted by shutdown");
+          return;
+        }
 
         // Replace the old chunks for this file
         store.deleteChunksForFile(filePath);

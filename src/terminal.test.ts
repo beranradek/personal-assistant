@@ -238,6 +238,7 @@ describe("terminal", () => {
         markDirty: vi.fn(),
         isDirty: vi.fn(() => false),
         syncIfDirty: vi.fn(),
+        abort: vi.fn(),
         close: vi.fn(),
       };
       const mockCronManager = {

@@ -50,7 +50,40 @@ Sources: Hugging Face model cards (checked 2026-11-06). Czech quality was not ve
   smaller quantisation (not measured).
 - Before switching, compare recall@5 on a small Czech query set (current model, Q4_0, jina nano).
 
+### Measured: EmbeddingGemma Q8_0 vs QAT Q4_0 (laptop, 319 chunks of the real memory files, 15 Czech queries)
+
+`hf:ggml-org/embeddinggemma-300m-qat-q4_0-GGUF/embeddinggemma-300M-qat-Q4_0.gguf` (278 MB). The check counts a query as a hit when the top
+chunk (top 3) contains an expected phrase, so it is a rough signal, not a benchmark.
+
+| | Q8_0 (current) | QAT Q4_0 |
+|---|---|---|
+| top-1 hits | 9 / 15 | 11 / 15 |
+| top-3 hits | 12 / 15 | 13 / 15 |
+| RSS after load | 728 MiB | 822 MiB |
+| whole corpus (319 chunks) | 297 s | 413 s |
+| one query | 1.57 s | 1.36 s |
+
+The two models agree on the top-1 chunk for only 6 of 15 queries (average top-3 overlap 2.3 of 3). Q4_0 did not lower RAM here and was slower
+to embed the corpus. Using it means a full re-embed (`vectors.db` rebuilt). Not enabled by default.
+
+### Measured: GPU backend
+
+node-llama-cpp picks Vulkan on this laptop even with `gpuLayers: 0`. Forcing the CPU (`getLlama({ gpu: false })`) was slower: 5.0 s per
+2300-character chunk against 2.0 s with Vulkan, for about 85 MiB less RSS. The default is kept.
+
+## Second review (all fixed)
+
+- Indexer embeds in slices of 8 chunks (bounded worker timeout, search queries can interleave, shutdown aborts between slices); a chunk the
+  model rejects on its own is skipped, a systemic failure is rethrown.
+- Search waits at most 30 s for the embedding part, then uses the text fallback.
+- integ-api child exits when its IPC channel closes (daemon crash), a busy public port no longer stops the daemon.
+- `pa mcp-server` exits on stdin end and releases its model worker after 2 idle minutes at most.
+- A worker that died while idle is replaced before the next call (`EmbeddingProvider.isAlive`), a worker that failed to spawn cannot hang `terminate()`.
+- Terminal mode uses the same shared sync (`createConfiguredMemorySync`) as the daemon and `pa mcp-server`.
+
 ## Not done / follow-ups
 
-- Terminal mode (`createTerminalSessionFromConfig`) still syncs at startup and on every watcher event.
+- Several processes can each hold a model worker at the same time (daemon, one `pa mcp-server` per stdio client, terminal mode). The daemon's
+  shared HTTP MCP server covers the Codex case. A shared worker over a socket with a lock file would give exactly one model, but it is not
+  worth the extra code while that holds.
 - Context size of the embedding context is unchanged (default).

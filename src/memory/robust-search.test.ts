@@ -105,6 +105,25 @@ describe("createRobustMemorySearch", () => {
     expect(results[0].path).toBe(notePath);
   });
 
+  it("uses the text fallback when the embedding model takes too long to answer", async () => {
+    const notePath = path.join(workspaceDir, "memory", "note.md");
+    fs.writeFileSync(notePath, "Zdroje dobře využitelného vápníku\n");
+    fs.writeFileSync(path.join(workspaceDir, "MEMORY.md"), "# Memory\n");
+    embedder.embed = () => new Promise(() => undefined); // never answers (stuck download)
+
+    const search = createRobustMemorySearch({
+      workspaceDir,
+      extraPaths: [],
+      store,
+      embedder,
+      config: { vectorWeight: 0.7, keywordWeight: 0.3, minScore: 0.35, maxResults: 6 },
+      semanticTimeoutMs: 100,
+    });
+
+    const results = await search("vapnik");
+    expect(results[0]?.path).toBe(notePath);
+  });
+
   it("skips binary files passed via extraPaths during fallback search", async () => {
     const binaryPath = path.join(workspaceDir, "binary.md");
     fs.writeFileSync(binaryPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]));

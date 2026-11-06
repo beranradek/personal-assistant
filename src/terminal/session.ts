@@ -4,6 +4,7 @@ import { ensureWorkspace } from "../core/workspace.js";
 import { readMemoryFiles } from "../memory/files.js";
 import { collectMemoryFiles } from "../memory/collect-files.js";
 import { createMemoryWatcher } from "../memory/watcher.js";
+import { createConfiguredMemorySync, type MemorySync } from "../memory/sync.js";
 import { initializeStartupMemoryServices } from "../memory/startup-services.js";
 import { createAssistantServer } from "../tools/assistant-server.js";
 import { loadHabits, markHabit } from "../heartbeat/habits.js";
@@ -125,21 +126,30 @@ export async function createTerminalSessionFromConfig(args: {
   const buildAgentOptionsImpl = args.deps?.buildAgentOptions ?? buildAgentOptions;
   const createBackendImpl = args.deps?.createBackend ?? createBackend;
 
+  // Same sync policy as the daemon: changed files are indexed in the background and right before a search.
+  let memorySync: MemorySync | null = null;
   const { embedder, store, indexer, memoryServer, episodeStore, redact } =
     await initializeStartupMemoryServicesImpl({
       config: args.config,
+      beforeSearch: () => memorySync?.syncIfStale() ?? Promise.resolve(),
       onEpisodeWarn: (err) => {
         log.warn({ err }, "episodic memory store unavailable; episodic MCP tools disabled");
       },
     });
 
-  const memoryFiles = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths);
-  await indexer.syncFiles(memoryFiles);
-
-  const memoryWatcher = createMemoryWatcherImpl(args.config.security.workspace, () => {
-    const files = collectMemoryFilesImpl(args.config.security.workspace, args.config.memory.extraPaths);
-    indexer.syncFiles(files).catch(() => {});
+  const activeMemorySync = createConfiguredMemorySync({
+    config: args.config,
+    indexer,
+    collectFiles: collectMemoryFilesImpl,
   });
+  memorySync = activeMemorySync;
+  void activeMemorySync.sync("startup");
+
+  const memoryWatcher = args.config.memory.sync.watch
+    ? createMemoryWatcherImpl(args.config.security.workspace, () => {
+        void activeMemorySync.sync("watcher");
+      })
+    : null;
 
   const memoryContent = await readMemoryFilesImpl(args.config.security.workspace, {
     includeHeartbeat: false,
@@ -200,7 +210,10 @@ export async function createTerminalSessionFromConfig(args: {
     backend,
     sessionKey: TERMINAL_SESSION_KEY,
     cleanup: async () => {
-      memoryWatcher.close();
+      memoryWatcher?.close();
+      // No new index runs, and let a running one finish before the store and model are closed.
+      activeMemorySync.stop();
+      await activeMemorySync.getCurrentSyncPromise()?.catch(() => undefined);
       if (backend.close) await backend.close();
       cronManager.stop();
       episodeStore?.close();
