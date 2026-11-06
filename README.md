@@ -12,7 +12,7 @@ Runs as a standalone terminal or as a headless daemon with Telegram and Slack ad
 - **Node.js 22+**
 - Choose an agent backend:
   - **Claude backend:** Claude Code CLI authenticated via `claude login` or an Anthropic API key
-  - **Codex backend:** OpenAI API key + Codex CLI (see `docs/settings/openai_codex_agent.md`)
+  - **Codex backend:** OpenAI API key + Codex CLI (see [docs/settings/openai_codex_agent.md](docs/settings/openai_codex_agent.md))
 
 ### Anthropic usage note (third-party harnesses)
 
@@ -154,17 +154,17 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 
 ### Setup guides
 
-- OpenAI Codex agent backend (alternative to Claude Code): `docs/settings/openai_codex_agent.md`
-- Claude Code companion mode (installation and direct launch): `docs/settings/claude_code_companion.md`
-- Google integrations (Gmail + Calendar): `docs/settings/google_integrations.md`
+- OpenAI Codex agent backend (alternative to Claude Code): [docs/settings/openai_codex_agent.md](docs/settings/openai_codex_agent.md)
+- Claude Code companion mode (installation and direct launch): [docs/settings/claude_code_companion.md](docs/settings/claude_code_companion.md)
+- Google integrations (Gmail + Calendar): [docs/settings/google_integrations.md](docs/settings/google_integrations.md)
   - Gmail unreads: categorized unread email overview with multi-account support
-- Slack integration (unread messages feed): `docs/settings/slack_integration.md`
-  - Copy and use src/templates/skills/integrations/SKILL.md so the assistant knows how to use these services 
-- Tmux agent sessions (optional, run project coding agents from the assistant): `docs/settings/tmux_agents.md`
+- Slack integration (unread messages feed): [docs/settings/slack_integration.md](docs/settings/slack_integration.md)
+  - Copy and use [src/templates/skills/integrations/SKILL.md](src/templates/skills/integrations/SKILL.md) so the assistant knows how to use these services
+- Tmux agent sessions (optional, run project coding agents from the assistant): [docs/settings/tmux_agents.md](docs/settings/tmux_agents.md)
   - `pa agents-view` shows the assistant and its agent sessions side by side in your tmux
-- Telegram adapter: `docs/settings/telegram_configuration.md`
-- Slack adapter (bidirectional chat): `docs/settings/slack_configuration.md`
-- GitHub Webhook adapter: `docs/settings/github_webhook_configuration.md`
+- Telegram adapter: [docs/settings/telegram_configuration.md](docs/settings/telegram_configuration.md)
+- Slack adapter (bidirectional chat): [docs/settings/slack_configuration.md](docs/settings/slack_configuration.md)
+- GitHub Webhook adapter: [docs/settings/github_webhook_configuration.md](docs/settings/github_webhook_configuration.md)
 
 ### Claude Code companion mode
 
@@ -245,7 +245,7 @@ Set the secret in `~/.personal-assistant/.env`:
 ```bash
 PA_GITHUB_WEBHOOK_SECRET=...
 ```
-See `docs/settings/github_webhook_configuration.md` for full setup (reverse proxy, webhook events, and `gh` authentication).
+See [docs/settings/github_webhook_configuration.md](docs/settings/github_webhook_configuration.md) for full setup (reverse proxy, webhook events, and `gh` authentication).
 Recommended: keep target repos checked out under `~/.personal-assistant/workspace/dev/` so the agent can work on issues quickly.
 
 **heartbeat** - Periodic check schedule:
