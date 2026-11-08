@@ -23,8 +23,8 @@ from a phone through the same Telegram bot that the PA daemon already uses.
 - F2. Delivery is near live. Target: the turn starts less than 2 s after the message reaches the daemon (session idle).
 - F3. When the session is busy, messages wait in order and arrive in the next turn.
 - F4. Progress shows in ONE continuously updated Telegram "processing" message per turn, the same way as today's
-  normal PA conversation over Telegram. It collects tool calls, intermediate assistant text, and reasoning (when
-  available, see 3.3). Reuse `createProcessingAccumulator` and `gateway.processingUpdateIntervalMs` (default 5 s) and the
+  normal PA conversation over Telegram. It collects tool calls and intermediate assistant text. Reasoning is NOT sent
+  by default (too much traffic); it is an optional best-effort flag (see 3.3). Reuse `createProcessingAccumulator` and `gateway.processingUpdateIntervalMs` (default 5 s) and the
   adapter `createProcessingMessage` / `updateProcessingMessage`. The final answer is a separate new message.
 - F5. The final answer of the session is sent to Telegram when the turn stops. The source is a hook, not a model tool call.
 - F6. Tool permission prompts can be approved or denied from Telegram (`yes <id>` / `no <id>`). The terminal dialog stays valid.
@@ -102,7 +102,27 @@ solve this, but the user wants one bot. The PA daemon forwards messages to a sma
 | tmux `send-keys` (existing `src/tmux-agents/`) | Low | Low (dialogs, screen state) | Fallback only |
 | Session cron or `/loop` polling | Equal to interval | Medium | Rejected (cost, delay) |
 | `PreToolUse` injection | Only when a tool runs | Low | Rejected (cannot wake idle session) |
-| Remote Control (Claude mobile app) | Low | High | Out of scope (not Telegram) |
+| Remote Control (Claude mobile app) | Low | High | Rejected (not allowed for the user) |
+
+## 3.5 Launch modes
+
+The mode must work in both launches:
+
+- `pa claude --remote` (restricted launcher, recommended).
+- Plain `claude --dangerously-skip-permissions --dangerously-load-development-channels server:pa-remote`, started in the
+  assistant workspace. `pa claude` is only a wrapper. The channel comes from the project MCP file (entry `pa-remote`),
+  the hooks from the project Claude settings file (both created by `pa init --claude-code`). No launcher setting is needed.
+- The dev-channel flag is required in both modes (custom channel, not on the allowlist). It is not implied by
+  `--dangerously-skip-permissions`. The confirmation dialog shows at each start. A running session cannot get a channel
+  later: it must be started with the flag.
+- With `--dangerously-skip-permissions` no permission prompts exist, so permission relay is unused. The PA security hook
+  (PreToolUse) still runs from the project settings, unless the user removed it. Risk: Telegram text becomes a prompt in
+  a session without approvals. Only the allowlisted user can send (N3).
+- Config lookup: the channel server and hook commands find the PA config dir from `PA_CONFIG`, else the default
+  `~/.personal-assistant` (same rule as the `pa` CLI). A plain `claude` start needs no extra environment variable.
+- Sessions without the channel (plain `claude`, no flag) still run the hooks. They exit 0 at once (no registered
+  channel for this claude pid) and never send to Telegram.
+- Suggested alias: `alias claude-remote='claude --dangerously-skip-permissions --dangerously-load-development-channels server:pa-remote'`.
 
 ## 4. Design
 
@@ -179,7 +199,7 @@ normally. Do not call a reply tool. The PA daemon delivers your final answer to 
 - Slack or other adapters (design keeps the bridge adapter-neutral, but only Telegram is built).
 - Remote control of sessions that were not started with `pa claude --remote`.
 - Persisting attach state across daemon restart.
-- Sending the full terminal screen to Telegram. (Reasoning is in scope as best effort, see F4 and 3.3.)
+- Sending the full terminal screen to Telegram. Reasoning text is out of scope by default (it grows the traffic). Optional flag only, see F4 and 3.3.
 
 ## 7. Acceptance criteria
 

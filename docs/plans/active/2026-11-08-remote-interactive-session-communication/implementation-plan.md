@@ -52,7 +52,7 @@ in parallel (server has 4 GB RAM).
     per turn, edited continuously, like the normal PA Telegram flow (`createProcessingAccumulator`,
     `createProcessingMessage` / `updateProcessingMessage`). Make the transcript tail (`src/remote/transcript-tail.ts`,
     reads new JSONL lines from `transcript_path`, extracts thinking blocks, tolerates lag) optional behind
-    `claudeCode.remote.reasoning` (default true, best effort).
+    `claudeCode.remote.reasoning` (default FALSE, best effort; user decided reasoning is not required).
   - `Stop`: send `last_assistant_message` as a new message. Finish the processing message. Only for turns that started from Telegram.
   - `Notification`: `permission_prompt` and `idle_prompt` -> short notice.
 - Delivery timeout -> "not delivered" notice. Idle timer -> detach.
@@ -125,6 +125,14 @@ in parallel (server has 4 GB RAM).
 - Add `pa remote attach|detach|status` to `src/cli.ts` (calls `/remote/control`).
 - Test: extend `src/cli.test.ts` (args, error cases), `src/claude/templates.test.ts` (new hooks present, security hook first).
 
+### 8b. Plain `claude` launch (no `pa claude`)
+
+- Channel server and hook commands resolve the config dir like `src/cli.ts` (`PA_CONFIG`, else default dir).
+- E2E in task 10, second run: start `claude --dangerously-skip-permissions --dangerously-load-development-channels
+  server:pa-remote` in the workspace; repeat steps 2-3 and 7-8. Expect: no permission prompts, no relay. Then start a
+  plain `claude` without the flag and check that the hooks stay silent.
+- Document the alias and the risk in `docs/settings/claude_code_companion.md`.
+
 ### 9. Docs
 
 - `docs/settings/claude_code_companion.md`: new section "Remote mode (Telegram)": setup, `pa claude --remote`, commands,
@@ -160,6 +168,6 @@ Do not run `pnpm typecheck` on this server without the user's approval (known me
 
 ## Open questions (decide during implementation, default shown)
 
-- Reasoning in the single progress message: yes, best effort (decided by the user 2026-11-08). Source depends on the spike.
+- Reasoning in the progress message: off by default, optional flag (user decision 2026-11-08, traffic size).
 - Idle detach time? Default: 60 min.
 - Allow `/attach` to start a new session when none is registered? Default: no (the user starts `pa claude --remote`).
