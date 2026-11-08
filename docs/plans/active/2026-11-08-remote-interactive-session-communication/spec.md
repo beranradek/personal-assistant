@@ -1,240 +1,182 @@
 # Remote interactive session communication - Specification
 
-**Date:** 2026-11-08
+**Date:** 2026-11-08 (revised after the feasibility experiment, same day)
 **Status:** Proposed
 **Related:** [Claude Code companion mode](../../../settings/claude_code_companion.md),
 [implementation plan](implementation-plan.md)
 
 ## 1. Goal
 
-The user runs a Claude Code companion session (`pa claude`) on a laptop. The user wants to talk to this live session
-from a phone through the same Telegram bot that the PA daemon already uses.
+The user runs a Claude Code companion session (`pa claude`, or plain `claude --dangerously-skip-permissions`) on a laptop.
+The user wants to talk to this live session from a phone through Telegram.
 
 - A Telegram message goes into the running session as a new user turn.
 - The session handles it as a normal prompt. It keeps its own history.
 - The PA daemon (not the model) sends progress and the final answer back to Telegram.
-- The mode is on demand. It does not run all the time. The user attaches to a session when needed and detaches later.
+- The mode is on demand. The user attaches to a session when needed and detaches later.
+- The laptop uses its OWN new Telegram bot. The old bot stays on the VPS assistant.
 
-## 2. Requirements
+## 2. Feasibility experiment result (2026-11-08)
+
+| Question | Result |
+|---|---|
+| Account | claude.ai login, subscription `team`, org "Etnetera Core" |
+| Claude Code Channels (`--dangerously-load-development-channels`) | **Blocked by org policy**: "Have an administrator set channelsEnabled: true in managed settings". Messages would be dropped. Channels are NOT usable. |
+| `asyncRewake` hook wakes an IDLE session | **Works.** A `SessionStart` hook (async + asyncRewake) slept 12 s, then wrote text to stderr and exited 2. Claude started a turn alone and answered the text. The same worked from a `Stop` hook. Tested on Claude Code 2.1.319 in tmux. |
+
+So the inbound path is an `asyncRewake` hook with a long poll to the PA daemon. No MCP channel, no dev flag, no dialog.
+
+## 3. Requirements
 
 ### Functional
 
-- F1. Only the next Telegram message goes to the session. The session never receives the Telegram history.
-- F2. Delivery is near live. Target: the turn starts less than 2 s after the message reaches the daemon (session idle).
-- F3. When the session is busy, messages wait in order and arrive in the next turn.
-- F4. Progress shows in ONE continuously updated Telegram "processing" message per turn, the same way as today's
-  normal PA conversation over Telegram. It collects tool calls and intermediate assistant text. Reasoning is NOT sent
-  by default (too much traffic); it is an optional best-effort flag (see 3.3). Reuse `createProcessingAccumulator` and `gateway.processingUpdateIntervalMs` (default 5 s) and the
-  adapter `createProcessingMessage` / `updateProcessingMessage`. The final answer is a separate new message.
-- F5. The final answer of the session is sent to Telegram when the turn stops. The source is a hook, not a model tool call.
-- F6. Tool permission prompts can be approved or denied from Telegram (`yes <id>` / `no <id>`). The terminal dialog stays valid.
-- F7. Attach and detach:
+- F1. Only the next Telegram message(s) go to the session. The session never receives the Telegram history.
+- F2. Near live delivery. Target: a turn starts less than 3 s after the message reaches the daemon (session idle).
+- F3. When the session is busy, messages wait in the daemon and are delivered together when the turn ends (or when the
+  running poll returns). Order is kept.
+- F4. Progress shows in ONE continuously updated Telegram "processing" message per turn, like the normal PA conversation
+  over Telegram. It has tool calls and intermediate assistant text. Reasoning is NOT sent by default (too much traffic).
+  Reuse `createProcessingAccumulator` and `gateway.processingUpdateIntervalMs` (default 5 s).
+- F5. The final answer of the turn is sent to Telegram as a new message, from the `Stop` hook (`last_assistant_message`),
+  not by the model. If the text is the tail of the processing message, remove it there
+  (`trimSuffixFromProcessingMessage`).
+- F6. Attach and detach:
   - Telegram commands `/attach`, `/attach <n>`, `/detach`, `/status`.
-  - A PA MCP tool `remote_session_attach` / `remote_session_detach` / `remote_session_status` callable by the session.
-  - A CLI command `pa remote attach|detach|status`.
-  - Auto detach: session exit, channel disconnect, configurable idle timeout.
-- F8. While attached, `/pa <text>` still goes to the normal PA agent queue (existing gateway queue and agent runner).
-- F9. Voice messages use the existing transcription. Photos and documents use the existing inbox save. The session gets
-  the text or the saved path.
-- F10. The daemon reports "not delivered" to Telegram when a message is not confirmed within a timeout.
+  - PA MCP tools `remote_session_attach`, `remote_session_detach`, `remote_session_status` (callable by the session).
+  - CLI `pa remote attach|detach|status`.
+  - Auto detach: session end, process gone, idle timeout (config).
+- F7. While attached, `/pa <text>` goes to the normal PA agent queue.
+- F8. Voice, photo, and document messages use the existing handling. The session gets the text or the saved path.
+- F9. The daemon sends a "not delivered" notice when a forwarded message is not taken by the session within a timeout.
+- F10. Works in both launches: `pa claude` and plain `claude --dangerously-skip-permissions` in the assistant workspace.
+  No special flag is needed. The hooks come from the workspace Claude settings (`pa init --claude-remote`).
 
 ### Non-functional
 
-- N1. One Telegram poller per bot token (two pollers cause 409 Conflict). The user keeps the existing bot on the VPS
-  assistant. The laptop PA daemon uses its OWN new bot token (`adapters.telegram.botToken` in the laptop
-  `settings.json`). The laptop daemon is the only poller of that bot. The laptop daemon must run with
-  `heartbeat.enabled: false`, so it does not duplicate the VPS heartbeat and scheduled work.
-- N2. Localhost only. A random token protects the bridge endpoints. No secrets in generated files.
-- N3. Only the existing Telegram allowlist can send. Check the sender id (`from.id`), not the chat id.
-- N4. Hooks must be fast and must never block or fail the session. No daemon, or not attached: hook exits 0 at once.
-- N5. No extra model cost when the mode is idle. No polling by the model.
-- N6. Telegram text is untrusted user input. Same trust level as today's PA Telegram messages.
-- N7. Each forwarded message gets an audit log line.
-- N8. The mode is off by default (`claudeCode.remote.enabled: false`).
+- N1. One Telegram poller per bot token (two pollers cause 409 Conflict). The laptop PA daemon uses a NEW bot token in the
+  laptop `settings.json`. The VPS keeps the old bot. The laptop daemon runs with `heartbeat.enabled: false` so it does
+  not duplicate VPS heartbeat work.
+- N2. Localhost only (`127.0.0.1`, `isAllowedRequest` guard). Random bearer token in a `0600` file. No secrets in
+  generated files.
+- N3. Only users in `adapters.telegram.allowedUserIds` can send (checked on `from.id` by the adapter).
+- N4. Hooks never block the session and never fail it. Daemon down or no token: hook exits 0 at once.
+- N5. No model cost and no polling by the model while idle. The long poll is a cheap background process.
+- N6. Telegram text is untrusted user input (same trust as today's PA Telegram messages). It is wrapped in a clear frame.
+- N7. Each forwarded message gets an audit log line (no secrets).
+- N8. Off by default (`claudeCode.remote.enabled: false`).
+- N9. Max message length and a per-chat rate limit in the bridge.
 
 ### Documentation
 
-- D1. A new guide `docs/settings/claude_code_remote_session.md` describes setup, start, control, security, and
-  troubleshooting of the remote session mode.
-- D2. The README chapter "Claude Code companion mode" and the "Setup guides" list link to this guide briefly.
+- D1. New guide `docs/settings/claude_code_remote_session.md`: bot creation, setup, start, control, security, troubleshooting.
+- D2. README chapter "Claude Code companion mode" and the "Setup guides" list link to it briefly.
   `docs/settings/claude_code_companion.md` gets a short pointer.
 
-## 3. Research summary
+## 4. Research summary
 
-Sources: Claude Code docs (checked 2026-11-08, local Claude Code 2.1.319).
+Sources: Claude Code docs (code.claude.com/docs: channels, channels-reference, hooks), checked 2026-11-08.
 
-### 3.1 Claude Code Channels (research preview) - chosen for inbound
-
-- A channel is an MCP stdio server that Claude Code starts. It declares `capabilities.experimental['claude/channel']`.
-- It sends `notifications/claude/channel` with `content` and `meta` (keys: letters, digits, underscore). The event arrives
-  as `<channel source="..." key="value">text</channel>`.
-- An idle session starts a turn at once. Events that arrive during a turn queue and arrive together in the next turn.
-- No acknowledgement exists. Events are dropped silently when the channel is not registered or policy blocks it.
-- Optional `claude/channel/permission` capability: Claude Code sends `notifications/claude/channel/permission_request`
-  (`request_id`, `tool_name`, `description`, `input_preview`). The server answers with
-  `notifications/claude/channel/permission` (`request_id`, `behavior: allow|deny`). Only senders that are authenticated
-  may be allowed to answer.
-- A custom channel is not on the Anthropic allowlist. It needs `--dangerously-load-development-channels server:<name>`.
-  This works only in interactive mode and shows a confirmation dialog at each start.
-- Needs claude.ai or Console login. Team and Enterprise need `channelsEnabled`. Pro/Max users skip this check.
-- The flags and protocol can change (research preview). Keep the channel code small and isolated.
-
-### 3.2 The official Telegram channel plugin - rejected
-
-It polls Telegram itself and has its own access list and pairing. The PA daemon already has a Telegram adapter with
-allowlist, voice, photo, and document handling, and the processing-message streaming. Reuse it: the laptop PA daemon owns
-the (new, laptop-only) bot and forwards messages to a small PA channel server. Two pollers on one token would cause 409
-Conflict, so the plugin and the PA daemon must never share a token.
-
-### 3.3 Hooks - chosen for outbound (progress and final answer)
-
-- `Stop` input has `last_assistant_message`. This is the deterministic final answer of the turn.
-- `PreToolUse`, `PostToolUse` have `tool_name`, `tool_input`, `tool_response`. They give progress.
-- `Notification` has `notification_type` (`permission_prompt`, `idle_prompt`, ...).
-- `UserPromptSubmit` fires also for turns that start from a channel event. It can confirm delivery.
-- `"async": true` runs a command hook without blocking the session.
-- `MessageDisplay` fires while assistant message text is displayed (display-only, 10 s default timeout). Use it for
-  intermediate assistant text. Exact input fields and streaming granularity are NOT confirmed in the docs: verify in a spike
-  (implementation plan task 0).
-- Reasoning (thinking) has no documented hook. Sources, in order of preference:
-  1. `MessageDisplay`, if it also carries thinking text (spike decides).
-  2. Tail of `transcript_path` JSONL (thinking blocks, if written). The file is written asynchronously and may lag, so
-     reasoning can arrive late or be summarized/redacted. Best effort only.
-  3. If neither works: progress shows tool calls and intermediate text only. This is acceptable for acceptance A3.
-- Hooks cannot create a new user message. `additionalContext` only adds a system reminder next to a prompt or tool result.
-  `PreToolUse` runs only when the model calls a tool, so it cannot wake an idle session.
-- `asyncRewake` can wake the model from a background hook. Keep it as plan B for inbound (see 3.4).
-
-### 3.4 Options compared
+- **Channels** (research preview): an MCP server pushes events into a running session. Rejected: blocked by the org policy
+  (Gate G). Team and Enterprise orgs need `channelsEnabled` from an Owner.
+- **Hooks**: `Stop` has `last_assistant_message`; `PreToolUse` has `tool_name`, `tool_input`; `MessageDisplay` fires while
+  assistant text is displayed; `Notification` has `notification_type`; `SessionStart`/`SessionEnd` bracket the session.
+  `"async": true` runs a command hook in the background; `"asyncRewake": true` wakes Claude when the hook exits with
+  code 2 (stderr, or stdout if stderr is empty, becomes a system reminder). Async hooks have no enforced timeout.
+  Hooks cannot create a user message by themselves, but asyncRewake does start a turn (verified).
+- **Alternatives**:
 
 | Option | Latency | Reliability | Verdict |
 |---|---|---|---|
-| Channel (inbound) + hooks (outbound) | < 1-2 s | High (official push path) | **Chosen** |
-| `asyncRewake` hook with long poll | Low | Medium (hook lifetime, hack) | Plan B |
-| tmux `send-keys` (existing `src/tmux-agents/`) | Low | Low (dialogs, screen state) | Fallback only |
-| Session cron or `/loop` polling | Equal to interval | Medium | Rejected (cost, delay) |
-| `PreToolUse` injection | Only when a tool runs | Low | Rejected (cannot wake idle session) |
-| Remote Control (Claude mobile app) | Low | High | Rejected (not allowed for the user) |
+| asyncRewake long-poll hook | < 3 s | High (verified idle wake) | **Chosen** |
+| Channels | < 1 s | High | Blocked by org policy |
+| tmux `send-keys` (`src/tmux-agents/`) | Low | Low (dialogs) | Fallback only |
+| Session cron / `/loop` polling | Interval | Medium | Rejected (cost) |
+| `PreToolUse` injection | Only when a tool runs | Low | Rejected |
+| Remote Control (Claude app) | Low | High | Rejected (not allowed for the user) |
 
-## 3.5 Launch modes
+- Unverified (to check in the spike, plan task 0): exact payload of `MessageDisplay`; whether `UserPromptSubmit` fires for a
+  rewake turn; how long an async hook can live (hours). The design does not depend on them (defensive fallbacks).
 
-The mode must work in both launches:
-
-- `pa claude --remote` (restricted launcher, recommended).
-- Plain `claude --dangerously-skip-permissions --dangerously-load-development-channels server:pa-remote`, started in the
-  assistant workspace. `pa claude` is only a wrapper. The channel comes from the project MCP file (entry `pa-remote`),
-  the hooks from the project Claude settings file (both created by `pa init --claude-code`). No launcher setting is needed.
-- The dev-channel flag is required in both modes (custom channel, not on the allowlist). It is not implied by
-  `--dangerously-skip-permissions`. The confirmation dialog shows at each start. A running session cannot get a channel
-  later: it must be started with the flag.
-- With `--dangerously-skip-permissions` no permission prompts exist, so permission relay is unused. The PA security hook
-  (PreToolUse) still runs from the project settings, unless the user removed it. Risk: Telegram text becomes a prompt in
-  a session without approvals. Only the allowlisted user can send (N3).
-- Install: `pa init --claude-remote` adds (additive and idempotent merge, never removes or changes other keys) the
-  `pa-remote` entry to the workspace MCP file and the remote hooks to the workspace Claude settings file. It also
-  works when those files already exist (the older `pa init --claude-code` never overwrites them).
-- Config lookup: the channel server and hook commands find the PA config dir from `PA_CONFIG`, else the default
-  `~/.personal-assistant` (same rule as the `pa` CLI). A plain `claude` start needs no extra environment variable.
-- Sessions without the channel (plain `claude`, no flag) still run the hooks. They exit 0 at once (no registered
-  channel for this claude pid) and never send to Telegram.
-- Suggested alias: `alias claude-remote='claude --dangerously-skip-permissions --dangerously-load-development-channels server:pa-remote'`.
-
-## 4. Design
+## 5. Design
 
 ```
-Telegram -> PA daemon (grammy, only poller)
-              |-- not attached: normal gateway queue (unchanged)
-              `-- attached: RemoteBridge
-                    | localhost SSE (token)
-                    v
-           `pa claude-channel` (stdio MCP channel, child of claude)
-                    | notifications/claude/channel
-                    v
-           live Claude session turn
-Claude hooks (async) -> `pa claude-remote-hook <event>` -> POST localhost -> RemoteBridge
-           -> Telegram processing message (edit) and final answer (new message)
+Telegram (new laptop bot) -> PA daemon (laptop, only poller)
+   |-- not attached: normal gateway queue (unchanged)
+   `-- attached: RemoteBridge --queue--> long poll answer
+Claude session (hooks, command `pa claude-remote-hook <event>`):
+   SessionStart / Stop (async + asyncRewake): [post Stop payload] then GET /remote/poll (long poll, loops)
+        message arrives -> hook prints framed text to stderr, exit 2 -> Claude starts a turn
+   UserPromptSubmit / PreToolUse / MessageDisplay / Notification / SessionEnd (async): POST /remote/hook
+RemoteBridge -> Telegram: one edited processing message + final answer (Stop.last_assistant_message)
 ```
 
-### 4.1 Components
+### 5.1 Components
 
-- **RemoteBridge** (in the daemon): registry of channel connections, attach state per Telegram chat, message delivery,
-  delivery confirmation, permission relay, progress accumulator (reuses `createProcessingAccumulator`).
-- **Bridge HTTP routes** on the existing localhost HTTP server (`src/tools/http-mcp-server.ts`, port `codex.httpMcpPort`,
-  default 47392, with the `isAllowedRequest` Host/Origin guard): `/remote/register`, `/remote/events` (SSE), `/remote/hook`,
-  `/remote/permission-request`, `/remote/control`. The wire format is fixed in the implementation plan (section Protocol).
-  The routes are dispatched before the MCP body parsing. The HTTP server starts before the Telegram adapter, so the
-  routes bind the bridge late (holder object set after the adapter exists).
-  The daemon creates a random token at start. Clients read it from a `0600` file in `$PA_CONFIG`.
-- **`pa claude-channel`**: stdio MCP server. Registers with the daemon (claude pid, cwd, name), holds the SSE stream,
-  reconnects with backoff, and converts each SSE message to `notifications/claude/channel`. It declares the permission
-  capability. It has no reply tool: answers come from hooks.
-- **`pa claude-remote-hook <event>`**: reads hook JSON from stdin, adds the claude pid, POSTs to the daemon, exits 0 fast.
-- **Session identity**: the channel server and all hook commands are descendants of one `claude` process. The claude
-  pid (found by walking `/proc/<pid>/stat`) is the key. Hooks also send `session_id`.
-- **Telegram routing** in `daemon.ts`: a wrapper around the existing `onMessage` handler. It handles `/attach`, `/detach`,
-  `/status`, `/pa`, the verdict regex, and forwards other text to the bridge when attached.
+- **RemoteBridge** (daemon, `src/remote/bridge.ts`): session registry keyed by claude pid, attach state per Telegram chat,
+  per-session message queue, long-poll waiters, delivery tracking, turn-origin tracking, progress accumulator, idle timer,
+  pid liveness check (every 30 s).
+- **HTTP routes** on the existing localhost HTTP server (`src/tools/http-mcp-server.ts`, port `codex.httpMcpPort`,
+  default 47392): `/remote/poll`, `/remote/hook`, `/remote/control`. Dispatched before MCP body parsing. The server starts
+  before the Telegram adapter, so routes bind the bridge late (holder). Wire format: see the plan, section Protocol.
+- **`pa claude-remote-hook <event>`** (`src/claude/remote-hook.ts`): reads hook JSON from stdin, finds the claude pid
+  (walk `/proc/<pid>/stat`, `src/claude/process-tree.ts`), reads the token file from the config dir, talks to the daemon.
+  `listen` mode (SessionStart/Stop) runs the long-poll loop. Exits 0 quietly on any error or when no token file exists.
+- **Telegram routing** (`src/remote/telegram-router.ts`, wired in `src/daemon.ts`): `/attach`, `/detach`, `/status`, `/pa`,
+  forwarding when attached, unchanged otherwise.
+- **MCP tools and CLI**: `remote_session_*` in `src/tools/stdio-mcp-server.ts`, `pa remote ...`, `pa init --claude-remote`
+  (additive idempotent merge of the hooks into workspace and launcher Claude settings).
 
-### 4.2 Activation flow
+### 5.2 Flows
 
-1. `pa claude --remote` starts Claude Code with the `pa-remote` MCP server and
-   `--dangerously-load-development-channels server:pa-remote`. The channel registers and waits. Nothing goes to Telegram.
-2. The user attaches: `/attach` from Telegram, or the session calls `remote_session_attach`, or `pa remote attach`.
-3. The daemon sends "attached to <name>" to Telegram. Later messages go to the session.
-4. The user detaches, the session ends, or the idle timeout fires. The daemon sends "detached" and the normal PA flow returns.
+Attach: `pa claude` or `claude` starts -> SessionStart hook starts the listener -> session registers by its first poll ->
+`/status` in Telegram lists it -> `/attach` -> daemon confirms in Telegram.
 
-### 4.3 Turn flow
+Turn: Telegram message -> daemon queue -> the poll returns `{messages}` -> hook prints
+`[Telegram message from the user #<id>] <text>` plus a short instruction to stderr and exits 2 -> Claude starts a turn ->
+hook events (`UserPromptSubmit`/`PreToolUse`/...) from the same pid confirm delivery and mark the turn "Telegram origin" ->
+`PreToolUse` and `MessageDisplay` feed the processing message -> `Stop` sends the final answer to Telegram and the
+Stop hook starts the next poll (the loop continues). A turn that starts without a pending forward is a terminal turn:
+nothing is sent to Telegram.
 
-1. Telegram message -> daemon -> bridge assigns a message id -> SSE event to the channel server.
-2. Channel server sends the channel notification with `meta { msg_id, chat }` and the text.
-3. The `UserPromptSubmit` hook fires (from the same claude pid) after the forward. The bridge marks the message
-   delivered and marks this turn as "Telegram origin". The prompt text is checked for `msg_id` only as an extra
-   signal (the exact prompt format for channel events is unverified, see the spike). A `UserPromptSubmit` with no
-   pending forward is a terminal turn: it is not sent to Telegram.
-4. Async `PreToolUse` / `PostToolUse` / `MessageDisplay` hooks (and the best-effort transcript tail for reasoning) append
-   lines to the accumulator of this turn. One Telegram message is created at the first line and edited at most every
-   `processingUpdateIntervalMs`. Long content is trimmed to the Telegram limit (oldest lines dropped first).
-5. The `Stop` hook sends `last_assistant_message`. The bridge sends it to Telegram as a new message and finishes the
-   processing message. When the final text is already the tail of the processing message, remove it there
-   (`trimSuffixFromProcessingMessage`), as the normal PA flow does.
-6. Turns that were not started by Telegram (for example started in the terminal) are not sent to Telegram.
+One poller per pid: a new poll replaces the older one (the older returns "replaced" and its hook exits 0).
+Detach: `/detach`, SessionEnd, dead pid, or idle timeout. The daemon tells Telegram.
 
-### 4.4 Channel instructions text (sent to the model)
+### 5.3 Text frame sent to the model
 
-Short: "Messages from the user arrive from Telegram as <channel source=pa-remote ...>. Treat them as normal user prompts. Answer
-normally. Do not call a reply tool. The PA daemon delivers your final answer to Telegram. Keep answers short."
+`[Telegram message from the user, id N]` newline text newline `(Treat as a normal user prompt. Your final answer is sent to
+Telegram by the PA daemon. Do not call tools only to reply. Keep it short.)` The text is limited in length and control
+characters are removed.
 
-## 5. Risks and mitigations
+## 6. Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Channels are a research preview, flags can change | Isolate in `src/claude/channel-server.ts`. Version check at start. Document plan B (asyncRewake) and tmux fallback. |
-| Dev flag shows a confirmation dialog at each start | Accept at start of the laptop session (user is there). Document. |
-| Message silently dropped | Delivery confirmation via `UserPromptSubmit`. Timeout -> "not delivered" notice. |
-| Hook adds latency to every tool call | Async hooks, 1 s HTTP timeout, exit 0 when not attached. |
-| Remote approval of dangerous tools | Permission relay only for the allowlisted Telegram user. Show `input_preview`. Keep the terminal dialog. |
-| Laptop daemon duplicates VPS scheduled work | Laptop `heartbeat.enabled: false` (setup guide). Separate bot token. |
-| Spawning `pa claude-remote-hook` for every tool call costs CPU | Async hooks, tiny entry point that exits at once when no token file or no registered channel for the pid. |
-| Telegram flood (many messages) | Max message length and a per-chat rate limit inside the bridge. |
+| asyncRewake behavior may change in a Claude Code update | Isolated in `remote-hook.ts`. Spike and E2E tests. Fallback: tmux `send-keys` input behind the same bridge. |
+| Long-lived hook processes (one per session) | One per pid, parent-alive check, exits when the session ends. Memory is small. |
+| Gap between poll end and next Stop hook | Messages stay queued in the bridge and are delivered at the next poll. |
+| Message not taken | Delivery confirm by hook events from the pid. Timeout -> "not delivered" notice. |
+| Hook cost per tool call (node spawn) | Async hooks, tiny entry point, exit at once without token file. Only `PreToolUse` (no `PostToolUse`). |
+| Prompt injection via Telegram | Allowlist, frame text, same trust as the PA Telegram. No approvals exist with `--dangerously-skip-permissions`: use it knowingly. |
+| Laptop daemon duplicates VPS scheduled work | `heartbeat.enabled: false`. Separate bot token. |
+| Telegram flood | Max length, rate limit. |
 | Two sessions attached | One attached session per chat. `/attach <n>` switches. |
-| Daemon restarts | Channel reconnects. Attach state is in memory only: user must attach again (documented, status message shown). |
-| Claude Code not logged in via claude.ai/Console | `pa claude --remote` checks and prints a clear error. |
+| Daemon restart | Pollers retry with backoff. Attach state is in memory: attach again (the daemon says so). |
 
-## 6. Out of scope
+## 7. Out of scope
 
-- Slack or other adapters (design keeps the bridge adapter-neutral, but only Telegram is built).
-- Remote control of sessions that were not started with `pa claude --remote`.
-- Persisting attach state across daemon restart.
-- Sending the full terminal screen to Telegram. Reasoning text is out of scope by default (it grows the traffic). Optional flag only, see F4 and 3.3.
+- Channels (blocked). Permission relay to Telegram (follow-up: `PermissionRequest` hook can allow/deny when attached).
+- Reasoning text in progress (optional flag `claudeCode.remote.reasoning`, default off, not built in v1).
+- Slack and other adapters. Persisting attach state across daemon restart. Sessions without the hooks.
 
-## 7. Acceptance criteria
+## 8. Acceptance criteria
 
-- A1. With the daemon and `pa claude --remote` running and attached, a Telegram message starts a turn in less than 2 s (idle).
-- A2. The final answer of the turn arrives in Telegram exactly once.
-- A3. Progress shows in one edited message. It never floods the chat.
-- A4. A message sent during a running turn is handled in the next turn. Order is kept.
-- A5. A permission prompt appears in Telegram. `yes <id>` lets the call continue. The terminal dialog closes.
-- A6. When not attached, Telegram behaves as before. The PA agent answers.
-- A7. Detach on session exit, on `/detach`, and on idle timeout works. No hook error appears in the session.
-- A8. A user that is not in the allowlist cannot send to the session or approve a permission.
-- A10. The new guide exists, every command in it was run in the E2E test, and the README links to it.
-- A9. Tests pass for the bridge, channel server, hook command, and Telegram routing. E2E test passes on the laptop.
+- A1. Daemon and a session with the hooks run and are attached: a Telegram message starts a turn in less than 3 s (idle).
+- A2. The final answer arrives in Telegram exactly once. Progress shows in one edited message.
+- A3. A message sent during a running turn is handled after it, in order.
+- A4. Not attached: Telegram behaves as before (PA agent answers). Terminal turns are never sent to Telegram.
+- A5. Detach works on `/detach`, session exit, and idle timeout. No hook error shows in the session.
+- A6. A user outside the allowlist cannot send anything to the session.
+- A7. Works with `pa claude` and with plain `claude --dangerously-skip-permissions`.
+- A8. The new guide exists, every command in it was run in the E2E test, and the README links to it.
+- A9. Unit and integration tests pass for the bridge, routes, hook command, router, init merge. Real-Claude E2E passes
+  (at least the idle wake and the final answer path, with a fake Telegram).
