@@ -35,29 +35,34 @@ describe("installClaudeCodeTemplates", () => {
     expect((await fs.stat(path.join(config, "claude-code", "settings.json"))).mode & 0o777).toBe(0o600);
   });
 
-  it("ships all remote hooks and keeps the security hook first", async () => {
+  it("does not ship remote hooks or remote allow entries in the base template", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "claude-template-test-"));
     tempDirs.push(workspace);
     await installClaudeCodeTemplates(workspace);
-    const settings = JSON.parse(await fs.readFile(path.join(workspace, ".claude", "settings.json"), "utf8"));
-    const hooks = settings.hooks;
-    expect(hooks.PreToolUse[0].hooks[0].command).toBe("pa claude-security-hook");
-    expect(hooks.SessionStart[0].hooks.map((h: { command: string }) => h.command)).toEqual([
-      "pa claude-context --hook-json",
-      "pa claude-remote-hook listen-start",
-    ]);
-    expect(hooks.SessionStart[0].hooks[1]).toMatchObject({ async: true, asyncRewake: true });
-    expect(hooks.Stop[0].hooks[0]).toMatchObject({ command: "pa claude-remote-hook listen-stop", async: true, asyncRewake: true });
-    for (const event of ["UserPromptSubmit", "PreToolUse", "MessageDisplay", "Notification", "SessionEnd"]) {
-      const hook = hooks[event]
-        .flatMap((g: { hooks: unknown[] }) => g.hooks)
-        .find((h: { command: string }) => h.command === `pa claude-remote-hook ${event}`);
+    const text = await fs.readFile(path.join(workspace, ".claude", "settings.json"), "utf8");
+    expect(text).not.toContain("remote-hook");
+    expect(text).not.toContain("remote_session");
+  });
+
+  it("ships all remote hooks in the opt-in remote template", async () => {
+    const text = await fs.readFile(new URL("../templates/claude-code/remote-settings.json", import.meta.url), "utf8");
+    const { hooks, permissions } = JSON.parse(text);
+    const find = (event: string, command: string) =>
+      hooks[event].flatMap((g: { hooks: unknown[] }) => g.hooks).find((h: { command: string }) => h.command === command);
+    expect(find("SessionStart", "pa-remote-hook listen-start")).toMatchObject({ async: true, asyncRewake: true });
+    expect(find("Stop", "pa-remote-hook listen-stop")).toMatchObject({ async: true, asyncRewake: true });
+    expect(find("StopFailure", "pa-remote-hook listen-fail")).toMatchObject({ async: true, asyncRewake: true });
+    expect(find("UserPromptSubmit", "pa-remote-hook listen-prompt")).toMatchObject({ async: true, asyncRewake: true });
+    for (const event of ["PreToolUse", "MessageDisplay", "Notification", "SessionEnd"]) {
+      const hook = find(event, `pa-remote-hook ${event}`);
       expect(hook).toMatchObject({ async: true });
       expect(hook.asyncRewake).toBeUndefined();
     }
-    expect(settings.permissions.allow).toEqual(
-      expect.arrayContaining(["mcp__pa__remote_session_status", "mcp__pa__remote_session_attach", "mcp__pa__remote_session_detach"]),
-    );
+    expect(permissions.allow).toEqual([
+      "mcp__pa__remote_session_status",
+      "mcp__pa__remote_session_attach",
+      "mcp__pa__remote_session_detach",
+    ]);
   });
 });
 
@@ -74,7 +79,7 @@ describe("installClaudeRemoteConfig", () => {
     };
   }
 
-  it("creates both files from the template when missing", async () => {
+  it("creates both files from the base template, then merges the remote template", async () => {
     const { workspace, config, wsFile, cfgFile } = await setup();
     const result = await installClaudeRemoteConfig(workspace, config);
     expect(result).toEqual({
@@ -83,8 +88,13 @@ describe("installClaudeRemoteConfig", () => {
       unchanged: [],
       allowAdded: {},
     });
-    expect(await fs.readFile(wsFile, "utf8")).toContain("pa claude-remote-hook StopFailure");
-    expect(await fs.readFile(wsFile, "utf8")).toContain("pa claude-remote-hook listen-start");
+    const created = JSON.parse(await fs.readFile(wsFile, "utf8"));
+    expect(created.hooks.PreToolUse[0].hooks[0].command).toBe("pa claude-security-hook");
+    expect(created.hooks.SessionStart[0].hooks[0].command).toBe("pa claude-context --hook-json");
+    expect(created.permissions.allow).toContain("mcp__pa__memory_search");
+    const text = await fs.readFile(wsFile, "utf8");
+    expect(text).toContain("pa-remote-hook listen-fail");
+    expect(text).toContain("pa-remote-hook listen-start");
     expect((await fs.stat(cfgFile)).mode & 0o777).toBe(0o600);
   });
 
@@ -119,13 +129,14 @@ describe("installClaudeRemoteConfig", () => {
       "mcp__pa__remote_session_detach",
     ]);
     expect(first.allowAdded[".claude/settings.json"]).toHaveLength(3);
-    expect(commands("StopFailure")).toEqual(["pa claude-remote-hook StopFailure"]);
+    expect(commands("StopFailure")).toEqual(["pa-remote-hook listen-fail"]);
+    expect(commands("UserPromptSubmit")).toEqual(["pa-remote-hook listen-prompt"]);
     expect(merged.hooks.PostToolUse).toEqual(original.hooks.PostToolUse);
     expect(merged.hooks.SessionStart[0]).toEqual(original.hooks.SessionStart[0]);
     expect(merged.hooks.PreToolUse[0]).toEqual(original.hooks.PreToolUse[0]);
-    expect(commands("SessionStart")).toEqual(["my-start", "pa claude-remote-hook listen-start"]);
-    expect(commands("Stop")).toEqual(["pa claude-remote-hook listen-stop"]);
-    expect(commands("PreToolUse")).toEqual(["my-guard", "pa claude-remote-hook PreToolUse"]);
+    expect(commands("SessionStart")).toEqual(["my-start", "pa-remote-hook listen-start"]);
+    expect(commands("Stop")).toEqual(["pa-remote-hook listen-stop"]);
+    expect(commands("PreToolUse")).toEqual(["my-guard", "pa-remote-hook PreToolUse"]);
     expect((await fs.stat(wsFile)).mode & 0o777).toBe(0o640);
     expect((await fs.stat(cfgFile)).mode & 0o777).toBe(0o600);
 
@@ -194,6 +205,59 @@ describe("installClaudeRemoteConfig", () => {
     await fs.writeFile(wsFile, "{ broken");
     await expect(installClaudeRemoteConfig(workspace)).rejects.toThrow(/not valid JSON/);
     expect(await fs.readFile(wsFile, "utf8")).toBe("{ broken");
+  });
+
+  it("recognises edited commands and the older form, upgrades flags in place, rewrites only the identical old command", async () => {
+    const { workspace, wsFile } = await setup();
+    await fs.mkdir(path.dirname(wsFile), { recursive: true });
+    const existing = {
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "/opt/bin/pa-remote-hook listen-start --x", async: true }] }],
+        Stop: [{ hooks: [{ type: "command", command: "pa claude-remote-hook listen-stop", async: true, asyncRewake: true }] }],
+        PreToolUse: [{ hooks: [{ type: "command", command: "pa claude-remote-hook PreToolUse --edited", async: true }] }],
+        StopFailure: [{ hooks: [{ type: "command", command: "pa claude-remote-hook StopFailure", async: true }] }],
+        UserPromptSubmit: [{ hooks: [{ type: "command", command: "my-wrapper pa-remote-hook UserPromptSubmit --keep" }] }],
+      },
+    };
+    await fs.writeFile(wsFile, JSON.stringify(existing));
+    await installClaudeRemoteConfig(workspace);
+    const merged = JSON.parse(await fs.readFile(wsFile, "utf8"));
+    const all = (event: string) => merged.hooks[event].flatMap((g: { hooks: unknown[] }) => g.hooks);
+    // Edited command kept, flag added in place, no second hook.
+    expect(all("SessionStart")).toEqual([
+      { type: "command", command: "/opt/bin/pa-remote-hook listen-start --x", async: true, asyncRewake: true },
+    ]);
+    // Identical old command is rewritten to the new bin.
+    expect(all("Stop")).toEqual([{ type: "command", command: "pa-remote-hook listen-stop", async: true, asyncRewake: true }]);
+    // Edited old command is kept as it is.
+    expect(all("PreToolUse")).toEqual([{ type: "command", command: "pa claude-remote-hook PreToolUse --edited", async: true }]);
+    // The old plain StopFailure hook becomes listen-fail (no duplicate post).
+    expect(all("StopFailure")).toEqual([{ type: "command", command: "pa-remote-hook listen-fail", async: true, asyncRewake: true }]);
+    // An edited old plain hook is kept and no listen-prompt is added next to it.
+    expect(all("UserPromptSubmit")).toEqual([{ type: "command", command: "my-wrapper pa-remote-hook UserPromptSubmit --keep" }]);
+    const again = await installClaudeRemoteConfig(workspace);
+    expect(again.unchanged).toEqual([".claude/settings.json"]);
+  });
+
+  it("writes nothing when one of the files is invalid (atomic install)", async () => {
+    const { workspace, config, wsFile, cfgFile } = await setup();
+    await fs.mkdir(path.dirname(wsFile), { recursive: true });
+    await fs.mkdir(path.dirname(cfgFile), { recursive: true });
+    await fs.writeFile(wsFile, JSON.stringify({ model: "opus" }));
+    await fs.writeFile(cfgFile, JSON.stringify({ permissions: { allow: "nope" } }));
+    await expect(installClaudeRemoteConfig(workspace, config)).rejects.toThrow(/permissions.allow is not an array/);
+    expect(await fs.readFile(wsFile, "utf8")).toBe(JSON.stringify({ model: "opus" }));
+    await fs.writeFile(cfgFile, "{ broken");
+    await expect(installClaudeRemoteConfig(workspace, config)).rejects.toThrow(/not valid JSON/);
+    expect(await fs.readFile(wsFile, "utf8")).toBe(JSON.stringify({ model: "opus" }));
+  });
+
+  it("creates no missing file when another file is invalid", async () => {
+    const { workspace, config, wsFile, cfgFile } = await setup();
+    await fs.mkdir(path.dirname(wsFile), { recursive: true });
+    await fs.writeFile(wsFile, JSON.stringify({ hooks: [] }));
+    await expect(installClaudeRemoteConfig(workspace, config)).rejects.toThrow(/"hooks" is not an object/);
+    await expect(fs.stat(cfgFile)).rejects.toThrow();
   });
 
   it("only handles the workspace file when no config dir is given", async () => {

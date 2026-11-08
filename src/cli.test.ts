@@ -209,6 +209,65 @@ describe("pa init --claude-remote", () => {
     await runInit(configDir, { claudeCode: false, claudeRemote: true });
     expect(await fs.readFile(wsFile, "utf8")).toBe(before);
   });
+
+  async function setupWorkspace(): Promise<{ configDir: string; wsFile: string }> {
+    const configDir = path.join(root, "config");
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(configDir, "settings.json"),
+      JSON.stringify({ security: { workspace, dataDir: path.join(root, "data") } }),
+    );
+    const wsFile = path.join(workspace, ".claude", "settings.json");
+    await fs.mkdir(path.dirname(wsFile), { recursive: true });
+    return { configDir, wsFile };
+  }
+
+  it("keeps the user hooks, keeps the security hook first, is idempotent and recognises the old command form", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { configDir, wsFile } = await setupWorkspace();
+    const base = JSON.parse(await fs.readFile(new URL("./templates/claude-code/settings.json", import.meta.url), "utf8"));
+    const existing = {
+      ...base,
+      hooks: {
+        ...base.hooks,
+        Stop: [{ hooks: [{ type: "command", command: "my-stop-notifier" }] }],
+        SessionStart: [
+          ...base.hooks.SessionStart,
+          { hooks: [{ type: "command", command: "pa claude-remote-hook listen-start", async: true }] },
+        ],
+      },
+    };
+    await fs.writeFile(wsFile, JSON.stringify(existing));
+
+    await runInit(configDir, { claudeCode: false, claudeRemote: true });
+
+    const merged = JSON.parse(await fs.readFile(wsFile, "utf8"));
+    const commands = (event: string): string[] =>
+      merged.hooks[event].flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks.map((h) => h.command));
+    expect(commands("Stop")).toEqual(["my-stop-notifier", "pa-remote-hook listen-stop"]);
+    expect(merged.hooks.PreToolUse[0].hooks[0].command).toBe("pa claude-security-hook");
+    expect(commands("PreToolUse")).toEqual(["pa claude-security-hook", "pa-remote-hook PreToolUse"]);
+    // The old form is rewritten in place (with the flags), not duplicated.
+    expect(commands("SessionStart")).toEqual(["pa claude-context --hook-json", "pa-remote-hook listen-start"]);
+    expect(merged.hooks.SessionStart[1].hooks[0]).toMatchObject({ async: true, asyncRewake: true });
+    expect(commands("StopFailure")).toEqual(["pa-remote-hook listen-fail"]);
+    expect(merged.permissions.allow).toEqual(expect.arrayContaining(base.permissions.allow));
+
+    const before = await fs.readFile(wsFile, "utf8");
+    await runInit(configDir, { claudeCode: false, claudeRemote: true });
+    expect(await fs.readFile(wsFile, "utf8")).toBe(before);
+  });
+
+  it("pa init --claude-code alone installs no remote hooks", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const { configDir, wsFile } = await setupWorkspace();
+    await runInit(configDir, { claudeCode: true });
+    const text = await fs.readFile(wsFile, "utf8");
+    expect(text).toContain("pa claude-security-hook");
+    expect(text).not.toContain("remote-hook");
+    expect(text).not.toContain("remote_session");
+  });
 });
 
 describe("runEpisodeEval", () => {

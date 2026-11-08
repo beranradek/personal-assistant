@@ -127,6 +127,17 @@ describe("remote routes", () => {
       expect(JSON.parse(res.body)).toEqual({ messages: [{ msgId: 1, text: "hi" }] });
     });
 
+    it("caps cwd at 300 and name at 80 characters", async () => {
+      const long = `/poll?pid=5&cwd=${"c".repeat(500)}&name=${"n".repeat(200)}`;
+      const pending = request(port, "GET", `/remote${long}`, { headers: AUTH });
+      await vi.waitFor(() => expect(bridge.pollArgs).toHaveLength(1));
+      expect(bridge.pollArgs[0]!.cwd).toHaveLength(300);
+      expect(bridge.pollArgs[0]!.name).toHaveLength(80);
+      // Finish the long poll so the client promise does not reject when the server closes.
+      bridge.resolvePoll({ kind: "timeout" });
+      await pending;
+    });
+
     it("returns 204 on timeout and 204 with X-Remote-Replaced when replaced", async () => {
       let pending = request(port, "GET", "/remote/poll?pid=1", { headers: AUTH });
       await vi.waitFor(() => expect(bridge.pollArgs).toHaveLength(1));
@@ -194,6 +205,12 @@ describe("remote routes", () => {
       const res = await request(port, "POST", "/remote/hook", { headers: AUTH, body });
       expect(res.status).toBe(204);
       await vi.waitFor(() => expect(bridge.handleHook).toHaveBeenCalledWith("Stop", 9, { last_assistant_message: "done" }, "/w"));
+    });
+
+    it("caps the hook cwd at 300 characters", async () => {
+      const body = JSON.stringify({ event: "Stop", pid: 9, cwd: "d".repeat(500), payload: {} });
+      await request(port, "POST", "/remote/hook", { headers: AUTH, body });
+      await vi.waitFor(() => expect(bridge.handleHook).toHaveBeenCalledWith("Stop", 9, {}, "d".repeat(300)));
     });
 
     it("answers 204 even when the bridge handler rejects", async () => {

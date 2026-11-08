@@ -17,6 +17,9 @@ import type { StreamEvent } from "../backends/interface.js";
 import { createProcessingAccumulator, type ProcessingMessageAccumulator } from "../gateway/processing-message.js";
 import {
   REMOTE_FRAME_HEADER_PREFIX,
+  REMOTE_HOOK_EVENTS,
+  REMOTE_MAX_CWD_CHARS,
+  REMOTE_MAX_NAME_CHARS,
   REMOTE_POLL_TIMEOUT_MS,
   type ForwardResult,
   type RemoteBridge,
@@ -34,9 +37,14 @@ export const REMOTE_LIVENESS_INTERVAL_MS = 30_000;
 /** Window of the per-chat rate limit. */
 const RATE_WINDOW_MS = 60_000;
 const TRUNCATION_MARKER = "\n[...message truncated]";
-const MAX_NAME_CHARS = 100;
 const MAX_NOTICE_CHARS = 300;
-const KNOWN_EVENTS = new Set(["UserPromptSubmit", "PreToolUse", "MessageDisplay", "Stop", "StopFailure", "Notification", "SessionEnd"]);
+const KNOWN_EVENTS: ReadonlySet<string> = new Set(REMOTE_HOOK_EVENTS);
+/** Delays (ms) before the 2nd and 3rd try to send the final answer. */
+const FINAL_SEND_RETRY_DELAYS_MS = [1000, 3000];
+/** Upper limit for a `retry_after` hint of Telegram (ms). */
+const MAX_RETRY_AFTER_MS = 30_000;
+/** How long (ms) a removed session pid is refused (a late poll must not bring a ghost session back). */
+const TOMBSTONE_MS = 60_000;
 /** How long (ms) a timed-out message can still be confirmed late by its UserPromptSubmit. */
 const LATE_CONFIRM_MS = 5 * 60_000;
 /** Control characters except tab and newline. */
@@ -105,12 +113,16 @@ interface Waiter {
 
 interface Turn {
   chatId: string;
+  /** True while the final answer is being sent (a second Stop must not send it again). */
+  finishing?: boolean;
   accumulator?: ProcessingMessageAccumulator;
   /** Text fed so far (used to separate message blocks). */
   lastText?: string;
 }
 
 interface Session {
+  /** Stable number shown in status (never reused). */
+  id: number;
   pid: number;
   name: string;
   cwd: string;
@@ -125,6 +137,10 @@ interface Session {
   /** Set while a Telegram-origin turn runs. Terminal turns have no turn object. */
   turn?: Turn;
   idleTimer?: unknown;
+  /** Runs while queued messages wait for a poll. */
+  queueTimer?: unknown;
+  /** True after the "not listening" notice for the current queued batch. */
+  queueWarned?: boolean;
 }
 
 function cleanText(text: string): string {
@@ -163,8 +179,11 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
   const sessions = new Map<number, Session>();
   /** chatId -> pid of the attached session (one per chat). */
   const attachments = new Map<string, number>();
+  /** pid -> expiry time (ms) of removed sessions. */
+  const tombstones = new Map<number, number>();
   const rateLog = new Map<string, number[]>();
   let nextMsgId = 1;
+  let nextSessionId = 1;
   let stopped = false;
 
   // ---- helpers ----------------------------------------------------------
@@ -178,8 +197,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
   }
 
   function listSessions(): RemoteSessionInfo[] {
-    return [...sessions.values()].map((s, i) => ({
-      index: i + 1,
+    return [...sessions.values()].map((s) => ({
+      index: s.id,
       name: s.name,
       cwd: s.cwd,
       pid: s.pid,
@@ -207,7 +226,32 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     }, remote.idleDetachMinutes * 60_000);
   }
 
+  function clearQueueTimer(s: Session): void {
+    if (s.queueTimer !== undefined) {
+      timers.clearTimeout(s.queueTimer);
+      s.queueTimer = undefined;
+    }
+  }
+
+  /** Warn once per queued batch when no poll takes the messages in time (the listener may be gone). */
+  function armQueueTimer(s: Session): void {
+    if (s.queueTimer !== undefined || s.queueWarned || s.queue.length === 0) return;
+    s.queueTimer = timers.setTimeout(() => {
+      s.queueTimer = undefined;
+      if (s.queue.length === 0 || s.waiter || s.queueWarned) return;
+      s.queueWarned = true;
+      const chatId = s.attachedChatId ?? s.queue[0]!.chatId;
+      log.warn({ pid: s.pid }, "remote bridge: queued message not taken by a poll");
+      notify(
+        chatId,
+        "The session is not listening right now (no poll). Send a prompt in the terminal or wait; your message stays queued.",
+      );
+    }, remote.deliveryTimeoutMs);
+  }
+
   function dropPending(s: Session): void {
+    clearQueueTimer(s);
+    s.queueWarned = false;
     for (const p of s.sent.values()) if (p.timer !== undefined) timers.clearTimeout(p.timer);
     s.sent.clear();
     s.late.clear();
@@ -236,11 +280,12 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       const w = s.waiter;
       s.waiter = undefined;
       w.cleanup();
-      w.resolve({ kind: "timeout" });
+      w.resolve({ kind: "replaced" });
     }
     detachSession(s);
     stopTurn(s);
     sessions.delete(s.pid);
+    tombstones.set(s.pid, now() + TOMBSTONE_MS);
     log.info({ pid: s.pid, reason }, "remote bridge: session removed");
     if (chatId !== undefined) notify(chatId, `Session ${sessionLabel(s)} ${reason}. Detached.`);
   }
@@ -282,6 +327,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
   function takeQueue(s: Session): RemoteQueuedMessage[] {
     const taken = s.queue;
     s.queue = [];
+    clearQueueTimer(s);
+    s.queueWarned = false;
     for (const item of taken) {
       const p: PendingDelivery = { msg: item.msg, chatId: item.chatId, timer: undefined };
       s.sent.set(item.msg.msgId, p);
@@ -316,6 +363,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     for (const p of s.sent.values()) known.push({ msgId: p.msg.msgId, chatId: p.chatId });
     for (const e of s.late.values()) known.push({ msgId: e.msg.msgId, chatId: e.chatId });
     const hits = known.filter((c) => prompt.includes(`${REMOTE_FRAME_HEADER_PREFIX}${c.msgId}]`));
+    if (hits.length === 0 && s.turn) {
+      notify(s.turn.chatId, "Turn ended: a prompt was typed in the terminal.");
+    }
     stopTurn(s); // a turn that is still set here is stale (no Stop after interrupt or error)
     if (hits.length === 0) return;
     for (const h of hits) {
@@ -365,24 +415,58 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     if (turn) notify(turn.chatId, "Turn failed in the session (API error).");
   }
 
-  async function onStop(s: Session, payload: Record<string, unknown>): Promise<void> {
-    const turn = s.turn;
-    if (!turn) return; // terminal turn: nothing goes to Telegram
-    s.turn = undefined; // exactly once
-    const final = firstString(payload, ["last_assistant_message"])?.trim() ?? "";
-    if (turn.accumulator) {
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      timers.setTimeout(resolve, ms);
+    });
+  }
+
+  /** Telegram "retry after N seconds" hint (grammY GrammyError has `parameters.retry_after`). */
+  function retryAfterMs(err: unknown): number | undefined {
+    const params = (err as { parameters?: { retry_after?: unknown } } | null)?.parameters;
+    const sec = params?.retry_after;
+    return typeof sec === "number" && sec > 0 ? Math.min(sec * 1000, MAX_RETRY_AFTER_MS) : undefined;
+  }
+
+  /** Send the final answer. Up to 3 tries, then a best effort notice. */
+  async function sendFinal(s: Session, chatId: string, text: string): Promise<void> {
+    const attempts = FINAL_SEND_RETRY_DELAYS_MS.length + 1;
+    for (let i = 0; i < attempts; i++) {
       try {
-        await turn.accumulator.stop();
-        if (final) await turn.accumulator.trimSuffixFromProcessingMessage(final);
+        await sender.sendMessage(chatId, text);
+        return;
       } catch (err) {
-        log.error({ err, pid: s.pid }, "remote bridge: progress finalize failed");
+        log.error({ err, pid: s.pid, attempt: i + 1 }, "remote bridge: final answer send failed");
+        if (i === attempts - 1 || stopped) break;
+        await sleep(retryAfterMs(err) ?? FINAL_SEND_RETRY_DELAYS_MS[i]!);
+        if (stopped) break;
       }
     }
-    const text = final || "(The session finished without a text answer.)";
     try {
-      await sender.sendMessage(turn.chatId, deps.redact ? deps.redact(text) : text);
-    } catch (err) {
-      log.error({ err, pid: s.pid }, "remote bridge: final answer send failed");
+      await sender.sendMessage(chatId, "Answer could not be delivered (Telegram error).");
+    } catch {
+      // Best effort only.
+    }
+  }
+
+  async function onStop(s: Session, payload: Record<string, unknown>): Promise<void> {
+    const turn = s.turn;
+    if (!turn || turn.finishing) return; // terminal turn: nothing goes to Telegram. Or a second Stop: send once.
+    turn.finishing = true;
+    const final = firstString(payload, ["last_assistant_message"])?.trim() ?? "";
+    try {
+      if (turn.accumulator) {
+        try {
+          await turn.accumulator.stop();
+          if (final) await turn.accumulator.trimSuffixFromProcessingMessage(final);
+        } catch (err) {
+          log.error({ err, pid: s.pid }, "remote bridge: progress finalize failed");
+        }
+      }
+      const text = final || "(The session finished without a text answer.)";
+      await sendFinal(s, turn.chatId, deps.redact ? deps.redact(text) : text);
+    } finally {
+      if (s.turn === turn) s.turn = undefined;
     }
   }
 
@@ -391,13 +475,19 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       if (stopped || !KNOWN_EVENTS.has(event)) return;
       const s = sessions.get(pid);
       if (!s) return;
-      if (typeof cwd === "string" && cwd) s.cwd = cleanText(cwd);
+      if (typeof cwd === "string" && cwd) s.cwd = cleanText(cwd).slice(0, REMOTE_MAX_CWD_CHARS);
       const data = asRecord(payload);
+      // Subagent events carry an agent_id. They never start or end a turn.
+      const isSubagent = firstString(data, ["agent_id"]) !== undefined;
 
       if (event === "SessionEnd") {
+        // /clear and --resume end the old session and start a new one in the same process.
+        const reason = data["reason"];
+        if (reason === "clear" || reason === "resume") return;
         removeSession(s, "ended");
         return;
       }
+      if (isSubagent && (event === "UserPromptSubmit" || event === "Stop" || event === "StopFailure")) return;
 
       switch (event) {
         case "UserPromptSubmit":
@@ -407,16 +497,17 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
           if (!s.turn) return;
           const toolName = firstString(data, ["tool_name"]);
           if (!toolName) return;
-          const events: StreamEvent[] = [{ type: "tool_start", toolName }];
+          const shownName = isSubagent ? `(subagent) ${toolName}` : toolName;
+          const events: StreamEvent[] = [{ type: "tool_start", toolName: shownName }];
           const input = data["tool_input"];
           if (input !== null && typeof input === "object" && !Array.isArray(input)) {
-            events.push({ type: "tool_input", toolName, input: input as Record<string, unknown> });
+            events.push({ type: "tool_input", toolName: shownName, input: input as Record<string, unknown> });
           }
           feed(s.turn, events);
           return;
         }
         case "MessageDisplay": {
-          if (!s.turn) return;
+          if (!s.turn || isSubagent) return;
           const text = firstString(data, ["delta", "text", "message", "content", "last_assistant_message"]);
           if (text) feed(s.turn, [{ type: "text_delta", text }]);
           return;
@@ -452,11 +543,17 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     const { pid, signal } = args;
     if (stopped || signal.aborted) return Promise.resolve({ kind: "timeout" });
 
-    const cwd = cleanText(args.cwd ?? "");
-    const name = cleanText(args.name || path.basename(cwd) || `pid-${pid}`).slice(0, MAX_NAME_CHARS);
+    const tombstone = tombstones.get(pid);
+    if (tombstone !== undefined) {
+      if (tombstone > now()) return Promise.resolve({ kind: "replaced" });
+      tombstones.delete(pid);
+    }
+
+    const cwd = cleanText(args.cwd ?? "").slice(0, REMOTE_MAX_CWD_CHARS);
+    const name = cleanText(args.name || path.basename(cwd) || `pid-${pid}`).slice(0, REMOTE_MAX_NAME_CHARS);
     let s = sessions.get(pid);
     if (!s) {
-      s = { pid, name, cwd, queue: [], sent: new Map(), late: new Map(), busy: false };
+      s = { id: nextSessionId++, pid, name, cwd, queue: [], sent: new Map(), late: new Map(), busy: false };
       sessions.set(pid, s);
       log.info({ pid, name, cwd }, "remote bridge: session registered");
     } else {
@@ -464,6 +561,13 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       s.cwd = cwd;
     }
     const session = s;
+
+    // A poll means the listener was re-armed (Stop, StopFailure or UserPromptSubmit hook). Without a Telegram turn
+    // a "busy" flag is stale (for example after Esc: no Stop hook runs).
+    if (session.busy && !session.turn) {
+      session.busy = false;
+      rearmPending(session);
+    }
 
     if (session.waiter) {
       const old = session.waiter;
@@ -522,6 +626,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     const msgId = nextMsgId++;
     s.queue.push({ msg: { msgId, text: clean }, chatId });
     armIdleTimer(s);
+    armQueueTimer(s);
     log.info({ chatId, pid: s.pid, msgId, chars: clean.length }, "remote bridge: message forwarded to session queue");
     wakeWaiter(s);
     return { accepted: true, msgId };
@@ -538,7 +643,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       return { error: "Several sessions found. Choose one by number or name (see status)." };
     }
     if (/^\d+$/.test(t)) {
-      const s = all[Number(t) - 1];
+      const s = all.find((x) => x.id === Number(t));
       return s ? { session: s } : { error: `No session with index ${t}.` };
     }
     const byName = all.filter((s) => s.name === t);
@@ -621,6 +726,15 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       }
       if (!alive) removeSession(s, "process is gone");
     }
+    for (const pid of [...tombstones.keys()]) {
+      let alive = true;
+      try {
+        alive = isPidAlive(pid);
+      } catch {
+        // Keep the tombstone until it expires.
+      }
+      if (!alive || (tombstones.get(pid) ?? 0) <= now()) tombstones.delete(pid);
+    }
   }, REMOTE_LIVENESS_INTERVAL_MS);
   // Do not keep the Node process alive for the check (real timers only).
   (livenessTimer as { unref?: () => void } | undefined)?.unref?.();
@@ -640,6 +754,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       dropPending(s);
       stopTurn(s);
     }
+    tombstones.clear();
     sessions.clear();
     attachments.clear();
   }

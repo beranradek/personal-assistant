@@ -68,6 +68,21 @@ describe("findClaudePid", () => {
     }
   });
 
+  it("returns undefined for a headless claude run (-p, --print, --output-format)", () => {
+    for (const flags of [["-p", "hi"], ["--print", "hi"], ["--output-format", "json"], ["--output-format=json"]]) {
+      const read = reader([
+        { pid: 30, ppid: 20, comm: "sh", cmdline: ["sh"] },
+        { pid: 20, ppid: 1, comm: "claude", cmdline: ["claude", "--model", "x", ...flags] },
+      ]);
+      expect(findClaudePid(30, read), flags.join(" ")).toBeUndefined();
+    }
+    const interactive = reader([
+      { pid: 30, ppid: 20, comm: "sh", cmdline: ["sh"] },
+      { pid: 20, ppid: 1, comm: "claude", cmdline: ["claude", "--model", "x", "--resume"] },
+    ]);
+    expect(findClaudePid(30, interactive)).toBe(20);
+  });
+
   it("never matches a terminal emulator, tmux or a shell that only mentions claude", () => {
     const cases: [string, string[]][] = [
       ["tmux: server", ["tmux", "new-session", "-d", "claude"]],

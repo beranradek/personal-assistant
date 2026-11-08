@@ -31,7 +31,21 @@ import type { RemoteControlAction, RemoteControlResponse } from "./remote/protoc
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude-security-hook", "claude-remote-hook", "remote", "claude", "agents-view"] as const;
+const VALID_COMMANDS = [
+  "terminal",
+  "daemon",
+  "init",
+  "mcp-server",
+  "integapi",
+  "reflect",
+  "episode-eval",
+  "claude-context",
+  "claude-security-hook",
+  "claude-remote-hook",
+  "remote",
+  "claude",
+  "agents-view",
+] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /** Options whose value must not be mistaken for a command (for example `--assistant claude`). */
@@ -122,7 +136,9 @@ export async function runInit(configDir: string, options: { claudeCode: boolean;
     for (const [file, entries] of Object.entries(result.allowAdded)) {
       if (entries.length > 0) console.log(`Claude remote allow entries added to ${file}: ${entries.join(", ")}`);
     }
-    if (result.unchanged.length > 0) console.log(`Claude remote hooks and allow entries already present in: ${result.unchanged.join(", ")}`);
+    if (result.unchanged.length > 0) {
+      console.log(`Claude remote hooks and allow entries already present in: ${result.unchanged.join(", ")}`);
+    }
   }
 }
 
@@ -183,14 +199,9 @@ async function runRemote(configDir: string, args: string[]): Promise<void> {
 
 /** Hook entry point. Never writes to stdout. The exit code tells Claude Code what to do (2 = wake the session). */
 async function runClaudeRemoteHookCommand(configDir: string, args: string[]): Promise<void> {
-  const controller = new AbortController();
-  const stop = () => controller.abort();
-  process.once("SIGTERM", stop);
-  process.once("SIGINT", stop);
   try {
-    const { runClaudeRemoteHook, createDefaultRemoteHookDeps } = await import("./claude/remote-hook.js");
-    const deps = { ...createDefaultRemoteHookDeps(controller.signal), configDir };
-    process.exitCode = await runClaudeRemoteHook(commandArgs(args, "claude-remote-hook"), deps);
+    const { runRemoteHookEntry } = await import("./claude/remote-hook.js");
+    process.exitCode = await runRemoteHookEntry(commandArgs(args, "claude-remote-hook"), configDir);
   } catch {
     process.exitCode = 0;
   }

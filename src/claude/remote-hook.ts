@@ -1,18 +1,22 @@
 /**
- * `pa claude-remote-hook <event>` - hook command for the remote interactive session feature.
+ * `pa-remote-hook <mode>` (or `pa claude-remote-hook <mode>`) - hook command for the remote interactive session feature.
  *
- * Claude Code runs this command as an async hook. Events:
- * - `listen-start` (SessionStart, asyncRewake) and `listen-stop` (Stop, asyncRewake): long poll the PA daemon. When a
- *   Telegram message arrives, print the framed text to stderr and return exit code 2 (this wakes the idle session).
- *   `listen-stop` first posts the Stop payload to the daemon.
+ * Claude Code runs this command as an async hook. Modes:
+ * - Listen modes (asyncRewake): long poll the PA daemon. When a Telegram message arrives, print the framed text to stderr
+ *   and return exit code 2 (this wakes the idle session). The modes differ in what they post first:
+ *   `listen-start` (SessionStart): nothing. `listen-stop` (Stop): Stop. `listen-fail` (StopFailure): StopFailure.
+ *   `listen-prompt` (UserPromptSubmit): UserPromptSubmit. The bridge keeps one poller per pid (a new poll replaces the old),
+ *   so these extra listeners re-arm the poll after an interrupt.
  * - Plain events (UserPromptSubmit, PreToolUse, MessageDisplay, Notification, StopFailure, SessionEnd): post and return 0.
+ *   They stay accepted for old settings files. SessionEnd with reason clear or resume is not posted (same claude pid).
+ * - Headless claude (`-p`, `--print`, `--output-format`): no claude pid is found, return 0.
  * - `PA_REMOTE_HOOKS=off` in the environment: every mode returns 0 at once, with no I/O.
  * - No claude ancestor process found: return 0 without any call to the daemon.
  * - Listen loop: no token file at start = return 0. Token lost or 401/403 later = retry up to 5 minutes. Connection
  *   errors = retry up to 30 minutes of continuous failure. The next Stop hook re-arms the listener.
  *
  * Rules: keep it light (no heavy imports), never write to stdout, never throw, return 0 on any error.
- * The function returns the exit code. The caller (cli.ts) calls process.exit.
+ * The function returns the exit code. The callers (cli.ts and remote-hook-cli.ts) set the exit code.
  * See docs/plans/active/2026-11-08-remote-interactive-session-communication/spec.md (5.1 to 5.3).
  */
 
@@ -54,8 +58,18 @@ const CONTROL_CHARS = new RegExp(
 
 export const PLAIN_EVENTS = ["UserPromptSubmit", "PreToolUse", "MessageDisplay", "Notification", "StopFailure", "SessionEnd"] as const;
 
+/** Events a listen mode posts before it polls. */
+export type ListenPostEvent = "Stop" | "StopFailure" | "UserPromptSubmit";
+
+const LISTEN_MODES: Record<string, ListenPostEvent | undefined> = {
+  "listen-start": undefined,
+  "listen-stop": "Stop",
+  "listen-fail": "StopFailure",
+  "listen-prompt": "UserPromptSubmit",
+};
+
 export type RemoteHookMode =
-  | { kind: "listen"; postStop: boolean }
+  | { kind: "listen"; postEvent?: ListenPostEvent }
   | { kind: "plain"; event: (typeof PLAIN_EVENTS)[number] };
 
 export interface RemoteHookDeps {
@@ -87,8 +101,10 @@ export interface RemoteHookDeps {
 /** Parse the CLI args after `claude-remote-hook`. Returns undefined for an unknown event. */
 export function parseRemoteHookArgs(args: string[]): RemoteHookMode | undefined {
   const event = args[0];
-  if (event === "listen-start") return { kind: "listen", postStop: false };
-  if (event === "listen-stop") return { kind: "listen", postStop: true };
+  if (event !== undefined && Object.hasOwn(LISTEN_MODES, event)) {
+    const postEvent = LISTEN_MODES[event];
+    return postEvent ? { kind: "listen", postEvent } : { kind: "listen" };
+  }
   const plain = PLAIN_EVENTS.find((e) => e === event);
   return plain ? { kind: "plain", event: plain } : undefined;
 }
@@ -101,7 +117,7 @@ export function sanitizeFrameText(text: string): string {
   const clean = text
     .replace(/\r\n?/g, "\n")
     .replace(CONTROL_CHARS, "")
-    .replace(/^\[(?=Telegram message from the user)/gm, "(")
+    .replace(/\[(?=Telegram message from the user)/g, "(")
     .replace(/<(?=\/?(?:system-reminder|task-notification))/gi, "< ");
   return clean.length > MAX_FRAME_TEXT_CHARS ? `${clean.slice(0, MAX_FRAME_TEXT_CHARS)}\n[truncated]` : clean;
 }
@@ -140,6 +156,12 @@ async function readPayload(deps: RemoteHookDeps): Promise<unknown> {
   } catch {
     return {};
   }
+}
+
+/** SessionEnd with reason clear or resume: the same claude process keeps running. */
+function isSessionContinues(payload: unknown): boolean {
+  const reason = (payload as { reason?: unknown } | null)?.reason;
+  return reason === "clear" || reason === "resume";
 }
 
 function payloadCwd(payload: unknown, fallback: string): string {
@@ -268,14 +290,32 @@ export async function runClaudeRemoteHook(args: string[], deps: RemoteHookDeps):
     const pid = deps.findClaudePid();
     if (!pid) return 0;
     const payload = await readPayload(deps);
+    if (mode.kind === "plain" && mode.event === "SessionEnd" && isSessionContinues(payload)) return 0;
     const cwd = payloadCwd(payload, deps.cwd());
     const base = `http://127.0.0.1:${readPort(deps, configDir)}`;
     if (mode.kind === "plain") {
       await postHook(deps, base, token, { event: mode.event, pid, cwd, payload });
       return 0;
     }
-    if (mode.postStop) await postHook(deps, base, token, { event: "Stop", pid, cwd, payload });
+    if (mode.postEvent) await postHook(deps, base, token, { event: mode.postEvent, pid, cwd, payload });
     return await listen(deps, base, tokenPath, pid, cwd);
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Shared entry for `pa-remote-hook` and `pa claude-remote-hook`. Sets up SIGTERM/SIGINT abort and returns the exit code.
+ * Never throws, never writes to stdout.
+ */
+export async function runRemoteHookEntry(args: string[], configDir?: string): Promise<number> {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
+  try {
+    const deps = createDefaultRemoteHookDeps(controller.signal);
+    return await runClaudeRemoteHook(args, configDir ? { ...deps, configDir } : deps);
   } catch {
     return 0;
   }

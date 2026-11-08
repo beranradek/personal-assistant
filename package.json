@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "bin": {
-    "pa": "./dist/cli.js"
+    "pa": "./dist/cli.js",
+    "pa-remote-hook": "./dist/claude/remote-hook-cli.js"
   },
   "scripts": {
     "terminal": "tsx src/terminal.ts",

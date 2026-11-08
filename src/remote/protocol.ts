@@ -26,14 +26,21 @@ export const REMOTE_FRAME_HEADER_PREFIX = "[Telegram message from the user, id "
 export const REMOTE_HOOKS_DISABLE_ENV = "PA_REMOTE_HOOKS";
 
 /** Hook events the bridge understands (other events are ignored). */
-export type RemoteHookEvent =
-  | "UserPromptSubmit"
-  | "PreToolUse"
-  | "MessageDisplay"
-  | "Stop"
-  | "StopFailure"
-  | "Notification"
-  | "SessionEnd";
+export const REMOTE_HOOK_EVENTS = [
+  "UserPromptSubmit",
+  "PreToolUse",
+  "MessageDisplay",
+  "Stop",
+  "StopFailure",
+  "Notification",
+  "SessionEnd",
+] as const;
+
+export type RemoteHookEvent = (typeof REMOTE_HOOK_EVENTS)[number];
+
+/** Max length of the session working directory and name kept by the daemon. */
+export const REMOTE_MAX_CWD_CHARS = 300;
+export const REMOTE_MAX_NAME_CHARS = 80;
 
 export interface RemoteQueuedMessage {
   /** Bridge-wide increasing id, shown to the model as `id N`. */
@@ -44,14 +51,6 @@ export interface RemoteQueuedMessage {
 /** Body of `200` answer of `GET /remote/poll`. */
 export interface RemotePollResponse {
   messages: RemoteQueuedMessage[];
-}
-
-/** Body of `POST /remote/hook`. `payload` is the raw hook JSON from Claude Code (shape not guaranteed). */
-export interface RemoteHookRequest {
-  event: string;
-  pid: number;
-  cwd?: string;
-  payload: unknown;
 }
 
 export type RemoteControlAction = "attach" | "detach" | "status";
@@ -66,7 +65,7 @@ export interface RemoteControlRequest {
 }
 
 export interface RemoteSessionInfo {
-  /** 1-based index used by `/attach <n>`. */
+  /** Stable session number (grows with each registration, never reused). Used by `/attach <n>`. */
   index: number;
   name: string;
   cwd: string;

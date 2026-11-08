@@ -10,7 +10,13 @@
 import type http from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createLogger } from "../core/logger.js";
-import type { RemoteBridge, RemoteControlAction, RemoteControlRequest } from "./protocol.js";
+import {
+  REMOTE_MAX_CWD_CHARS,
+  REMOTE_MAX_NAME_CHARS,
+  type RemoteBridge,
+  type RemoteControlAction,
+  type RemoteControlRequest,
+} from "./protocol.js";
 
 const log = createLogger("remote-routes");
 
@@ -77,8 +83,8 @@ async function handlePoll(req: http.IncomingMessage, res: http.ServerResponse, u
     sendError(res, 400, "Invalid pid");
     return;
   }
-  const cwd = url.searchParams.get("cwd") ?? "";
-  const name = url.searchParams.get("name") ?? "";
+  const cwd = (url.searchParams.get("cwd") ?? "").slice(0, REMOTE_MAX_CWD_CHARS);
+  const name = (url.searchParams.get("name") ?? "").slice(0, REMOTE_MAX_NAME_CHARS);
 
   // The response closes before it ends only when the client went away (for example the hook process was killed).
   // `req` 'close' is not used: it also fires when the request body ends.
@@ -115,7 +121,7 @@ async function handleHook(req: http.IncomingMessage, res: http.ServerResponse, b
     return;
   }
   const event = body["event"];
-  const cwd = typeof body["cwd"] === "string" ? body["cwd"] : undefined;
+  const cwd = typeof body["cwd"] === "string" ? body["cwd"].slice(0, REMOTE_MAX_CWD_CHARS) : undefined;
   // Answer at once: the hook must never wait for the bridge.
   res.writeHead(204);
   res.end();

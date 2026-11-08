@@ -6,12 +6,6 @@
           {
             "type": "command",
             "command": "pa claude-context --hook-json"
-          },
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook listen-start",
-            "async": true,
-            "asyncRewake": true
           }
         ]
       }
@@ -23,82 +17,6 @@
           {
             "type": "command",
             "command": "pa claude-security-hook"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook PreToolUse",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook listen-stop",
-            "async": true,
-            "asyncRewake": true
-          }
-        ]
-      }
-    ],
-    "StopFailure": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook StopFailure",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook UserPromptSubmit",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "MessageDisplay": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook MessageDisplay",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook Notification",
-            "async": true
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pa claude-remote-hook SessionEnd",
-            "async": true
           }
         ]
       }
@@ -131,9 +49,6 @@
       "mcp__pa__agent_session_start",
       "mcp__pa__agent_session_send",
       "mcp__pa__agent_session_interrupt",
-      "mcp__pa__remote_session_status",
-      "mcp__pa__remote_session_attach",
-      "mcp__pa__remote_session_detach",
       "Bash(*)",
       "Read",
       "Edit",

@@ -475,6 +475,7 @@ describe("RemoteBridge", () => {
     it("confirms all ids found in one prompt", async () => {
       const h = setup({ deliveryTimeoutMs: 1000 });
       await deliver(h, ["a", "b"]);
+      await startPoll(h.bridge).promise; // takes "b" (the first poll got only "a")
       h.sender.sendMessage.mockClear();
       await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: framePrompt(1, 2) });
       await vi.advanceTimersByTimeAsync(5000);
@@ -610,7 +611,10 @@ describe("RemoteBridge", () => {
       await startTelegramTurn(h);
       await h.bridge.handleHook("PreToolUse", 100, { tool_name: "Bash", tool_input: { command: "sleep 100" } });
       // user interrupts: no Stop event. Then types in the terminal.
+      h.sender.sendMessage.mockClear();
       await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: "new terminal prompt" });
+      expect(h.sender.sendMessage).toHaveBeenCalledWith(CHAT, "Turn ended: a prompt was typed in the terminal.");
+      h.sender.sendMessage.mockClear();
       await h.bridge.handleHook("PreToolUse", 100, { tool_name: "Read", tool_input: { file_path: "/x" } });
       await vi.advanceTimersByTimeAsync(10_000);
       await h.bridge.handleHook("Stop", 100, { last_assistant_message: "terminal answer" });
@@ -661,10 +665,11 @@ describe("RemoteBridge", () => {
       fake.aborted = true;
       h.bridge.forward(CHAT, "keep me");
       expect(await first).toEqual({ kind: "timeout" });
-      // the message was not marked sent: no delivery timeout notice
+      // the message was not marked sent: no delivery timeout notice (only the "not listening" notice, once)
       h.sender.sendMessage.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(h.sender.sendMessage).not.toHaveBeenCalled();
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(1);
+      expect(h.sender.sendMessage.mock.calls[0][1]).toMatch(/not listening/);
       const r = await startPoll(h.bridge).promise;
       expect(r).toEqual({ kind: "messages", messages: [{ msgId: 1, text: "keep me" }] });
       h.bridge.stop();
@@ -834,7 +839,7 @@ describe("RemoteBridge", () => {
       expect(h.bridge.isAttached(CHAT)).toBe(false);
       expect((await h.bridge.control({ action: "status", chatId: CHAT })).sessions).toEqual([]);
       expect(h.sender.sendMessage).toHaveBeenCalledWith(CHAT, expect.stringMatching(/ended/));
-      expect(await p.promise).toEqual({ kind: "timeout" });
+      expect(await p.promise).toEqual({ kind: "replaced" });
       h.bridge.stop();
     });
 
@@ -915,6 +920,213 @@ describe("RemoteBridge", () => {
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(h.sender.sendMessage).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe("round 2 fixes", () => {
+    async function telegramTurn(h: Harness, pid = 100) {
+      const p = startPoll(h.bridge, pid);
+      await attach(h.bridge);
+      h.bridge.forward(CHAT, "work");
+      await p.promise;
+      await h.bridge.handleHook("UserPromptSubmit", pid, { prompt: framePrompt(1) });
+      h.sender.sendMessage.mockClear();
+    }
+
+    it("warns once when a queued message is not taken by a poll, and keeps it queued", async () => {
+      const h = setup({ deliveryTimeoutMs: 1000 });
+      const p = startPoll(h.bridge);
+      await attach(h.bridge);
+      h.bridge.forward(CHAT, "one"); // the waiter takes it at once
+      await p.promise;
+      await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: framePrompt(1) });
+      await h.bridge.handleHook("Stop", 100, { last_assistant_message: "ok" });
+      h.sender.sendMessage.mockClear();
+      h.bridge.forward(CHAT, "two"); // no waiter now
+      await vi.advanceTimersByTimeAsync(999);
+      expect(h.sender.sendMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(1);
+      expect(h.sender.sendMessage.mock.calls[0][1]).toMatch(/not listening right now/);
+      h.bridge.forward(CHAT, "three");
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(1); // once per batch
+      const r = await startPoll(h.bridge).promise;
+      expect(r).toEqual({
+        kind: "messages",
+        messages: [expect.objectContaining({ text: "two" }), expect.objectContaining({ text: "three" })],
+      });
+      h.bridge.stop();
+    });
+
+    it("does not warn when a poll takes the message in time", async () => {
+      const h = setup({ deliveryTimeoutMs: 1000 });
+      const ctrl = new AbortController();
+      startPoll(h.bridge, 100, "ws", ctrl.signal);
+      await attach(h.bridge);
+      ctrl.abort(); // the first poll ends: no waiter
+      h.bridge.forward(CHAT, "x"); // queued
+      h.sender.sendMessage.mockClear();
+      await vi.advanceTimersByTimeAsync(500);
+      await startPoll(h.bridge).promise; // takes it
+      await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: framePrompt(1) });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(h.sender.sendMessage).not.toHaveBeenCalled();
+      h.bridge.stop();
+    });
+
+    it("a poll clears a stale busy flag (no Stop after Esc), so delivery timers run again", async () => {
+      const h = setup({ deliveryTimeoutMs: 1000 });
+      const p = startPoll(h.bridge);
+      await attach(h.bridge);
+      await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: "terminal work" }); // busy, then Esc: no Stop
+      h.bridge.forward(CHAT, "hello");
+      await p.promise;
+      h.sender.sendMessage.mockClear();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(h.sender.sendMessage).not.toHaveBeenCalled(); // still busy: timer paused
+      startPoll(h.bridge); // listener re-armed
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(h.sender.sendMessage).toHaveBeenCalledWith(CHAT, expect.stringMatching(/Not delivered/));
+      h.bridge.stop();
+    });
+
+    it("retries the final answer and sends it on the 3rd try (1 s, 3 s delays)", async () => {
+      const h = setup();
+      await telegramTurn(h);
+      h.sender.sendMessage.mockRejectedValueOnce(new Error("net")).mockRejectedValueOnce(new Error("net"));
+      const done = h.bridge.handleHook("Stop", 100, { last_assistant_message: "answer" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(3);
+      expect(h.sender.sendMessage).toHaveBeenLastCalledWith(CHAT, "answer");
+      h.bridge.stop();
+    });
+
+    it("sends a failure notice when all 3 tries fail, and honours retry_after", async () => {
+      const h = setup();
+      await telegramTurn(h);
+      const err = Object.assign(new Error("429"), { parameters: { retry_after: 7 } });
+      h.sender.sendMessage.mockRejectedValueOnce(err).mockRejectedValueOnce(new Error("x")).mockRejectedValueOnce(new Error("x"));
+      const done = h.bridge.handleHook("Stop", 100, { last_assistant_message: "answer" });
+      await vi.advanceTimersByTimeAsync(6999);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(3000);
+      await done;
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(4);
+      expect(h.sender.sendMessage).toHaveBeenLastCalledWith(CHAT, "Answer could not be delivered (Telegram error).");
+      h.bridge.stop();
+    });
+
+    it("a second Stop during the retries does not send a second answer", async () => {
+      const h = setup();
+      await telegramTurn(h);
+      h.sender.sendMessage.mockRejectedValueOnce(new Error("net"));
+      const first = h.bridge.handleHook("Stop", 100, { last_assistant_message: "answer" });
+      await vi.advanceTimersByTimeAsync(0);
+      await h.bridge.handleHook("Stop", 100, { last_assistant_message: "answer" });
+      await vi.advanceTimersByTimeAsync(1000);
+      await first;
+      expect(h.sender.sendMessage).toHaveBeenCalledTimes(2);
+      h.bridge.stop();
+    });
+
+    it("SessionEnd resolves a pending waiter with replaced and a late poll of the pid is replaced (tombstone)", async () => {
+      const h = setup();
+      const p = startPoll(h.bridge);
+      await h.bridge.handleHook("SessionEnd", 100, { reason: "other" });
+      expect(await p.promise).toEqual({ kind: "replaced" });
+      expect(await startPoll(h.bridge).promise).toEqual({ kind: "replaced" });
+      expect((await h.bridge.control({ action: "status", chatId: CHAT })).sessions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(60_001);
+      startPoll(h.bridge); // tombstone expired: registers again
+      expect((await h.bridge.control({ action: "status", chatId: CHAT })).sessions).toHaveLength(1);
+      h.bridge.stop();
+    });
+
+    it("the liveness check clears a tombstone when the pid is dead", async () => {
+      const h = setup();
+      startPoll(h.bridge);
+      await h.bridge.handleHook("SessionEnd", 100, {});
+      h.alive.delete(100);
+      await vi.advanceTimersByTimeAsync(REMOTE_LIVENESS_INTERVAL_MS);
+      h.alive.add(100); // the pid is reused by a new process
+      startPoll(h.bridge);
+      expect((await h.bridge.control({ action: "status", chatId: CHAT })).sessions).toHaveLength(1);
+      h.bridge.stop();
+    });
+
+    it.each(["clear", "resume"])("ignores SessionEnd with reason %s", async (reason) => {
+      const h = setup();
+      startPoll(h.bridge);
+      await attach(h.bridge);
+      await h.bridge.handleHook("SessionEnd", 100, { reason });
+      expect(h.bridge.isAttached(CHAT)).toBe(true);
+      expect((await h.bridge.control({ action: "status", chatId: CHAT })).sessions).toHaveLength(1);
+      h.bridge.stop();
+    });
+
+    it("session numbers are stable: not reused and not shifted after a removal", async () => {
+      const h = setup();
+      startPoll(h.bridge, 100, "a");
+      startPoll(h.bridge, 200, "b");
+      await h.bridge.handleHook("SessionEnd", 100, {});
+      const status = await h.bridge.control({ action: "status", chatId: CHAT });
+      expect(status.sessions.map((s) => s.index)).toEqual([2]);
+      expect(status.message).toContain("2. b");
+      h.alive.add(300);
+      startPoll(h.bridge, 300, "c");
+      const res = await attach(h.bridge, "3");
+      expect(res.sessions.find((s) => s.attachedChatId)?.pid).toBe(300);
+      expect((await attach(h.bridge, "1")).ok).toBe(false);
+      h.bridge.stop();
+    });
+
+    it("subagent events: MessageDisplay ignored, PreToolUse prefixed, no turn start or end", async () => {
+      const h = setup();
+      await telegramTurn(h);
+      await h.bridge.handleHook("MessageDisplay", 100, { delta: "sub text", agent_id: "ag1" });
+      await h.bridge.handleHook("PreToolUse", 100, { tool_name: "Grep", tool_input: { pattern: "x" }, agent_id: "ag1" });
+      await h.bridge.handleHook("Stop", 100, { last_assistant_message: "sub done", agent_id: "ag1" });
+      await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: "sub prompt", agent_id: "ag1" });
+      await vi.advanceTimersByTimeAsync(5000);
+      const text = h.sender.createProcessingMessage.mock.calls[0][1] as string;
+      expect(text).toContain("(subagent) Grep");
+      expect(text).not.toContain("sub text");
+      expect(h.sender.sendMessage).not.toHaveBeenCalled();
+      await h.bridge.handleHook("Stop", 100, { last_assistant_message: "real answer" });
+      expect(h.sender.sendMessage).toHaveBeenCalledWith(CHAT, "real answer");
+      h.bridge.stop();
+    });
+
+    it("caps cwd at 300 and name at 80 characters", async () => {
+      const h = setup();
+      void h.bridge.poll({ pid: 100, cwd: "c".repeat(500), name: "n".repeat(200), signal: new AbortController().signal });
+      const s = (await h.bridge.control({ action: "status", chatId: CHAT })).sessions[0]!;
+      expect(s.cwd).toHaveLength(300);
+      expect(s.name).toHaveLength(80);
+      await h.bridge.handleHook("PreToolUse", 100, {}, "d".repeat(500));
+      expect((await h.bridge.control({ action: "status", chatId: CHAT })).sessions[0]!.cwd).toHaveLength(300);
+      h.bridge.stop();
+    });
+
+    it("does not send the terminal-prompt notice for a terminal turn", async () => {
+      const h = setup();
+      startPoll(h.bridge);
+      await attach(h.bridge);
+      h.sender.sendMessage.mockClear();
+      await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: "a" });
+      await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: "b" });
+      expect(h.sender.sendMessage).not.toHaveBeenCalled();
+      h.bridge.stop();
     });
   });
 });

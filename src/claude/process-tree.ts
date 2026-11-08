@@ -26,6 +26,7 @@ export interface ProcessInfo {
 export type ProcessReader = (pid: number) => ProcessInfo | undefined;
 
 const MAX_DEPTH = 32;
+const MAX_CMDLINE_WORDS = 256;
 const RUNTIME_NAMES = new Set(["node", "nodejs", "bun"]);
 const CLAUDE_DIRS = new Set(["claude", "claude-code"]);
 
@@ -51,7 +52,7 @@ export function createProcReader(procDir = "/proc"): ProcessReader {
       if (!parsed) return undefined;
       let cmdline: string[] = [];
       try {
-        cmdline = fs.readFileSync(`${procDir}/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).slice(0, 4);
+        cmdline = fs.readFileSync(`${procDir}/${pid}/cmdline`, "utf8").split("\0").filter(Boolean).slice(0, MAX_CMDLINE_WORDS);
       } catch {
         // cmdline is optional
       }
@@ -81,7 +82,12 @@ function isClaude(info: ProcessInfo): boolean {
   return b1 === "claude" || b1 === "claude.exe" || ((b1 === "cli.js" || b1 === "cli.mjs") && inClaudeDir(argv1));
 }
 
-/** Find the claude pid by walking up from `startPid`. Returns undefined when no ancestor is claude. */
+/** True when claude runs headless (`-p`, `--print`, `--output-format`). A headless run has no idle session to wake. */
+function isHeadless(cmdline: string[]): boolean {
+  return cmdline.some((arg) => arg === "-p" || arg === "--print" || arg === "--output-format" || arg.startsWith("--output-format="));
+}
+
+/** Find the claude pid by walking up from `startPid`. Returns undefined when no ancestor is claude or claude is headless. */
 export function findClaudePid(startPid: number, read: ProcessReader = createProcReader()): number | undefined {
   let pid = startPid;
   const seen = new Set<number>();
@@ -89,7 +95,7 @@ export function findClaudePid(startPid: number, read: ProcessReader = createProc
     seen.add(pid);
     const info = read(pid);
     if (!info) break;
-    if (isClaude(info)) return info.pid;
+    if (isClaude(info)) return isHeadless(info.cmdline) ? undefined : info.pid;
     pid = info.ppid;
   }
   return undefined;

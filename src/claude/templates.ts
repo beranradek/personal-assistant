@@ -54,9 +54,9 @@ export async function installClaudeCodeTemplates(workspaceDir: string, configDir
 }
 
 export interface ClaudeRemoteInstallResult {
-  /** Files created from the template (they did not exist). */
+  /** Files that did not exist. They were created from the base template and merged. */
   created: string[];
-  /** Files where missing remote hooks were added. */
+  /** Files where missing remote hooks or flags were added. */
   updated: string[];
   /** Files that already had all remote hooks and allow entries. */
   unchanged: string[];
@@ -65,39 +65,42 @@ export interface ClaudeRemoteInstallResult {
 }
 
 type JsonRecord = Record<string, unknown>;
+type HookEntry = [event: string, hook: JsonRecord];
 
-const REMOTE_HOOK_PREFIX = "pa claude-remote-hook";
 /** Allow entries of the remote MCP tools. The Claude Code agent must use them without a prompt. */
 const REMOTE_ALLOW_PREFIX = "mcp__pa__remote_session_";
+const REMOTE_COMMAND_RE = /(^|[\s/])(pa-remote-hook|pa claude-remote-hook)\s+(\S+)/;
+/** Older plain modes that the newer listen modes replace (same event, same posted payload). */
+const LEGACY_MODES: Record<string, string> = { "listen-fail": "StopFailure", "listen-prompt": "UserPromptSubmit" };
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Collect the hook commands of one event (all groups). */
-function commandsOf(groups: unknown[]): Set<string> {
-  const commands = new Set<string>();
-  for (const group of groups) {
-    if (!isRecord(group) || !Array.isArray(group["hooks"])) continue;
-    for (const hook of group["hooks"]) {
-      if (isRecord(hook) && typeof hook["command"] === "string") commands.add(hook["command"]);
-    }
-  }
-  return commands;
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Remote hook entries of the template: event -> hook objects whose command starts with `pa claude-remote-hook`. */
-function templateRemoteHooks(template: unknown): Array<[string, JsonRecord]> {
-  const result: Array<[string, JsonRecord]> = [];
+/** The mode (first argument) of a remote hook command, or undefined when it is not a remote hook command. */
+function remoteModeOf(command: string): string | undefined {
+  return REMOTE_COMMAND_RE.exec(command)?.[3];
+}
+
+/** Regex of a remote hook command (new or older form) for one mode. Edited paths and flags are accepted. */
+function modeRegExp(mode: string): RegExp {
+  return new RegExp(`(^|[\\s/])(pa-remote-hook|pa claude-remote-hook)\\s+${escapeRegExp(mode)}(?![\\w-])`);
+}
+
+/** Remote hook entries of a template: hook objects whose command is a remote hook command. */
+function templateRemoteHooks(template: unknown): HookEntry[] {
+  const result: HookEntry[] = [];
   const hooks = isRecord(template) && isRecord(template["hooks"]) ? template["hooks"] : {};
   for (const [event, groups] of Object.entries(hooks)) {
     if (!Array.isArray(groups)) continue;
     for (const group of groups) {
       if (!isRecord(group) || !Array.isArray(group["hooks"])) continue;
       for (const hook of group["hooks"]) {
-        if (isRecord(hook) && typeof hook["command"] === "string" && hook["command"].startsWith(REMOTE_HOOK_PREFIX)) {
-          result.push([event, hook]);
-        }
+        if (isRecord(hook) && typeof hook["command"] === "string" && remoteModeOf(hook["command"])) result.push([event, hook]);
       }
     }
   }
@@ -125,8 +128,35 @@ function mergeRemoteAllow(settings: JsonRecord, entries: string[]): string[] {
   return added;
 }
 
-/** Add missing remote hooks to a parsed settings object. Returns true when something was added. */
-function mergeRemoteHooks(settings: JsonRecord, remoteHooks: Array<[string, JsonRecord]>): boolean {
+/** All hook objects of one event (all groups) that have a string command. */
+function hookObjectsOf(groups: unknown[]): JsonRecord[] {
+  const result: JsonRecord[] = [];
+  for (const group of groups) {
+    if (!isRecord(group) || !Array.isArray(group["hooks"])) continue;
+    for (const hook of group["hooks"]) {
+      if (isRecord(hook) && typeof hook["command"] === "string") result.push(hook);
+    }
+  }
+  return result;
+}
+
+/** Set `async` and `asyncRewake` where the template has them and the existing hook does not. Returns true on a change. */
+function upgradeFlags(existing: JsonRecord, template: JsonRecord): boolean {
+  let changed = false;
+  for (const flag of ["async", "asyncRewake"]) {
+    if (template[flag] === true && existing[flag] !== true) {
+      existing[flag] = true;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Add missing remote hooks to a parsed settings object. An existing hook of the same mode is upgraded in place (flags),
+ * never duplicated. Returns true when something changed.
+ */
+function mergeRemoteHooks(settings: JsonRecord, remoteHooks: HookEntry[]): boolean {
   let changed = false;
   if (settings["hooks"] === undefined) settings["hooks"] = {};
   const hooks = settings["hooks"];
@@ -135,7 +165,35 @@ function mergeRemoteHooks(settings: JsonRecord, remoteHooks: Array<[string, Json
     if (hooks[event] === undefined) hooks[event] = [];
     const groups = hooks[event];
     if (!Array.isArray(groups)) throw new Error(`Claude settings: hooks.${event} is not an array`);
-    if (commandsOf(groups).has(hook["command"] as string)) continue;
+    const command = hook["command"] as string;
+    const mode = remoteModeOf(command) as string;
+    const legacyMode = LEGACY_MODES[mode];
+    const existing = hookObjectsOf(groups);
+    const exact = existing.filter((h) => modeRegExp(mode).test(h["command"] as string));
+    if (exact.length > 0) {
+      for (const h of exact) {
+        // Rewrite the older command form only when it is byte-identical to the old template command.
+        if (h["command"] === `pa claude-remote-hook ${mode}`) {
+          h["command"] = command;
+          changed = true;
+        }
+        if (upgradeFlags(h, hook)) changed = true;
+      }
+      continue;
+    }
+    const legacy = legacyMode ? existing.filter((h) => modeRegExp(legacyMode).test(h["command"] as string)) : [];
+    if (legacy.length > 0) {
+      // An old plain hook (for example `StopFailure`) is replaced by the listen mode, when it was not edited.
+      // An edited old hook stays as it is. No duplicate is added.
+      for (const h of legacy) {
+        if (h["command"] === `pa claude-remote-hook ${legacyMode}` || h["command"] === `pa-remote-hook ${legacyMode}`) {
+          h["command"] = command;
+          upgradeFlags(h, hook);
+          changed = true;
+        }
+      }
+      continue;
+    }
     // A new group: existing groups (for example the security hook) stay untouched.
     groups.push({ hooks: [structuredClone(hook)] });
     changed = true;
@@ -155,55 +213,80 @@ async function writeFileAtomic(filePath: string, content: string, mode: number):
   }
 }
 
+interface PlannedWrite {
+  label: string;
+  /** File to write (the real path when the target is a symlink). */
+  file: string;
+  content: string;
+  mode: number;
+  /** True when the file did not exist. */
+  isNew: boolean;
+  allowAdded: string[];
+}
+
 /**
- * Add the remote session hooks (`pa claude-remote-hook ...`) and the `mcp__pa__remote_session_*` allow entries to the workspace Claude settings and to the launcher
- * settings under `<configDir>/claude-code/`. Additive and idempotent: other keys and hooks stay as they are, an existing
- * remote hook is never duplicated, a missing file is created from the template. Writes are atomic and keep the file mode.
- * A file that is not valid JSON is not touched (an error is thrown).
+ * Add the remote session hooks (`pa-remote-hook ...`) and the `mcp__pa__remote_session_*` allow entries to the workspace
+ * Claude settings and to the launcher settings under `<configDir>/claude-code/`. The entries come from the opt-in template
+ * `remote-settings.json`. Additive and idempotent: other keys and hooks stay as they are, an existing remote hook is never
+ * duplicated (it is upgraded in place), a missing file is first created from the base template, then merged.
+ * All target files are parsed and validated before any write: on an error nothing is written.
+ * Writes are atomic and keep the file mode.
  */
 export async function installClaudeRemoteConfig(workspaceDir: string, configDir?: string): Promise<ClaudeRemoteInstallResult> {
-  const templateUrl = new URL("../templates/claude-code/settings.json", import.meta.url);
-  const templateText = await fs.readFile(templateUrl, "utf8");
-  const template = JSON.parse(templateText) as unknown;
-  const remoteHooks = templateRemoteHooks(template);
-  const remoteAllow = templateRemoteAllow(template);
+  const baseText = await fs.readFile(new URL("../templates/claude-code/settings.json", import.meta.url), "utf8");
+  const remoteUrl = new URL("../templates/claude-code/remote-settings.json", import.meta.url);
+  const remoteTemplate = JSON.parse(await fs.readFile(remoteUrl, "utf8")) as unknown;
+  const remoteHooks = templateRemoteHooks(remoteTemplate);
+  const remoteAllow = templateRemoteAllow(remoteTemplate);
   const targets = [
     { label: ".claude/settings.json", file: path.join(workspaceDir, ".claude", "settings.json"), createMode: 0o644 },
     ...(configDir ? [{ label: COMPANION_SETTINGS_FILE, file: path.join(configDir, COMPANION_SETTINGS_FILE), createMode: 0o600 }] : []),
   ];
   const result: ClaudeRemoteInstallResult = { created: [], updated: [], unchanged: [], allowAdded: {} };
+  const plan: PlannedWrite[] = [];
 
+  // Phase 1: read, parse, validate and merge in memory. Nothing is written here.
   for (const target of targets) {
-    let existing: string;
+    let existing: string | undefined;
     try {
       // Follow a symlink so the link itself is kept.
       existing = await fs.readFile(target.file, "utf8");
     } catch (error: unknown) {
       if (!isMissingFileError(error)) throw error;
-      await fs.mkdir(path.dirname(target.file), { recursive: true, mode: 0o700 });
-      await writeFileAtomic(target.file, templateText, target.createMode);
-      result.created.push(target.label);
-      continue;
     }
-
     let settings: unknown;
     try {
-      settings = JSON.parse(existing);
+      settings = JSON.parse(existing ?? baseText);
     } catch {
       throw new Error(`Claude settings file is not valid JSON, not changed: ${target.file}`);
     }
     if (!isRecord(settings)) throw new Error(`Claude settings file is not a JSON object, not changed: ${target.file}`);
     const hooksChanged = mergeRemoteHooks(settings, remoteHooks);
     const allowAdded = mergeRemoteAllow(settings, remoteAllow);
-    if (!hooksChanged && allowAdded.length === 0) {
+    if (existing !== undefined && !hooksChanged && allowAdded.length === 0) {
       result.unchanged.push(target.label);
       continue;
     }
-    result.allowAdded[target.label] = allowAdded;
-    const realPath = await fs.realpath(target.file);
-    const mode = (await fs.stat(realPath)).mode & 0o777;
-    await writeFileAtomic(realPath, `${JSON.stringify(settings, null, 2)}\n`, mode);
-    result.updated.push(target.label);
+    const content = `${JSON.stringify(settings, null, 2)}\n`;
+    if (existing === undefined) {
+      plan.push({ label: target.label, file: target.file, content, mode: target.createMode, isNew: true, allowAdded });
+    } else {
+      const realPath = await fs.realpath(target.file);
+      const mode = (await fs.stat(realPath)).mode & 0o777;
+      plan.push({ label: target.label, file: realPath, content, mode, isNew: false, allowAdded });
+    }
+  }
+
+  // Phase 2: write.
+  for (const item of plan) {
+    if (item.isNew) await fs.mkdir(path.dirname(item.file), { recursive: true, mode: 0o700 });
+    await writeFileAtomic(item.file, item.content, item.mode);
+    if (item.isNew) {
+      result.created.push(item.label);
+    } else {
+      result.allowAdded[item.label] = item.allowAdded;
+      result.updated.push(item.label);
+    }
   }
   return result;
 }

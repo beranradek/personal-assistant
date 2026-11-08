@@ -41,9 +41,14 @@ Bridge not ready (late binding) -> 503. Shared types: `src/remote/protocol.ts`.
 | `POST /remote/hook` | `{ event, pid, cwd?, payload }` (`payload` = raw hook JSON) | `204` at once |
 | `POST /remote/control` | `{ action: "attach"\|"detach"\|"status", chatId?, target? }` | `200 { ok, message, sessions: [{ index, name, cwd, pid, attachedChatId? }] }` |
 
-- Hook events: `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, `Stop`, `Notification`, `SessionEnd`.
+- Hook events: `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, `Stop`, `StopFailure`, `Notification`, `SessionEnd`.
   The bridge reads defensive fields: `tool_name`, `tool_input`, `last_assistant_message`, `notification_type`, `message`,
-  `prompt`. Unknown shape -> ignore, never throw.
+  `prompt`, `reason`, `agent_id`. Unknown shape -> ignore, never throw.
+- Confirmation rule: only a `UserPromptSubmit` whose `prompt` contains the frame header `[Telegram message from the user,
+  id N]` of a sent (or late, up to 5 min) message confirms delivery and sets the turn origin. Any other prompt is a
+  terminal prompt: it ends a stale Telegram turn. Events with `agent_id` (subagents) never start or end a turn.
+  `SessionEnd` with reason `clear` or `resume` is ignored.
+- A poll from a removed pid is answered `204` + `X-Remote-Replaced` for 60 s (tombstone).
 - `chatId` default for `control` = first id in `adapters.telegram.allowedUserIds` (private chat id = user id).
 - `target` = session index from `status`, or name. Default: the only registered session, else error "choose one".
 - `pid` = pid of the `claude` ancestor process (`src/claude/process-tree.ts`: walk `/proc/<pid>/stat`).
@@ -77,8 +82,13 @@ via the adapter), config, clock, logger, `isPidAlive`.
 - API: `poll(pid, cwd, name, signal)`, `handleHook(event, pid, payload)`, `forward(chatId, text)`, `attach`, `detach`,
   `status`, `stop`.
 - Poll: replaces an older waiter of the same pid; returns queued messages at once; 55 s timeout -> 204.
-- Delivery: after a message is returned by a poll, mark "sent". Any hook event from that pid confirms delivery and sets
-  turn origin "telegram". Timeout (`deliveryTimeoutMs`) -> "not delivered" notice to Telegram, message dropped.
+- Delivery: after a message is returned by a poll, mark "sent". A `UserPromptSubmit` that contains the frame header confirms
+  delivery and sets turn origin "telegram". Timeout (`deliveryTimeoutMs`, paused while a turn runs) -> "not delivered" notice;
+  a late confirmation within 5 minutes still works. A queued message that no poll takes in `deliveryTimeoutMs` -> one
+  "session is not listening (no poll)" notice, the message stays queued.
+- Stable session ids (never reused, shown in status). Tombstone (60 s) for removed pids. `SessionEnd` clear/resume ignored.
+- Final answer: up to 3 send tries (delays 1 s and 3 s, or the Telegram `retry_after`), then "Answer could not be delivered".
+- Subagent events (`agent_id`): tool lines prefixed "(subagent)", no turn start or end.
 - Hooks: `PreToolUse` -> synthetic `tool_start` + `tool_input` events into the accumulator; `MessageDisplay` ->
   `text_delta`; `Stop` -> if turn origin is telegram: `accumulator.stop()`, `trimSuffixFromProcessingMessage(final)`,
   send final answer as a new Telegram message, reset origin; `Notification` -> short notice; `SessionEnd` -> unregister and
@@ -97,16 +107,21 @@ optional parameter, dispatch BEFORE MCP body parsing. Token file create/remove i
 Tests: extend `src/tools/http-mcp-server.test.ts`, new `src/remote/routes.test.ts` (401, 403, 503, long poll end to end
 with a fake bridge, client abort cleanup).
 
-### 4. Hook command `pa claude-remote-hook <event>` (agent B)
+### 4. Hook command `pa-remote-hook <mode>` (agent B)
 
-`src/claude/remote-hook.ts`, `src/claude/process-tree.ts` + tests. Add `claude-remote-hook` to `VALID_COMMANDS` in
-`src/cli.ts` (agent C owns cli.ts edits: B gives the exported function `runClaudeRemoteHook(event, deps)`).
+`src/claude/remote-hook.ts`, `src/claude/remote-hook-cli.ts` (tiny bin `pa-remote-hook` in `package.json`),
+`src/claude/process-tree.ts` + tests. `claude-remote-hook` stays a subcommand in `VALID_COMMANDS` in `src/cli.ts`
+(both call `runRemoteHookEntry`).
+Modes: `listen-start`, `listen-stop`, `listen-fail`, `listen-prompt` (long poll, asyncRewake) and the plain events.
+Headless `claude -p` (no claude pid) and `PA_REMOTE_HOOKS=off` -> exit 0 at once.
 - Read stdin JSON. Read the token file from the config dir (`PA_CONFIG`, else default dir, same as the CLI). No token ->
   exit 0. Find claude pid. Port from config or default.
 - Plain events: POST `/remote/hook` (1 s timeout), exit 0.
-- `listen` for `SessionStart`: loop `GET /remote/poll`: 200 -> print frame to stderr, exit 2; 204 -> loop; replaced -> exit 0;
-  connection error -> backoff (1 s to 15 s), exit 0 when the token file is gone or the claude pid is dead.
-- `listen` for `Stop`: first POST the Stop payload (`event: "Stop"`), then the same loop.
+- `listen-start` (SessionStart): loop `GET /remote/poll`: 200 -> print frame to stderr, exit 2; 204 -> loop; replaced -> exit 0;
+  connection error -> backoff (1 s to 15 s), exit 0 when the claude pid is dead. Token lost or 401/403: retry 5 min.
+  Connection errors: retry 30 min.
+- `listen-stop` / `listen-fail` / `listen-prompt`: first POST the event (`Stop` / `StopFailure` / `UserPromptSubmit`), then
+  the same loop. A new poll replaces the old one of the pid, so these re-arm a deaf session.
 - Never print to stdout. Never throw. Handle SIGTERM.
 - Tests with a fake HTTP server: exit codes, frame text, replace, token missing, dead parent, backoff.
 
@@ -119,25 +134,30 @@ with a fake bridge, client abort cleanup).
 ### 6. MCP tools and CLI (agent C)
 
 `remote_session_attach|detach|status` in `src/tools/stdio-mcp-server.ts` (handlers call `/remote/control` through deps) and
-the http server deps. `pa remote attach|detach|status` in `src/cli.ts`. Add `mcp__pa__remote_session_*` to the allow list in
-`src/templates/claude-code/settings.json`. Tests in `stdio-mcp-server.test.ts`, `cli.test.ts`.
+the http server deps. `pa remote attach|detach|status` in `src/cli.ts`. The `mcp__pa__remote_session_*` allow entries are in
+the opt-in `src/templates/claude-code/remote-settings.json` (see task 7). Tests in `stdio-mcp-server.test.ts`, `cli.test.ts`.
 
 ### 7. Hooks template and `pa init --claude-remote` (agent C)
 
-- Add hooks to `src/templates/claude-code/settings.json` (async, command `pa claude-remote-hook <event>`):
-  `SessionStart` and `Stop` with `"async": true, "asyncRewake": true` (argument `listen-start` / `listen-stop`);
-  `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, `Notification`, `SessionEnd` with `"async": true`.
-  Keep the existing security `PreToolUse` hook first and unchanged. Keep the existing SessionStart context hook.
+- Opt-in split: the remote hooks and the three `mcp__pa__remote_session_*` allow entries live in
+  `src/templates/claude-code/remote-settings.json` (command `pa-remote-hook <mode>`). The base `settings.json` has none, so
+  `pa init --claude-code` installs no remote hooks. `SessionStart`, `Stop`, `StopFailure`, `UserPromptSubmit` use
+  `"async": true, "asyncRewake": true` (modes `listen-start`, `listen-stop`, `listen-fail`, `listen-prompt`);
+  `PreToolUse`, `MessageDisplay`, `Notification`, `SessionEnd` use `"async": true`.
 - `installClaudeRemoteConfig` in `src/claude/templates.ts`, command `pa init --claude-remote`: additive idempotent JSON merge
   of the remote hooks into the workspace Claude settings file and the launcher settings under `<configDir>/claude-code/`.
-  Never remove or edit other keys, never duplicate an existing remote hook entry, atomic write, keep file mode.
+  Never remove or edit other keys, never duplicate an existing remote hook entry (old forms are detected and upgraded in
+  place), merge the allow entries, create a missing file from the base template first. Both files are parsed and checked
+  before any write (atomic two-file install), atomic write, keep file mode.
 - Tests in `src/claude/templates.test.ts` (fresh, existing file with other hooks, idempotent second run).
 
 ### 8. Docs (agent D, after A-C)
 
 - New `docs/settings/claude_code_remote_session.md` (STE English, lines max 140 chars). Chapters: what it does; prerequisites
   (new Telegram bot from BotFather, laptop `settings.json` example with `adapters.telegram`, `heartbeat.enabled: false`,
-  `claudeCode.remote.enabled: true`, `mcp.httpServer.enabled`); setup (`pa init --claude-remote`); start (`pa claude` or plain
+  `claudeCode.remote.enabled: true`; `mcp.httpServer.enabled` is not needed, the daemon starts the HTTP server itself);
+  setup (`pa init --claude-code`, then `pa init --claude-remote`; `npm run build` and `npm link` for the
+  `pa-remote-hook` bin); start (`pa claude` or plain
   `claude --dangerously-skip-permissions`, alias example); control (Telegram commands, MCP tools, CLI); what you see
   (progress message, final answer); security (allowlist, token, localhost, no approvals with skip-permissions);
   troubleshooting (Channels blocked by org policy - not needed here, 409 Conflict means a second poller on the token,
@@ -197,3 +217,24 @@ the http server deps. `pa remote attach|detach|status` in `src/cli.ts`. Add `mcp
     with the notice "process is gone". So auto detach after exit takes up to 30 s.
   - Not tested: real Telegram bot, `pa claude` restricted launcher, plain `claude --dangerously-skip-permissions`
     (only the plain `claude` + `--settings` path), a terminal other than tmux, `Notification` events, voice/photo.
+- Round 2 review (2026-11-08). Fixed:
+  - Deaf-session re-arm: new listen modes `listen-fail` and `listen-prompt`; a new poll replaces the old one. A "not
+    listening (no poll)" notice after `deliveryTimeoutMs`; the message stays queued.
+  - Final answer retry (3 tries, then "Answer could not be delivered").
+  - Ghost session tombstone (60 s) for removed pids. Stable session numbers in `/status`.
+  - Subagent events (`agent_id`) never start or end a turn; tool lines get "(subagent)".
+  - `SessionEnd` with reason `clear` or `resume` is ignored (attachment kept).
+  - Hook cost: split to the tiny bin `pa-remote-hook` (about 30 ms). `pa claude-remote-hook` stays.
+  - Opt-in template split: `remote-settings.json`; `pa init --claude-code` installs no remote hooks.
+  - Duplicate hook detection and in-place upgrade of old entries; atomic two-file install (validate both, then write).
+  - Headless `claude -p` runs are ignored. Sanitizer removes control, invisible and bidi characters anywhere in the text.
+  - Integration test `src/remote/integration.test.ts`.
+- Real E2E round 2 (2026-11-08, Claude Code 2.1.319, tmux, fake Telegram sender, built `pa-remote-hook` bin, hooks written by
+  `installClaudeRemoteConfig` over an older settings file, so the in-place upgrade of old entries ran too, no duplicates):
+  - Idle wake, progress message and one final answer: OK. After `/clear` in the session the attachment stayed and the next
+    message was answered. After an Esc interrupt of a Telegram turn (no `Stop` event) the next message was delivered and
+    answered (the `listen-prompt` hook re-arms the listener). No hook process stayed after the session ended.
+  - Still not tested: real Telegram bot, `pa claude`, plain `claude --dangerously-skip-permissions`, voice and photo over the
+    real adapter, `Notification` events, a terminal other than tmux, and a long daemon outage.
+  - Docs: guide updated (bin and `npm link`, no `mcp.httpServer.enabled`, honest scheduled-work table, delivery notes,
+    tested / not tested).

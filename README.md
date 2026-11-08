@@ -177,7 +177,8 @@ sessions, compaction, audit/reflection lifecycle. Cron jobs still require the da
 
 Remote mode (optional): you can attach a Telegram chat to a live Claude Code session on your laptop and talk to it from your
 phone. It uses a separate Telegram bot and hooks (not Claude Code Channels). It is off by default
-(`claudeCode.remote.enabled`). See [`docs/settings/claude_code_remote_session.md`](docs/settings/claude_code_remote_session.md).
+(`claudeCode.remote.enabled`). Setup: `npm run build` and `npm link` (this installs the `pa-remote-hook` bin), then
+`pa init --claude-code` and `pa init --claude-remote`. See [`docs/settings/claude_code_remote_session.md`](docs/settings/claude_code_remote_session.md).
 
 ### Key Sections
 
