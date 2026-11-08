@@ -4,7 +4,7 @@
 
 **Goal:** Add a shared content redaction module that sanitizes sensitive data (tokens, passwords, credentials, Czech-language disclosures) across both the gateway layer and integ-api.
 
-**Architecture:** A new `src/security/content-redaction.ts` module exports two pattern presets (conservative for gateway, aggressive for integ-api) and core redaction functions. The gateway integrates redaction at 5 insertion points via an optional `redact` function parameter. The integ-api's `content-filter.ts` delegates to the shared module, replacing its internal `redactValue` and `DEFAULT_REDACT_PATTERNS`.
+**Architecture:** A new `../../../../src/security/content-redaction.ts` module exports two pattern presets (conservative for gateway, aggressive for integ-api) and core redaction functions. The gateway integrates redaction at 5 insertion points via an optional `redact` function parameter. The integ-api's `content-filter.ts` delegates to the shared module, replacing its internal `redactValue` and `DEFAULT_REDACT_PATTERNS`.
 
 **Tech Stack:** TypeScript, Vitest, RegExp
 
@@ -14,32 +14,32 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `src/security/content-redaction.ts` | Create | Pattern definitions, `redactString()`, `createRedactor()`, `redactDeep()` |
-| `src/security/content-redaction.test.ts` | Create | Unit tests for all pattern categories and functions |
-| `src/integ-api/middleware/content-filter.ts` | Modify | Import from shared module, remove internal `redactValue`/`compilePatterns`/`DEFAULT_REDACT_PATTERNS` |
-| `src/integ-api/middleware/content-filter.test.ts` | Modify | Add tests for aggressive patterns (JWT, Czech, connection strings) |
-| `src/integ-api/server.ts` | Modify | Import `DEFAULT_REDACT_PATTERNS` from new location |
-| `src/core/agent-runner.ts` | Modify | Accept `redact` param, apply to error events and audit entries |
-| `src/session/store.ts` | Modify | Accept `redact` param, apply before JSONL write |
-| `src/memory/daily-log.ts` | Modify | Accept `redact` param, apply to audit entry fields |
-| `src/gateway/processing-message.ts` | Modify | Accept `redact` param, apply before flush to adapter |
-| `src/session/compactor.ts` | Modify | Apply redaction to API error bodies before throwing |
-| `src/daemon.ts` | Modify | Create redactor, pass to queue/backend wiring |
-| `src/terminal/session.ts` | Modify | Create redactor for terminal backend |
-| `src/backends/interface.ts` | Modify | Add optional `redact` to backend options |
-| `src/backends/claude.ts` | Modify | Thread `redact` to `streamAgentTurn`/`runAgentTurn` |
+| `../../../../src/security/content-redaction.ts` | Create | Pattern definitions, `redactString()`, `createRedactor()`, `redactDeep()` |
+| `../../../../src/security/content-redaction.test.ts` | Create | Unit tests for all pattern categories and functions |
+| `../../../../src/integ-api/middleware/content-filter.ts` | Modify | Import from shared module, remove internal `redactValue`/`compilePatterns`/`DEFAULT_REDACT_PATTERNS` |
+| `../../../../src/integ-api/middleware/content-filter.test.ts` | Modify | Add tests for aggressive patterns (JWT, Czech, connection strings) |
+| `../../../../src/integ-api/server.ts` | Modify | Import `DEFAULT_REDACT_PATTERNS` from new location |
+| `../../../../src/core/agent-runner.ts` | Modify | Accept `redact` param, apply to error events and audit entries |
+| `../../../../src/session/store.ts` | Modify | Accept `redact` param, apply before JSONL write |
+| `../../../../src/memory/daily-log.ts` | Modify | Accept `redact` param, apply to audit entry fields |
+| `../../../../src/gateway/processing-message.ts` | Modify | Accept `redact` param, apply before flush to adapter |
+| `../../../../src/session/compactor.ts` | Modify | Apply redaction to API error bodies before throwing |
+| `../../../../src/daemon.ts` | Modify | Create redactor, pass to queue/backend wiring |
+| `../../../../src/terminal/session.ts` | Modify | Create redactor for terminal backend |
+| `../../../../src/backends/interface.ts` | Modify | Add optional `redact` to backend options |
+| `../../../../src/backends/claude.ts` | Modify | Thread `redact` to `streamAgentTurn`/`runAgentTurn` |
 
 ---
 
 ### Task 1: Create shared content-redaction module
 
 **Files:**
-- Create: `src/security/content-redaction.ts`
-- Test: `src/security/content-redaction.test.ts`
+- Create: `../../../../src/security/content-redaction.ts`
+- Test: `../../../../src/security/content-redaction.test.ts`
 
 - [ ] **Step 1: Write the failing test for conservative patterns**
 
-Create `src/security/content-redaction.test.ts`:
+Create `../../../../src/security/content-redaction.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -257,7 +257,7 @@ Expected: FAIL — module not found
 
 - [ ] **Step 3: Write the implementation**
 
-Create `src/security/content-redaction.ts`:
+Create `../../../../src/security/content-redaction.ts`:
 
 ```typescript
 /**
@@ -417,13 +417,13 @@ git commit -m "feat: add shared content redaction module with conservative and a
 ### Task 2: Integrate shared module into integ-api content-filter
 
 **Files:**
-- Modify: `src/integ-api/middleware/content-filter.ts`
+- Modify: `../../../../src/integ-api/middleware/content-filter.ts`
 - Modify: `src/integ-api/server.ts:29,290-295`
-- Modify: `src/integ-api/middleware/content-filter.test.ts`
+- Modify: `../../../../src/integ-api/middleware/content-filter.test.ts`
 
 - [ ] **Step 1: Write failing tests for aggressive patterns in content-filter**
 
-Add to `src/integ-api/middleware/content-filter.test.ts` a new describe block:
+Add to `../../../../src/integ-api/middleware/content-filter.test.ts` a new describe block:
 
 ```typescript
 import {
@@ -472,7 +472,7 @@ Expected: FAIL — cannot import from `../../security/content-redaction.js` (the
 
 - [ ] **Step 3: Update content-filter.ts to use shared module**
 
-Replace the content of `src/integ-api/middleware/content-filter.ts`. The key changes:
+Replace the content of `../../../../src/integ-api/middleware/content-filter.ts`. The key changes:
 1. Remove `DEFAULT_REDACT_PATTERNS`, `compilePatterns`, `redactValue` — replaced by shared module
 2. `createContentFilter` now accepts `redactPatterns: RegExp[]` (pre-compiled) instead of `string[]`
 3. Re-export `AGGRESSIVE_PATTERNS` as `DEFAULT_REDACT_PATTERNS` for backward compatibility with `server.ts`
@@ -555,7 +555,7 @@ export function createContentFilterMiddleware(filter: ContentFilter): Middleware
 
 - [ ] **Step 4: Update server.ts to use RegExp patterns**
 
-In `src/integ-api/server.ts`, change the import and wiring:
+In `../../../../src/integ-api/server.ts`, change the import and wiring:
 
 Replace the import line:
 ```typescript
@@ -586,7 +586,7 @@ Replace the content filter wiring (lines ~290-298):
 
 The existing tests pass `redactPatterns` as `string[]`. Update them to pass `RegExp[]`:
 
-In `src/integ-api/middleware/content-filter.test.ts`, update existing tests:
+In `../../../../src/integ-api/middleware/content-filter.test.ts`, update existing tests:
 - Change all `redactPatterns: ["secret"]` to `redactPatterns: [/secret/g]`
 - Change all `redactPatterns: ["sk-[a-zA-Z0-9]{6,}"]` to `redactPatterns: [/sk-[a-zA-Z0-9]{6,}/g]`
 - Change all `redactPatterns: DEFAULT_REDACT_PATTERNS` to `redactPatterns: AGGRESSIVE_PATTERNS`
@@ -615,7 +615,7 @@ git commit -m "refactor: delegate integ-api content filter to shared redaction m
 
 - [ ] **Step 1: Add optional `redact` parameter to `streamAgentTurn` and `runAgentTurn`**
 
-In `src/core/agent-runner.ts`, update the `streamAgentTurn` signature (line 466):
+In `../../../../src/core/agent-runner.ts`, update the `streamAgentTurn` signature (line 466):
 
 ```typescript
 // Old:
@@ -696,7 +696,7 @@ git commit -m "feat: add optional redaction to agent-runner error events and aud
 
 - [ ] **Step 1: Add `redact` parameter to `appendMessage` and `appendMessages`**
 
-In `src/session/store.ts`:
+In `../../../../src/session/store.ts`:
 
 Update `appendMessage` (line 36):
 ```typescript
@@ -795,7 +795,7 @@ git commit -m "feat: add optional redaction to session store persistence"
 
 - [ ] **Step 1: Add `redact` parameter to `appendAuditEntry`**
 
-In `src/memory/daily-log.ts`:
+In `../../../../src/memory/daily-log.ts`:
 
 ```typescript
 // Old:
@@ -872,7 +872,7 @@ git commit -m "feat: add optional redaction to daily audit log entries"
 
 - [ ] **Step 1: Add `redact` parameter to `createProcessingAccumulator`**
 
-In `src/gateway/processing-message.ts`, update the factory signature (line 135):
+In `../../../../src/gateway/processing-message.ts`, update the factory signature (line 135):
 
 ```typescript
 // Old:
@@ -937,7 +937,7 @@ git commit -m "feat: add optional redaction to processing message accumulator"
 
 - [ ] **Step 1: Import createRedactor and apply to error bodies**
 
-At the top of `src/session/compactor.ts`, add import:
+At the top of `../../../../src/session/compactor.ts`, add import:
 ```typescript
 import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
 ```
@@ -980,26 +980,26 @@ git commit -m "feat: redact API error bodies in session compactor"
 ### Task 8: Wire redactor through backend and daemon/terminal entry points
 
 **Files:**
-- Modify: `src/backends/interface.ts`
-- Modify: `src/backends/claude.ts` (or whatever the claude backend file is)
-- Modify: `src/daemon.ts`
-- Modify: `src/terminal/session.ts`
-- Modify: `src/gateway/queue.ts`
+- Modify: `../../../../src/backends/interface.ts`
+- Modify: `../../../../src/backends/claude.ts` (or whatever the claude backend file is)
+- Modify: `../../../../src/daemon.ts`
+- Modify: `../../../../src/terminal/session.ts`
+- Modify: `../../../../src/gateway/queue.ts`
 
 This task threads the `redact` function from entry points through to all 5 insertion points.
 
 - [ ] **Step 1: Explore the claude backend to understand how it calls agent-runner**
 
-Read `src/backends/claude.ts` to see how `streamAgentTurn` and `runAgentTurn` are called, and how to add the `redact` parameter.
+Read `../../../../src/backends/claude.ts` to see how `streamAgentTurn` and `runAgentTurn` are called, and how to add the `redact` parameter.
 
 - [ ] **Step 2: Add `redact` to AgentBackend construction**
 
 The exact approach depends on what the backend factory looks like. The pattern is:
-1. `createBackend()` in `src/backends/factory.ts` accepts a `redact` function
+1. `createBackend()` in `../../../../src/backends/factory.ts` accepts a `redact` function
 2. The Claude backend stores it and passes it to `streamAgentTurn`/`runAgentTurn`
 3. `createMessageQueue` or `processNext` receives the redactor for processing-message accumulator
 
-In `src/daemon.ts`, after loading config, create the redactor:
+In `../../../../src/daemon.ts`, after loading config, create the redactor:
 ```typescript
 import { createRedactor, CONSERVATIVE_PATTERNS } from "./security/content-redaction.js";
 
@@ -1009,7 +1009,7 @@ const redact = createRedactor(CONSERVATIVE_PATTERNS);
 
 Pass it to `createBackend` and `createMessageQueue` (or to `createProcessingAccumulator` through the queue).
 
-In `src/terminal/session.ts`, same pattern:
+In `../../../../src/terminal/session.ts`, same pattern:
 ```typescript
 import { createRedactor, CONSERVATIVE_PATTERNS } from "../security/content-redaction.js";
 
@@ -1020,7 +1020,7 @@ const redact = createRedactor(CONSERVATIVE_PATTERNS);
 
 - [ ] **Step 3: Thread redact through queue → processing accumulator**
 
-In `src/gateway/queue.ts`, add `redact` to `createMessageQueue` options or pass it as a parameter. Then pass it to `createProcessingAccumulator` calls (lines 189-197):
+In `../../../../src/gateway/queue.ts`, add `redact` to `createMessageQueue` options or pass it as a parameter. Then pass it to `createProcessingAccumulator` calls (lines 189-197):
 
 ```typescript
 // Old:

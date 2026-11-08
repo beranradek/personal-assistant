@@ -14,7 +14,7 @@ The existing `content-filter.ts` in integ-api handles basic redaction (API keys,
 
 ## Design
 
-### Shared Module: `src/security/content-redaction.ts`
+### Shared Module: `../../../../src/security/content-redaction.ts`
 
 Core redaction logic shared by both gateway and integ-api.
 
@@ -77,7 +77,7 @@ All patterns are case-insensitive where appropriate (Czech patterns, password/se
 ### Integ-API Integration
 
 `content-filter.ts` changes:
-- Import `AGGRESSIVE_PATTERNS` and `redactDeep` from `src/security/content-redaction.ts`
+- Import `AGGRESSIVE_PATTERNS` and `redactDeep` from `../../../../src/security/content-redaction.ts`
 - Replace `DEFAULT_REDACT_PATTERNS` (string array) with patterns derived from `AGGRESSIVE_PATTERNS`
 - Replace internal `redactValue()` with imported `redactDeep()`
 - Middleware wrapping and truncation logic unchanged
@@ -96,7 +96,7 @@ A `redactor` function created at startup (`daemon.ts` / `terminal.ts`) with `CON
 
 ### Testing
 
-- `src/security/content-redaction.test.ts`: Unit tests for each pattern category (positive matches, negative/no-false-positive cases), Czech patterns, `redactDeep` on nested objects
+- `../../../../src/security/content-redaction.test.ts`: Unit tests for each pattern category (positive matches, negative/no-false-positive cases), Czech patterns, `redactDeep` on nested objects
 - Update `content-filter.test.ts`: Verify new patterns work through the middleware
 - Gateway integration tests: Verify redaction at each of the 5 insertion points with mocked redactor
 
@@ -104,14 +104,14 @@ A `redactor` function created at startup (`daemon.ts` / `terminal.ts`) with `CON
 
 | File | Change |
 |------|--------|
-| `src/security/content-redaction.ts` | **New** — shared redaction module |
-| `src/security/content-redaction.test.ts` | **New** — unit tests |
-| `src/integ-api/middleware/content-filter.ts` | Import from shared module, replace internal patterns/redactValue |
-| `src/integ-api/middleware/content-filter.test.ts` | Update for new patterns |
-| `src/core/agent-runner.ts` | Accept redactor, apply to error events |
-| `src/session/store.ts` | Accept redactor, apply before JSONL write |
-| `src/memory/daily-log.ts` | Accept redactor, apply before audit write |
-| `src/gateway/processing-message.ts` | Accept redactor, apply before flush |
-| `src/session/compactor.ts` | Accept redactor, apply to API error bodies |
-| `src/daemon.ts` | Create redactor, pass to subsystems |
-| `src/terminal.ts` | Create redactor, pass to subsystems |
+| `../../../../src/security/content-redaction.ts` | **New** — shared redaction module |
+| `../../../../src/security/content-redaction.test.ts` | **New** — unit tests |
+| `../../../../src/integ-api/middleware/content-filter.ts` | Import from shared module, replace internal patterns/redactValue |
+| `../../../../src/integ-api/middleware/content-filter.test.ts` | Update for new patterns |
+| `../../../../src/core/agent-runner.ts` | Accept redactor, apply to error events |
+| `../../../../src/session/store.ts` | Accept redactor, apply before JSONL write |
+| `../../../../src/memory/daily-log.ts` | Accept redactor, apply before audit write |
+| `../../../../src/gateway/processing-message.ts` | Accept redactor, apply before flush |
+| `../../../../src/session/compactor.ts` | Accept redactor, apply to API error bodies |
+| `../../../../src/daemon.ts` | Create redactor, pass to subsystems |
+| `../../../../src/terminal.ts` | Create redactor, pass to subsystems |
