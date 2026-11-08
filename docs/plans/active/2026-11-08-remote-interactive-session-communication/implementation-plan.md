@@ -135,9 +135,26 @@ in parallel (server has 4 GB RAM).
 
 ### 9. Docs
 
-- `docs/settings/claude_code_companion.md`: new section "Remote mode (Telegram)": setup, `pa claude --remote`, commands,
-  dev-flag dialog, limits, security notes, troubleshooting (no events -> check `/mcp`, login type, channel flag).
-- `README.md` and `CLAUDE.md` source layout table: add `remote/`.
+- New file `docs/settings/claude_code_remote_session.md` (same style as the other `docs/settings/*.md`, STE English,
+  lines max 140 chars). Chapters:
+  1. What it does and when to use it (short; link to the spec).
+  2. Prerequisites: PA daemon with Telegram adapter, `claudeCode.remote.enabled: true`, `mcp.httpServer.enabled`,
+     claude.ai or Console login, `pa init --claude-code` done (MCP entry `pa-remote` and hooks present), Team/Enterprise
+     `channelsEnabled` note.
+  3. Setup: config example (`claudeCode.remote` keys with defaults), how to merge `pa-remote` into an existing `.mcp.json`.
+  4. Start: `pa claude --remote`, and plain `claude --dangerously-skip-permissions --dangerously-load-development-channels
+     server:pa-remote` (alias example). Dev-channel dialog and project MCP consent dialog at the first start.
+  5. Control: Telegram commands `/attach`, `/attach <n>`, `/detach`, `/status`, `/pa <text>`, permission replies
+     `yes <id>` / `no <id>`; MCP tools `remote_session_attach|detach|status`; CLI `pa remote attach|detach|status`;
+     auto detach rules; what the progress message and final answer look like.
+  6. Security: allowlist, token file, localhost only, risk of `--dangerously-skip-permissions`, audit log.
+  7. Troubleshooting: no events (check `/mcp`, login type, channel flag, `channelsEnabled`), "not delivered" notice,
+     409 Conflict (second poller), hooks silent in sessions without the channel, daemon restart (attach again).
+- `docs/settings/claude_code_companion.md`: add only a short "Remote mode" pointer paragraph linking to the new file.
+- `README.md`:
+  - In "Setup guides" add one line: Claude Code remote session (Telegram): link to the new file.
+  - In chapter "Claude Code companion mode" add 2-3 sentences and a link to the new file (no duplicated instructions).
+- `CLAUDE.md` source layout table: add `remote/`.
 - Move this plan to `docs/plans/completed/` when done.
 
 ### 10. Verification

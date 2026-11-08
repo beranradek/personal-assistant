@@ -49,6 +49,13 @@ from a phone through the same Telegram bot that the PA daemon already uses.
 - N7. Each forwarded message gets an audit log line.
 - N8. The mode is off by default (`claudeCode.remote.enabled: false`).
 
+### Documentation
+
+- D1. A new guide `docs/settings/claude_code_remote_session.md` describes setup, start, control, security, and
+  troubleshooting of the remote session mode.
+- D2. The README chapter "Claude Code companion mode" and the "Setup guides" list link to this guide briefly.
+  `docs/settings/claude_code_companion.md` gets a short pointer.
+
 ## 3. Research summary
 
 Sources: Claude Code docs (checked 2026-11-08, local Claude Code 2.1.319).
@@ -211,4 +218,5 @@ normally. Do not call a reply tool. The PA daemon delivers your final answer to 
 - A6. When not attached, Telegram behaves as before. The PA agent answers.
 - A7. Detach on session exit, on `/detach`, and on idle timeout works. No hook error appears in the session.
 - A8. A user that is not in the allowlist cannot send to the session or approve a permission.
+- A10. The new guide exists, every command in it was run in the E2E test, and the README links to it.
 - A9. Tests pass for the bridge, channel server, hook command, and Telegram routing. E2E test passes on the laptop.
