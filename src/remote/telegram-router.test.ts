@@ -31,6 +31,23 @@ describe("createTelegramRouter", () => {
     route = createTelegramRouter({ bridge, enqueue, send });
   });
 
+  it("/help and /start answer with the command list and the state, and never reach the session or the queue", async () => {
+    for (const text of ["/help", "/start", "/help@mybot"]) {
+      send.mockClear();
+      route(msg(text));
+      await tick();
+      expect(send).toHaveBeenCalledWith(CHAT, expect.stringContaining("/attach [n|name]"));
+      expect(send).toHaveBeenCalledWith(CHAT, expect.stringContaining("not attached"));
+    }
+    attached = true;
+    send.mockClear();
+    route(msg("/help"));
+    await tick();
+    expect(send).toHaveBeenCalledWith(CHAT, expect.stringContaining("Now: attached."));
+    expect(forward).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it("enqueues normal text when not attached", () => {
     const m = msg("hello");
     route(m);
@@ -131,7 +148,7 @@ describe("createTelegramRouter", () => {
   });
 
   it("other slash text follows the normal path (forward when attached, queue otherwise)", () => {
-    route(msg("/help me"));
+    route(msg("/compact now"));
     expect(enqueue).toHaveBeenCalledTimes(1);
     attached = true;
     route(msg("/compact now"));

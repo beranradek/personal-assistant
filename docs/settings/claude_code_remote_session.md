@@ -153,6 +153,7 @@ Telegram commands (only from users in `allowedUserIds`):
 
 | Command | Result |
 |---------|--------|
+| `/help` (also `/start`) | Shows the command list and whether this chat is attached. Works only in remote mode. |
 | `/status` | Lists the live sessions. Shows which one is attached. |
 | `/attach` | Attaches to the only session. With several sessions it asks you to choose. |
 | `/attach <n>` | Attaches to session number `n` from `/status` (a session name also works). |

@@ -4,6 +4,7 @@
  *
  * Wraps the Telegram adapter `onMessage` callback. It is only created when remote mode is enabled.
  * - `/attach [n|name]`, `/detach`, `/status`: control commands (answered through `send`).
+ * - `/help`, `/start`: list of these commands and the current state (attached or not).
  * - `/pa <text>`: normal PA agent queue with `<text>` as the message text.
  * - Other text (also other slash commands): forwarded to the attached session when the chat is attached, else the normal queue.
  *   Attachment and voice messages arrive as plain text from the adapter ("Received document and saved it to <path>" or the
@@ -33,6 +34,22 @@ export interface TelegramRouterDeps {
 
 /** `/cmd`, `/cmd@botname`, optional arguments. */
 const COMMAND_RE = /^\/([A-Za-z]+)(?:@(\w+))?(?:\s+([\s\S]*))?$/;
+
+/** Text of `/help` (and `/start`). */
+export function helpText(attached: boolean): string {
+  return [
+    "Remote Claude Code session commands:",
+    "/status - list live sessions",
+    "/attach [n|name] - attach this chat to a session",
+    "/detach - detach from the session",
+    "/pa <text> - send text to the PA assistant",
+    "/help - this help",
+    "",
+    attached
+      ? "Now: attached. Other text goes to the session."
+      : "Now: not attached. Other text goes to the PA assistant. Use /status and /attach to talk to a session.",
+  ].join("\n");
+}
 
 export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMessage) => void {
   const { bridge, enqueue, send } = deps;
@@ -78,6 +95,10 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
           return;
         case "status":
           void runControl(chatId, "status");
+          return;
+        case "help":
+        case "start": // Telegram sends /start when a user opens the bot for the first time
+          reply(chatId, helpText(bridge.isAttached(chatId)));
           return;
         case "pa":
           if (!arg) {
