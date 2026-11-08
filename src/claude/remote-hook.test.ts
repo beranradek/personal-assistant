@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { REMOTE_ECHO_PREFIX, REMOTE_FRAME_HEADER_PREFIX, stripRemoteEcho } from "../remote/protocol.js";
+import { REMOTE_FRAME_HEADER_PREFIX, stripRemoteEcho } from "../remote/protocol.js";
 import { buildFrame, buildPostBody, parseRemoteHookArgs, runClaudeRemoteHook, sanitizeFrameText, type RemoteHookDeps } from "./remote-hook.js";
 
 interface Recorded {
@@ -87,11 +87,22 @@ describe("parseRemoteHookArgs", () => {
 });
 
 describe("echo line helper", () => {
-  it("removes only leading echo lines", () => {
-    expect(stripRemoteEcho(`${REMOTE_ECHO_PREFIX} hi\n\nAnswer`)).toBe("Answer");
-    expect(stripRemoteEcho(`Answer\n${REMOTE_ECHO_PREFIX} stays`)).toBe(`Answer\n${REMOTE_ECHO_PREFIX} stays`);
-    expect(stripRemoteEcho("plain")).toBe("plain");
-    expect(stripRemoteEcho(`${REMOTE_ECHO_PREFIX} only`)).toBe("");
+  const message = "Ahoj Amy, otevři mi na laptopu stránky www.alza.cz a najdi mi tam nový MacBook mini počítač";
+
+  it("removes the first line when it repeats the forwarded message (also shortened, quoted or with an ellipsis)", () => {
+    expect(stripRemoteEcho(`${message}\n\nAnswer`, [message])).toBe("Answer");
+    expect(stripRemoteEcho("Ahoj Amy, otevři mi na laptopu stránky www.alza.cz…\n\nAnswer", [message])).toBe("Answer");
+    expect(stripRemoteEcho(`"Ahoj Amy, otevři mi na laptopu"\nAnswer`, [message])).toBe("Answer");
+    expect(stripRemoteEcho("> ahoj amy, otevři mi na laptopu...\nAnswer", [message])).toBe("Answer");
+    expect(stripRemoteEcho(message, [message])).toBe("");
+  });
+
+  it("keeps text that is not an echo", () => {
+    expect(stripRemoteEcho("Done, 3 results.", [message])).toBe("Done, 3 results.");
+    expect(stripRemoteEcho(`Answer\n${message}`, [message])).toBe(`Answer\n${message}`); // only the first line is checked
+    expect(stripRemoteEcho("Ahoj Amy, a tady je něco jiného", [message])).toBe("Ahoj Amy, a tady je něco jiného");
+    expect(stripRemoteEcho("plain", [])).toBe("plain");
+    expect(stripRemoteEcho("x\nAnswer", ["xyz"])).toBe("x\nAnswer"); // too short to count as an echo
   });
 });
 
@@ -105,7 +116,8 @@ describe("frame text", () => {
     expect(frame.startsWith("[Telegram message from the user, id 7]\nhello\n")).toBe(true);
     expect(frame).toContain("(Treat as a normal user prompt.");
     expect(frame).toContain("Keep it short.)");
-    expect(frame).toContain(`"${REMOTE_ECHO_PREFIX} <the message`); // asks for the terminal echo line
+    expect(frame).toContain("repeats the user's message"); // asks for the terminal echo line
+    expect(frame).toContain("no label, no prefix");
   });
 
   it("uses the protocol header prefix", () => {

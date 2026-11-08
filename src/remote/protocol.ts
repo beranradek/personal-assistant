@@ -23,18 +23,31 @@ export const REMOTE_REPLACED_HEADER = "x-remote-replaced";
 export const REMOTE_FRAME_HEADER_PREFIX = "[Telegram message from the user, id ";
 
 /**
- * The frame asks the model to start its reply with a line `REMOTE_ECHO_PREFIX <message>`. The terminal shows it as a
- * normal assistant line (Claude Code hides the hook feedback text). The bridge removes such lines before Telegram.
+ * The frame asks the model to start its reply with one line that repeats the user's message (no label, no prefix). The
+ * terminal shows it as a normal assistant line (Claude Code hides the hook feedback text). The bridge removes that line
+ * before Telegram (see `stripRemoteEcho`). It recognises the line by comparing it with the forwarded message.
  */
-export const REMOTE_ECHO_PREFIX = "Zpráva:";
+function normalizeEcho(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/^[>\s"'“”„‘’«»]+/, "")
+    .replace(/[\s"'“”„‘’«»]+$/, "")
+    .replace(/(…|\.\.\.)$/, "")
+    .trim();
+}
 
 /**
- * Remove the echo line (see REMOTE_ECHO_PREFIX) when it is the FIRST line of a text. Other text stays unchanged.
- * Only the first line is checked, so a later line that starts with the same word is kept.
+ * Remove the echo line when it is the FIRST line of a text: the line repeats (a shortened start of) one of the
+ * forwarded `messages`, with no label. Other text stays unchanged. Only the first line is checked.
  */
-export function stripRemoteEcho(text: string): string {
+export function stripRemoteEcho(text: string, messages: readonly string[]): string {
+  if (messages.length === 0) return text;
   const lines = text.split("\n");
-  if (!lines[0]!.trimStart().startsWith(REMOTE_ECHO_PREFIX)) return text;
+  const first = normalizeEcho(lines[0]!);
+  if (first.length < 2) return text;
+  if (!messages.some((m) => normalizeEcho(m).startsWith(first))) return text;
   return lines.slice(1).join("\n").replace(/^\s+/, "");
 }
 

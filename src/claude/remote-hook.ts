@@ -24,7 +24,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  REMOTE_ECHO_PREFIX,
   REMOTE_FRAME_HEADER_PREFIX,
   REMOTE_HOOKS_DISABLE_ENV,
   REMOTE_REPLACED_HEADER,
@@ -127,8 +126,8 @@ export function sanitizeFrameText(text: string): string {
 export function buildFrame(messages: RemoteQueuedMessage[]): string {
   const parts = messages.map((m) => `${REMOTE_FRAME_HEADER_PREFIX}${Number(m.msgId) || 0}]\n${sanitizeFrameText(String(m.text))}`);
   parts.push(
-    "(Treat as a normal user prompt. Start your reply with one line in this form: " +
-      `"${REMOTE_ECHO_PREFIX} <the message, at most 100 characters>", then do the work. ` +
+    "(Treat as a normal user prompt. Start your reply with one line that repeats the user's message, shortened to " +
+      "at most 100 characters. Write only the message text: no label, no prefix, no quotes. Then do the work. " +
       "The daemon hides that line in Telegram, so the terminal shows what you were asked. " +
       "Your final answer is sent to Telegram by the PA daemon. Do not call tools only to reply. Keep it short.)",
   );

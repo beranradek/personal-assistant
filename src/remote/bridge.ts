@@ -114,6 +114,8 @@ interface Waiter {
 
 interface Turn {
   chatId: string;
+  /** Texts of the Telegram messages that started this turn (used to hide the echo line). */
+  echoes: string[];
   /** True while the final answer is being sent (a second Stop must not send it again). */
   finishing?: boolean;
   accumulator?: ProcessingMessageAccumulator;
@@ -360,9 +362,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     const prompt = typeof payload["prompt"] === "string" ? payload["prompt"] : "";
     const t = now();
     for (const [id, e] of s.late) if (e.expiresAt <= t) s.late.delete(id);
-    const known: Array<{ msgId: number; chatId: string }> = [];
-    for (const p of s.sent.values()) known.push({ msgId: p.msg.msgId, chatId: p.chatId });
-    for (const e of s.late.values()) known.push({ msgId: e.msg.msgId, chatId: e.chatId });
+    const known: Array<{ msgId: number; chatId: string; text: string }> = [];
+    for (const p of s.sent.values()) known.push({ msgId: p.msg.msgId, chatId: p.chatId, text: p.msg.text });
+    for (const e of s.late.values()) known.push({ msgId: e.msg.msgId, chatId: e.chatId, text: e.msg.text });
     const hits = known.filter((c) => prompt.includes(`${REMOTE_FRAME_HEADER_PREFIX}${c.msgId}]`));
     if (hits.length === 0 && s.turn) {
       notify(s.turn.chatId, "Turn ended: a prompt was typed in the terminal.");
@@ -375,7 +377,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       s.sent.delete(h.msgId);
       s.late.delete(h.msgId);
     }
-    s.turn = { chatId: hits[0].chatId };
+    s.turn = { chatId: hits[0].chatId, echoes: hits.map((h) => h.text) };
     log.debug({ pid: s.pid, chatId: hits[0].chatId }, "remote bridge: delivery confirmed, turn origin telegram");
   }
 
@@ -455,7 +457,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     if (!turn || turn.finishing) return; // terminal turn: nothing goes to Telegram. Or a second Stop: send once.
     turn.finishing = true;
     // The echo line (first line of the reply) is for the terminal only: hide it in Telegram.
-    const final = stripRemoteEcho(firstString(payload, ["last_assistant_message"])?.trim() ?? "").trim();
+    const final = stripRemoteEcho(firstString(payload, ["last_assistant_message"])?.trim() ?? "", turn.echoes).trim();
     try {
       if (turn.accumulator) {
         try {
@@ -511,7 +513,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
         case "MessageDisplay": {
           if (!s.turn || isSubagent) return;
           const raw = firstString(data, ["delta", "text", "message", "content", "last_assistant_message"]);
-          const text = raw ? stripRemoteEcho(raw) : raw;
+          const text = raw ? stripRemoteEcho(raw, s.turn.echoes) : raw;
           if (text) feed(s.turn, [{ type: "text_delta", text }]);
           return;
         }
