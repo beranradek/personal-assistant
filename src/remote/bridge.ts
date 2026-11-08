@@ -28,6 +28,7 @@ import {
   type RemotePollResult,
   type RemoteQueuedMessage,
   type RemoteSessionInfo,
+  stripRemoteEcho,
 } from "./protocol.js";
 
 const defaultLog = createLogger("remote-bridge");
@@ -453,7 +454,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     const turn = s.turn;
     if (!turn || turn.finishing) return; // terminal turn: nothing goes to Telegram. Or a second Stop: send once.
     turn.finishing = true;
-    const final = firstString(payload, ["last_assistant_message"])?.trim() ?? "";
+    // The echo line (first line of the reply) is for the terminal only: hide it in Telegram.
+    const final = stripRemoteEcho(firstString(payload, ["last_assistant_message"])?.trim() ?? "").trim();
     try {
       if (turn.accumulator) {
         try {
@@ -508,7 +510,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
         }
         case "MessageDisplay": {
           if (!s.turn || isSubagent) return;
-          const text = firstString(data, ["delta", "text", "message", "content", "last_assistant_message"]);
+          const raw = firstString(data, ["delta", "text", "message", "content", "last_assistant_message"]);
+          const text = raw ? stripRemoteEcho(raw) : raw;
           if (text) feed(s.turn, [{ type: "text_delta", text }]);
           return;
         }

@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { REMOTE_FRAME_HEADER_PREFIX } from "../remote/protocol.js";
+import { REMOTE_ECHO_PREFIX, REMOTE_FRAME_HEADER_PREFIX, stripRemoteEcho } from "../remote/protocol.js";
 import { buildFrame, buildPostBody, parseRemoteHookArgs, runClaudeRemoteHook, sanitizeFrameText, type RemoteHookDeps } from "./remote-hook.js";
 
 interface Recorded {
@@ -86,6 +86,15 @@ describe("parseRemoteHookArgs", () => {
   });
 });
 
+describe("echo line helper", () => {
+  it("removes only leading echo lines", () => {
+    expect(stripRemoteEcho(`${REMOTE_ECHO_PREFIX} hi\n\nAnswer`)).toBe("Answer");
+    expect(stripRemoteEcho("Answer 📱 stays")).toBe("Answer 📱 stays");
+    expect(stripRemoteEcho("plain")).toBe("plain");
+    expect(stripRemoteEcho(`${REMOTE_ECHO_PREFIX} only`)).toBe("");
+  });
+});
+
 describe("frame text", () => {
   it("strips control characters and keeps newlines", () => {
     expect(sanitizeFrameText("a\u0000b\u001b[31mc\r\nd\te")).toBe("ab[31mc\nd\te");
@@ -96,6 +105,7 @@ describe("frame text", () => {
     expect(frame.startsWith("[Telegram message from the user, id 7]\nhello\n")).toBe(true);
     expect(frame).toContain("(Treat as a normal user prompt.");
     expect(frame).toContain("Keep it short.)");
+    expect(frame).toContain(`"${REMOTE_ECHO_PREFIX} <the message`); // asks for the terminal echo line
   });
 
   it("uses the protocol header prefix", () => {

@@ -189,6 +189,15 @@ What you see in Telegram:
 - Turns that you start in the terminal are not sent to Telegram.
 - Session numbers in `/status` are stable. They do not shift when another session ends.
 
+What you see in the terminal:
+
+- Claude Code shows a Telegram message only as the line "Stop hook feedback". It hides the text. The hook cannot change this.
+- To make the message visible, the frame asks the model to start its reply with one line
+  `📱 Telegram: <the message, at most 100 characters>`. This is a normal assistant line in the terminal.
+- The daemon removes such lines before it sends the progress message and the final answer to Telegram.
+- The model follows this instruction on its own. If it does not, the terminal shows only "Stop hook feedback".
+  Nothing else breaks.
+
 Ignored on purpose:
 
 - Headless `claude -p` runs.
