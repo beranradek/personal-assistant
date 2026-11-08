@@ -20,7 +20,7 @@ export const REMOTE_REPLACED_HEADER = "x-remote-replaced";
  * Header of each message frame printed by the hook (stderr, exit 2). The text after it is `<msgId>]`.
  * The bridge confirms delivery only when a `UserPromptSubmit` prompt contains `REMOTE_FRAME_HEADER_PREFIX + msgId + "]"`.
  */
-export const REMOTE_FRAME_HEADER_PREFIX = "[Telegram message from the user, id ";
+export const REMOTE_FRAME_HEADER_PREFIX = "[Message from the user, id ";
 
 /**
  * The frame asks the model to start its reply with one line that repeats the user's message (no label, no prefix). The

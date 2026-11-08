@@ -117,7 +117,7 @@ export function sanitizeFrameText(text: string): string {
   const clean = text
     .replace(/\r\n?/g, "\n")
     .replace(CONTROL_CHARS, "")
-    .replace(/\[(?=Telegram message from the user)/g, "(")
+    .replace(/\[(?=Message from the user)/g, "(")
     .replace(/<(?=\/?(?:system-reminder|task-notification))/gi, "< ");
   return clean.length > MAX_FRAME_TEXT_CHARS ? `${clean.slice(0, MAX_FRAME_TEXT_CHARS)}\n[truncated]` : clean;
 }
@@ -128,8 +128,8 @@ export function buildFrame(messages: RemoteQueuedMessage[]): string {
   parts.push(
     "(Treat as a normal user prompt. Start your reply with one line that repeats the user's message, shortened to " +
       "at most 100 characters. Write only the message text: no label, no prefix, no quotes. Then do the work. " +
-      "The daemon hides that line in Telegram, so the terminal shows what you were asked. " +
-      "Your final answer is sent to Telegram by the PA daemon. Do not call tools only to reply. Keep it short.)",
+      "That line is not repeated in the final answer, so the terminal shows what you were asked. " +
+      "Your final answer is delivered to the user by the PA daemon. Do not call tools only to reply. Keep it short.)",
   );
   return `${parts.join("\n\n")}\n`;
 }

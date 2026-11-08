@@ -146,7 +146,7 @@ Attach: `pa claude` or `claude` starts -> SessionStart hook starts the listener 
 `/status` in Telegram lists it -> `/attach` -> daemon confirms in Telegram.
 
 Turn: Telegram message -> daemon queue -> the poll returns `{messages}` -> hook prints
-`[Telegram message from the user, id <N>]` + text plus a short instruction to stderr and exits 2 -> Claude starts a turn ->
+`[Message from the user, id <N>]` + text plus a short instruction to stderr and exits 2 -> Claude starts a turn ->
 only a `UserPromptSubmit` whose prompt contains the frame header confirms delivery and marks the turn "Telegram origin" ->
 `PreToolUse` and `MessageDisplay` feed the processing message -> `Stop` sends the final answer to Telegram and the
 Stop hook starts the next poll (the loop continues). A turn that starts without a pending forward is a terminal turn:
@@ -157,9 +157,9 @@ Detach: `/detach`, SessionEnd, dead pid, or idle timeout. The daemon tells Teleg
 
 ### 5.3 Text frame sent to the model
 
-`[Telegram message from the user, id N]` newline text newline `(Treat as a normal user prompt. Your final answer is sent to
-Telegram by the PA daemon. Do not call tools only to reply. Keep it short.)` The text is limited in length and control
-characters are removed.
+`[Message from the user, id N]` newline text newline `(Treat as a normal user prompt. ... Your final answer is delivered
+to the user by the PA daemon. Do not call tools only to reply. Keep it short.)` The frame never names the source
+(Telegram): the model sees only "the user". The text is limited in length and control characters are removed.
 
 ## 6. Risks and mitigations
 

@@ -44,7 +44,7 @@ Bridge not ready (late binding) -> 503. Shared types: `src/remote/protocol.ts`.
 - Hook events: `UserPromptSubmit`, `PreToolUse`, `MessageDisplay`, `Stop`, `StopFailure`, `Notification`, `SessionEnd`.
   The bridge reads defensive fields: `tool_name`, `tool_input`, `last_assistant_message`, `notification_type`, `message`,
   `prompt`, `reason`, `agent_id`. Unknown shape -> ignore, never throw.
-- Confirmation rule: only a `UserPromptSubmit` whose `prompt` contains the frame header `[Telegram message from the user,
+- Confirmation rule: only a `UserPromptSubmit` whose `prompt` contains the frame header `[Message from the user,
   id N]` of a sent (or late, up to 5 min) message confirms delivery and sets the turn origin. Any other prompt is a
   terminal prompt: it ends a stale Telegram turn. Events with `agent_id` (subagents) never start or end a turn.
   `SessionEnd` with reason `clear` or `resume` is ignored.
