@@ -352,6 +352,27 @@ describe("agent-runner", () => {
       expect(callArgs.options).not.toHaveProperty("resume");
     });
 
+    it("sets PA_REMOTE_HOOKS=off and keeps process.env for the spawned Claude process", async () => {
+      const config = makeConfig();
+      process.env.PA_TEST_ENV_KEEP = "yes";
+      vi.mocked(query).mockReturnValue(
+        mockQueryGenerator([{ type: "result", subtype: "success", session_id: "s-env", result: "ok" }]) as any,
+      );
+      vi.mocked(saveInteraction).mockResolvedValue(undefined);
+      vi.mocked(appendAuditEntry).mockResolvedValue(undefined);
+
+      const agentOptions = buildAgentOptions(config, "/tmp/workspace", "", {});
+      try {
+        await runAgentTurn("Hello", "telegram--env", agentOptions, config);
+      } finally {
+        delete process.env.PA_TEST_ENV_KEEP;
+      }
+
+      const env = (vi.mocked(query).mock.calls[0][0].options as { env: Record<string, string> }).env;
+      expect(env.PA_REMOTE_HOOKS).toBe("off");
+      expect(env.PA_TEST_ENV_KEEP).toBe("yes");
+    });
+
     it("second call for the same session key uses resume with captured session ID", async () => {
       const config = makeConfig();
       const sessionKey = "telegram--123456";

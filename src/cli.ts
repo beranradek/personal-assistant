@@ -25,11 +25,13 @@ import { runDailyReflection } from "./memory/daily-reflection.js";
 import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 import { buildClaudeContext, formatSessionStartHookOutput } from "./claude/context.js";
 import { evaluateClaudePreToolUse } from "./claude/security-hook.js";
-import { claudeCompanionSettingsPath, installClaudeCodeTemplates } from "./claude/templates.js";
+import { claudeCompanionSettingsPath, installClaudeCodeTemplates, installClaudeRemoteConfig } from "./claude/templates.js";
+import { createRemoteControlClient, type RemoteControlFn } from "./remote/control-client.js";
+import type { RemoteControlAction, RemoteControlResponse } from "./remote/protocol.js";
 
 const log = createLogger("cli");
 
-const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude-security-hook", "claude", "agents-view"] as const;
+const VALID_COMMANDS = ["terminal", "daemon", "init", "mcp-server", "integapi", "reflect", "episode-eval", "claude-context", "claude-security-hook", "claude-remote-hook", "remote", "claude", "agents-view"] as const;
 type Command = (typeof VALID_COMMANDS)[number];
 
 /** Options whose value must not be mistaken for a command (for example `--assistant claude`). */
@@ -60,9 +62,12 @@ Commands:
   terminal              Start interactive terminal mode
   daemon                Start headless daemon mode
   init                  Create default settings.json in config directory
+                          [--claude-code] [--claude-remote]
   mcp-server            Start stdio MCP server (for Codex backend integration)
   claude-context        Print safe SessionStart context for Claude Code
   claude-security-hook  Apply PA's PreToolUse security policy for Claude Code
+  claude-remote-hook    Hook command for remote Telegram sessions (used by Claude Code hooks)
+  remote <sub>          Remote Telegram session control: attach [target] | detach | status
   claude                Start Claude Code in workspace-restricted companion mode
   agents-view           tmux view: assistant left, agent sessions right (writable)
                           [--assistant <cmd>] [--assistant-cwd <dir>] [-i|--interactive-shell] [--read-only]
@@ -78,7 +83,7 @@ Environment:
   PA_CONFIG             Config directory path (overridden by --config flag)`);
 }
 
-async function runInit(configDir: string, options: { claudeCode: boolean }): Promise<void> {
+export async function runInit(configDir: string, options: { claudeCode: boolean; claudeRemote?: boolean }): Promise<void> {
   const settingsPath = path.join(configDir, "settings.json");
   let settingsAlreadyExist = false;
 
@@ -87,7 +92,7 @@ async function runInit(configDir: string, options: { claudeCode: boolean }): Pro
     settingsAlreadyExist = true;
     console.log(`Settings file already exists: ${settingsPath}`);
     console.log("Edit it to customize your configuration.");
-    if (!options.claudeCode) return;
+    if (!options.claudeCode && !options.claudeRemote) return;
   } catch {
     // File doesn't exist, continue
   }
@@ -109,6 +114,85 @@ async function runInit(configDir: string, options: { claudeCode: boolean }): Pro
     const result = await installClaudeCodeTemplates(config.security.workspace, configDir);
     console.log(`Claude Code templates created: ${result.created.join(", ") || "none"}`);
     if (result.skipped.length > 0) console.log(`Claude Code templates preserved: ${result.skipped.join(", ")}`);
+  }
+  if (options.claudeRemote) {
+    const result = await installClaudeRemoteConfig(config.security.workspace, configDir);
+    console.log(`Claude remote hooks created in: ${result.created.join(", ") || "none"}`);
+    console.log(`Claude remote hooks and allow entries added to: ${result.updated.join(", ") || "none"}`);
+    for (const [file, entries] of Object.entries(result.allowAdded)) {
+      if (entries.length > 0) console.log(`Claude remote allow entries added to ${file}: ${entries.join(", ")}`);
+    }
+    if (result.unchanged.length > 0) console.log(`Claude remote hooks and allow entries already present in: ${result.unchanged.join(", ")}`);
+  }
+}
+
+/** Arguments after the command name (the `--config <path>` pair is removed). */
+export function commandArgs(args: string[], command: string): string[] {
+  const rest: string[] = [];
+  let found = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--config") {
+      i++;
+      continue;
+    }
+    if (!found && args[i] === command) {
+      found = true;
+      continue;
+    }
+    if (found) rest.push(args[i]!);
+  }
+  return rest;
+}
+
+export function formatRemoteControlResponse(response: RemoteControlResponse): string {
+  const lines = [response.message];
+  for (const session of response.sessions) {
+    const attached = session.attachedChatId ? ` [attached: ${session.attachedChatId}]` : "";
+    lines.push(`${session.index}. ${session.name} (${session.cwd}, pid ${session.pid})${attached}`);
+  }
+  return lines.join("\n");
+}
+
+/** `pa remote attach|detach|status [target]`. Returns the exit code. */
+export async function runRemoteCommand(
+  args: string[],
+  control: RemoteControlFn,
+  out: { log: (text: string) => void; error: (text: string) => void } = console,
+): Promise<number> {
+  const action = args[0];
+  if (action !== "attach" && action !== "detach" && action !== "status") {
+    out.error("Usage: pa remote attach [target] | detach | status");
+    return 1;
+  }
+  const target = action === "attach" ? args[1] : undefined;
+  try {
+    const response = await control({ action: action satisfies RemoteControlAction, ...(target ? { target } : {}) });
+    out.log(formatRemoteControlResponse(response));
+    return response.ok ? 0 : 1;
+  } catch (err) {
+    out.error(`remote ${action}: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}
+
+async function runRemote(configDir: string, args: string[]): Promise<void> {
+  const config = loadConfig(configDir);
+  const control = createRemoteControlClient({ configDir, port: config.codex.httpMcpPort });
+  process.exitCode = await runRemoteCommand(commandArgs(args, "remote"), control);
+}
+
+/** Hook entry point. Never writes to stdout. The exit code tells Claude Code what to do (2 = wake the session). */
+async function runClaudeRemoteHookCommand(configDir: string, args: string[]): Promise<void> {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
+  try {
+    const { runClaudeRemoteHook, createDefaultRemoteHookDeps } = await import("./claude/remote-hook.js");
+    const deps = { ...createDefaultRemoteHookDeps(controller.signal), configDir };
+    process.exitCode = await runClaudeRemoteHook(commandArgs(args, "claude-remote-hook"), deps);
+  } catch {
+    process.exitCode = 0;
   }
 }
 
@@ -301,6 +385,10 @@ async function startMcpServer(configDir: string): Promise<void> {
     handleIntegCalendar: integProxy.calendar,
     handleIntegSlack: integProxy.slack,
     ...(tmuxAgents ? { tmuxAgents } : {}),
+    // This process is not the daemon: remote control goes to the daemon over HTTP (token file in the config dir).
+    ...(config.claudeCode.remote.enabled
+      ? { handleRemoteControl: createRemoteControlClient({ configDir, port: config.codex.httpMcpPort }) }
+      : {}),
   });
 
   // Clean shutdown
@@ -439,7 +527,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case "init":
-      await runInit(configDir, { claudeCode: args.includes("--claude-code") });
+      await runInit(configDir, { claudeCode: args.includes("--claude-code"), claudeRemote: args.includes("--claude-remote") });
       break;
     case "terminal":
       await runTerminal(configDir);
@@ -455,6 +543,12 @@ async function main(): Promise<void> {
       break;
     case "claude-security-hook":
       await runClaudeSecurityHook(configDir);
+      break;
+    case "claude-remote-hook":
+      await runClaudeRemoteHookCommand(configDir, args);
+      break;
+    case "remote":
+      await runRemote(configDir, args);
       break;
     case "claude":
       await runClaudeCompanion(configDir, args);

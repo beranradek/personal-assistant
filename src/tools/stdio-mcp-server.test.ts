@@ -138,6 +138,55 @@ describe("createStdioMcpServer", () => {
     });
   });
 
+  describe("remote session tools", () => {
+    const response = { ok: true, message: "done", sessions: [] };
+
+    it("does not list the tools without a control handler", async () => {
+      const { tools } = await getListHandler()({});
+      expect(tools.map((t: { name: string }) => t.name).filter((n: string) => n.startsWith("remote_session"))).toEqual([]);
+    });
+
+    it("lists the tools and marks status read-only", async () => {
+      deps = makeDeps({ handleRemoteControl: vi.fn().mockResolvedValue(response) });
+      handlers.clear();
+      createStdioMcpServer(deps);
+      const { tools } = await getListHandler()({});
+      const byName = new Map(tools.map((t: { name: string }) => [t.name, t]));
+      expect([...byName.keys()]).toEqual(expect.arrayContaining(["remote_session_attach", "remote_session_detach", "remote_session_status"]));
+      expect((byName.get("remote_session_status") as { annotations: { readOnlyHint: boolean } }).annotations.readOnlyHint).toBe(true);
+      expect((byName.get("remote_session_attach") as { annotations: { readOnlyHint: boolean } }).annotations.readOnlyHint).toBe(false);
+    });
+
+    it("maps tools to control actions and passes the attach target", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      deps = makeDeps({ handleRemoteControl: control });
+      handlers.clear();
+      createStdioMcpServer(deps);
+
+      await callTool("remote_session_attach", { target: "2" });
+      await callTool("remote_session_attach");
+      await callTool("remote_session_detach", { target: "ignored" });
+      const result = await callTool("remote_session_status");
+
+      expect(control.mock.calls.map((c) => c[0])).toEqual([
+        { action: "attach", target: "2" },
+        { action: "attach" },
+        { action: "detach" },
+        { action: "status" },
+      ]);
+      expect(JSON.parse(result.content[0].text)).toEqual(response);
+    });
+
+    it("turns a control failure into an MCP error", async () => {
+      deps = makeDeps({ handleRemoteControl: vi.fn().mockRejectedValue(new Error("daemon down")) });
+      handlers.clear();
+      createStdioMcpServer(deps);
+      const result = await callTool("remote_session_status");
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0].text)).toEqual({ error: "daemon down" });
+    });
+  });
+
   describe("integration tools", () => {
     it("exposes PA credential proxies when all integration handlers are available", async () => {
       deps = makeDeps({

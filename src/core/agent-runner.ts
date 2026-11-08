@@ -27,6 +27,7 @@ import { bashSecurityHook } from "../security/bash-hook.js";
 import { fileToolSecurityHook } from "../security/file-tool-hook.js";
 import { sessionKeyToPath } from "../session/types.js";
 import { appendPromptLog } from "./prompt-log.js";
+import { REMOTE_HOOKS_DISABLE_ENV } from "../remote/protocol.js";
 import {
   loadConversationHistory,
   summarizeConversation,
@@ -291,10 +292,16 @@ function buildEffectiveOptions(
   agentOptions: AgentOptions,
   sessionKey: string,
 ): AgentOptions {
-  const summary = sessionSummaries.get(sessionKey);
-  if (!summary) return agentOptions;
-  return {
+  // PA's own SDK turns must not run the remote session hooks. The SDK env replaces process.env, so merge both.
+  const callerEnv = (agentOptions as { env?: Record<string, string | undefined> }).env;
+  const withEnv = {
     ...agentOptions,
+    env: { ...process.env, ...callerEnv, [REMOTE_HOOKS_DISABLE_ENV]: "off" },
+  } as AgentOptions;
+  const summary = sessionSummaries.get(sessionKey);
+  if (!summary) return withEnv;
+  return {
+    ...withEnv,
     systemPrompt: {
       ...agentOptions.systemPrompt,
       append:

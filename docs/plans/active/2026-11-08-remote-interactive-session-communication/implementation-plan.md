@@ -1,7 +1,7 @@
 # Remote interactive session communication - Implementation plan
 
 **Date:** 2026-11-08 (revised after Gate G)
-**Status:** In progress
+**Status:** Implemented 2026-11-08 (unit tests and fake-Telegram E2E done; real Telegram bot check by the user pending)
 **Spec:** [spec.md](spec.md)
 
 ## Gate G result (done)
@@ -165,3 +165,35 @@ the http server deps. `pa remote attach|detach|status` in `src/cli.ts`. Add `mcp
 ## Delivery notes
 
 - (filled in by the spike and the implementation)
+- Spike (Claude Code 2.1.319, tmux, all hooks async, scratch dir in the scratchpad):
+  - `MessageDisplay` payload: `session_id`, `transcript_path`, `cwd`, `prompt_id`, `hook_event_name`, `turn_id`, `message_id`,
+    `index` (0), `final` (true), `delta` (text). Not token streaming: one event per assistant message block (a short
+    answer gave one event with `final: true` and the full text in `delta`). No `tool_name`. The bridge must read `delta`.
+  - `UserPromptSubmit` DOES fire for a rewake turn. `prompt` is NOT the message text: it is a wrapper
+    `<task-notification><summary>Stop hook feedback</summary></task-notification><system-reminder>Stop hook blocking error
+    from command "SessionStart:startup": <our stderr text></system-reminder>` (command name is "Stop" for the Stop hook).
+    The model sees the stderr text inside this wrapper and answers it. Do not use this `prompt` as the turn text.
+  - `Stop` payload: `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `effort`, `stop_hook_active`
+    (true after a rewake turn), `last_assistant_message` (present, full final text), `background_tasks`, `session_crons`.
+  - `PreToolUse` payload has `tool_name` ("Bash") and `tool_input` ({command, description}) plus `tool_use_id`, `prompt_id`.
+  - `SessionEnd` fires on `/exit` (`reason: "prompt_input_exit"`). No pid in any payload (the hook finds the claude pid).
+  - An async hook that ran 70 s (no timeout set) was NOT killed at 60 s: it ended normally. Long polls (55 s) are safe.
+  - The Stop hook fires again after each rewake turn, so the listen loop continues by itself.
+  - Not tested: `Notification` (did not occur), typing while an async hook runs.
+  - Plan impact: nothing contradicts the plan, except the `prompt` wrapper above (UserPromptSubmit text is not the Telegram text).
+- Review round (2026-11-08): two reviewers (correctness/security, completeness). Fixed: delivery confirmation only by a
+  `UserPromptSubmit` that contains the frame header (terminal turns no longer leak), stale turn clearing, `StopFailure`,
+  busy-aware delivery timeout, abort race, token lifecycle (token file written after the HTTP bind, never in probes),
+  listen loop token/connection retry windows, `PA_REMOTE_HOOKS=off` for PA's own Agent SDK turns, no pid guessing,
+  frame hardening, big payload stub, allow-entry merge in `pa init --claude-remote`.
+- Real E2E (2026-11-08, Claude Code 2.1.319, tmux, real `claude`, real bridge and routes, FAKE Telegram sender, hooks made by
+  the real `installClaudeRemoteConfig`, hook command = built `pa claude-remote-hook`):
+  - Session registered itself at start (SessionStart listener). `attach` OK.
+  - A forwarded message woke the idle session. One processing message with the tool line, one final answer. OK.
+  - A terminal turn while attached: nothing sent to Telegram. OK. A second Telegram message woke the session again
+    (the Stop hook re-armed the listener). OK. A Telegram message during a terminal turn was answered, the terminal answer
+    did not leak. OK.
+  - `/exit`: no hook process stayed. The `SessionEnd` event did not detach at once; the 30 s liveness check detached it
+    with the notice "process is gone". So auto detach after exit takes up to 30 s.
+  - Not tested: real Telegram bot, `pa claude` restricted launcher, plain `claude --dangerously-skip-permissions`
+    (only the plain `claude` + `--settings` path), a terminal other than tmux, `Notification` events, voice/photo.

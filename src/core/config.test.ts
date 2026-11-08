@@ -321,6 +321,36 @@ describe("config", () => {
     });
   });
 
+  describe("claudeCode.remote", () => {
+    function load(settings: Record<string, unknown>) {
+      fs.writeFileSync(path.join(tmpDir, "settings.json"), JSON.stringify(settings));
+      return loadConfig(tmpDir);
+    }
+
+    it("is disabled with defaults when the section is absent", () => {
+      expect(load({}).claudeCode.remote).toEqual({
+        enabled: false,
+        idleDetachMinutes: 60,
+        deliveryTimeoutMs: 20000,
+        progress: true,
+        maxMessageChars: 4000,
+        maxMessagesPerMinute: 20,
+        reasoning: false,
+      });
+    });
+
+    it("merges user overrides over defaults", () => {
+      const r = load({ claudeCode: { remote: { enabled: true, idleDetachMinutes: 5 } } }).claudeCode.remote;
+      expect(r.enabled).toBe(true);
+      expect(r.idleDetachMinutes).toBe(5);
+      expect(r.maxMessagesPerMinute).toBe(20);
+    });
+
+    it("rejects invalid values", () => {
+      expect(() => load({ claudeCode: { remote: { maxMessageChars: 0 } } })).toThrow();
+    });
+  });
+
   describe("tmuxAgents", () => {
     function load(tmuxAgents?: Record<string, unknown>, security?: Record<string, unknown>) {
       const settings: Record<string, unknown> = {};

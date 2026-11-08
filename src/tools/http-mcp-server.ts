@@ -18,6 +18,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { StdioMcpServerDeps } from "./stdio-mcp-server.js";
 import { createStdioMcpServer } from "./stdio-mcp-server.js";
 import { createLogger } from "../core/logger.js";
+import { handleRemoteRequest, isRemotePath, type RemoteRouteHolder } from "../remote/routes.js";
 
 const log = createLogger("http-mcp-server");
 
@@ -55,6 +56,8 @@ export function isAllowedRequest(headers: http.IncomingHttpHeaders, port: number
 export async function startHttpMcpServer(
   deps: StdioMcpServerDeps,
   port: number,
+  /** Optional: enables the `/remote/*` routes (remote session mode). */
+  remote?: RemoteRouteHolder,
 ): Promise<HttpMcpServerHandle> {
   const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server }>();
   const closingSessions = new Map<string, Promise<void>>();
@@ -102,6 +105,12 @@ export async function startHttpMcpServer(
 
       if (shuttingDown) {
         writeJsonRpcError(res, 503, -32000, "MCP server shutting down");
+        return;
+      }
+
+      // Remote session routes (token protected) are dispatched before the MCP body parsing.
+      if (remote && isRemotePath(req.url)) {
+        await handleRemoteRequest(req, res, remote);
         return;
       }
 

@@ -12,6 +12,7 @@
  *   - exec — run background commands
  *   - process — check background process status
  *   - agent_session_* — tmux project agent sessions (only when tmuxAgents.enabled)
+ *   - remote_session_* — attach Telegram to a live Claude Code session (only when remote mode is enabled)
  *
  * Usage: pa mcp-server [--config <path>]
  */
@@ -37,6 +38,7 @@ import {
 import type { CalendarRequest, GmailRequest, SlackRequest } from "../integ-api/mcp-proxy.js";
 import { TMUX_TOOLS, findTmuxTool, toMcpDefinition } from "../tmux-agents/tools.js";
 import type { TmuxAgentService } from "../tmux-agents/types.js";
+import type { RemoteControlFn } from "../remote/control-client.js";
 
 export interface StdioMcpServerDeps {
   search: (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
@@ -54,6 +56,12 @@ export interface StdioMcpServerDeps {
   handleIntegSlack?: (args: SlackRequest) => Promise<unknown>;
   /** Present only when `tmuxAgents.enabled`: registers the `agent_session_*` tools. */
   tmuxAgents?: TmuxAgentService;
+  /**
+   * Present only when remote mode is enabled: registers the `remote_session_*` tools.
+   * Inside the daemon it calls the bridge directly. In `pa mcp-server` (separate process) it is an HTTP call to the
+   * daemon (`createRemoteControlClient`).
+   */
+  handleRemoteControl?: RemoteControlFn;
 }
 
 const MEMORY_LINT_TOOL_DEFINITION = {
@@ -247,6 +255,32 @@ const INTEG_TOOL_DEFINITIONS = [
   },
 ];
 
+const REMOTE_TOOL_DEFINITIONS = [
+  {
+    name: "remote_session_attach",
+    description: "Attach the user's Telegram chat to a live Claude Code session. Telegram messages then go to that session.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        target: { type: "string", description: "Session index or name from remote_session_status. Optional when only one session exists." },
+      },
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "remote_session_detach",
+    description: "Detach the user's Telegram chat from the attached Claude Code session.",
+    inputSchema: { type: "object" as const, properties: {} },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "remote_session_status",
+    description: "List live Claude Code sessions known to the PA daemon and show which one is attached to Telegram.",
+    inputSchema: { type: "object" as const, properties: {} },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+];
+
 /**
  * Create a standalone MCP server exposing PA tools.
  * Connect to a StdioServerTransport to serve over stdio.
@@ -268,6 +302,7 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
     ...(deps.episodeDeps ? EPISODE_TOOL_DEFINITIONS : []),
     ...(deps.handleIntegList && deps.handleIntegGmail && deps.handleIntegCalendar && deps.handleIntegSlack ? INTEG_TOOL_DEFINITIONS : []),
     ...(deps.tmuxAgents ? TMUX_TOOLS.map(toMcpDefinition) : []),
+    ...(deps.handleRemoteControl ? REMOTE_TOOL_DEFINITIONS : []),
   ];
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -429,6 +464,15 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
         if (!deps.handleIntegSlack) return unavailable("Slack integration");
         const handler = deps.handleIntegSlack;
         return proxyResult(() => handler((args ?? {}) as SlackRequest));
+      }
+      case "remote_session_attach":
+      case "remote_session_detach":
+      case "remote_session_status": {
+        const control = deps.handleRemoteControl;
+        if (!control) return unavailable("Remote session control");
+        const action = name === "remote_session_attach" ? "attach" : name === "remote_session_detach" ? "detach" : "status";
+        const target = action === "attach" && typeof args?.target === "string" && args.target !== "" ? args.target : undefined;
+        return proxyResult(() => control({ action, ...(target ? { target } : {}) }));
       }
       case "episode_recent":
         return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps!);

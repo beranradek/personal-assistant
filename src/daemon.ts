@@ -60,6 +60,12 @@ import { createIntegMcpProxy } from "./integ-api/mcp-proxy.js";
 import { createTmuxAgentsServer } from "./tools/tmux-agents-server.js";
 import { startTmuxAgentService } from "./tmux-agents/startup.js";
 import type { TmuxAgentService } from "./tmux-agents/types.js";
+import { generateRemoteToken, writeRemoteToken, type RemoteTokenHandle } from "./remote/token.js";
+import type { RemoteRouteHolder } from "./remote/routes.js";
+import { createRemoteBridge } from "./remote/bridge.js";
+import { createTelegramRouter } from "./remote/telegram-router.js";
+import { isPidAlive } from "./claude/process-tree.js";
+import type { RemoteBridge } from "./remote/protocol.js";
 
 const log = createLogger("daemon");
 
@@ -96,12 +102,17 @@ type DaemonCoreRuntime = {
   fallbackTriggered: boolean;
   episodicSurfaceExposed: boolean;
   httpMcpServer?: HttpMcpServerHandle;
+  /** Present only when remote mode is active. `token` is set after the HTTP server bound and the file was written. */
+  remote?: { holder: RemoteRouteHolder; token?: RemoteTokenHandle };
+  redact: (text: string) => string;
 };
 
 async function createDaemonCoreFromConfig(args: {
   config: Config;
   configDir: string;
   deps?: DaemonCoreDeps;
+  /** Probes set this: no token file and no remote routes. */
+  skipRemote?: boolean;
 }): Promise<DaemonCoreRuntime> {
   const initializeStartupMemoryServicesImpl =
     args.deps?.initializeStartupMemoryServices ?? initializeStartupMemoryServices;
@@ -226,7 +237,24 @@ async function createDaemonCoreFromConfig(args: {
   // spawning their own `pa mcp-server` stdio process (which leaks orphans that
   // accumulate the 314 MB embedding model in memory).
   let httpMcpServer: HttpMcpServerHandle | undefined;
-  if (args.config.agent.backend === "codex" || args.config.mcp?.httpServer?.enabled === true) {
+
+  // Remote session mode: the routes live on the same HTTP server, protected by a random token in a 0600 file.
+  // The holder is created now; the bridge is set later, when the Telegram adapter exists (routes answer 503 until then).
+  // The token file is written only after the HTTP server has bound its port (see below). Probes (skipRemote) never use remote mode.
+  let remote: DaemonCoreRuntime["remote"];
+  if (args.config.claudeCode?.remote?.enabled === true && !args.skipRemote) {
+    if (!args.config.adapters.telegram.enabled) {
+      // No token file and no routes: the hooks exit at once.
+      log.warn("claudeCode.remote.enabled is true but adapters.telegram.enabled is false: remote sessions are disabled");
+    } else {
+      const firstUserId = args.config.adapters.telegram.allowedUserIds[0];
+      remote = {
+        holder: { token: generateRemoteToken(), ...(firstUserId !== undefined ? { defaultChatId: String(firstUserId) } : {}) },
+      };
+    }
+  }
+
+  if (args.config.agent.backend === "codex" || args.config.mcp?.httpServer?.enabled === true || remote) {
     const integProxy = createIntegMcpProxy(args.config.integApi);
     const mcpDeps: StdioMcpServerDeps = {
       search: searchMemory,
@@ -245,11 +273,39 @@ async function createDaemonCoreFromConfig(args: {
       ...(listEpisodes ? {
         episodeDeps: { listEpisodes, insertEpisode, searchEpisodesVector, redact },
       } : {}),
+      // Inside the daemon the tools call the bridge directly (no HTTP round trip, no token needed).
+      ...(remote
+        ? {
+            handleRemoteControl: async (request) => {
+              const bridge = remote!.holder.bridge;
+              if (!bridge) throw new Error("Remote bridge is not ready (Telegram adapter not started)");
+              const chatId = request.chatId ?? remote!.holder.defaultChatId;
+              if (!chatId) throw new Error("No default Telegram user configured (adapters.telegram.allowedUserIds)");
+              return bridge.control({ ...request, chatId });
+            },
+          }
+        : {}),
     };
     try {
-      httpMcpServer = await startHttpMcpServer(mcpDeps, args.config.codex.httpMcpPort);
-      log.info({ port: args.config.codex.httpMcpPort }, "Shared HTTP MCP server started");
+      httpMcpServer = remote
+        ? await startHttpMcpServer(mcpDeps, args.config.codex.httpMcpPort, remote.holder)
+        : await startHttpMcpServer(mcpDeps, args.config.codex.httpMcpPort);
+      log.info({ port: args.config.codex.httpMcpPort, remote: Boolean(remote) }, "Shared HTTP MCP server started");
+      if (remote) {
+        // This process owns the port now, so it may publish the token file.
+        try {
+          remote.token = await writeRemoteToken(args.configDir, remote.holder.token);
+        } catch (err) {
+          log.error({ err }, "remote session mode disabled: token file could not be written");
+          remote = undefined;
+        }
+      }
     } catch (err) {
+      if (remote) {
+        // The token file was not touched: another daemon may own it.
+        log.error({ err }, "remote session mode unavailable: HTTP server did not start");
+        remote = undefined;
+      }
       log.warn(
         { err, port: args.config.codex.httpMcpPort },
         "shared HTTP MCP server unavailable; falling back to stdio MCP per Codex turn",
@@ -269,6 +325,7 @@ async function createDaemonCoreFromConfig(args: {
     if (httpMcpServer) {
       await httpMcpServer.close().catch(() => undefined);
     }
+    await remote?.token?.remove();
     throw err;
   }
   log.info({ backend: backend.name }, "Agent backend initialized");
@@ -300,6 +357,8 @@ async function createDaemonCoreFromConfig(args: {
     fallbackTriggered,
     episodicSurfaceExposed,
     httpMcpServer,
+    remote,
+    redact,
   };
 }
 
@@ -326,6 +385,7 @@ export async function runDegradedDaemonStartupProbe(args: {
   const runtime = await createDaemonCoreFromConfig({
     config: args.config,
     configDir: args.configDir ?? "/probe",
+    skipRemote: true,
     deps: {
       ...args.deps,
       buildAgentOptions: ((config, workspace, memoryContent, mcpServers) => {
@@ -467,33 +527,59 @@ export async function startDaemon(configDir: string): Promise<void> {
     stopMemorySync,
     backend,
     httpMcpServer,
+    remote,
+    redact,
   } = await createDaemonCoreFromConfig({ config, configDir });
+  let remoteBridge: RemoteBridge | undefined;
 
   // 7. Start adapters (only if enabled)
   const activeAdapters: Adapter[] = [];
 
   if (config.adapters.telegram.enabled) {
+    // Normal path: queue the message and tell the user when the queue is full.
+    const enqueueTelegram = (msg: AdapterMessage): void => {
+      const result = queue.enqueue(msg);
+      if (!result.accepted) {
+        log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
+        telegram.sendResponse({
+          source: msg.source,
+          sourceId: msg.sourceId,
+          text: "I'm currently busy processing other messages. Please try again in a moment.",
+          metadata: {
+            ...(msg.metadata && typeof msg.metadata === "object"
+              ? (msg.metadata as Record<string, unknown>)
+              : {}),
+            responseKind: "system",
+          },
+        }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
+      }
+    };
+    // With remote mode the router decides: attached chat -> live session, otherwise the normal path.
+    // It is set before telegram.start(), so no message arrives earlier.
+    let onTelegramMessage = enqueueTelegram;
     const telegram = createTelegramAdapter(
       config.adapters.telegram,
-      (msg) => {
-        const result = queue.enqueue(msg);
-        if (!result.accepted) {
-          log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
-          telegram.sendResponse({
-            source: msg.source,
-            sourceId: msg.sourceId,
-            text: "I'm currently busy processing other messages. Please try again in a moment.",
-            metadata: {
-              ...(msg.metadata && typeof msg.metadata === "object"
-                ? (msg.metadata as Record<string, unknown>)
-                : {}),
-              responseKind: "system",
-            },
-          }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
-        }
-      },
+      (msg) => onTelegramMessage(msg),
       { workspaceDir: config.security.workspace },
     );
+    if (remote) {
+      const sendSystem = (chatId: string, text: string) =>
+        telegram.sendResponse({ source: "telegram", sourceId: chatId, text, metadata: { responseKind: "system" } });
+      remoteBridge = createRemoteBridge({
+        config: { remote: config.claudeCode.remote, processingUpdateIntervalMs: config.gateway.processingUpdateIntervalMs },
+        sender: {
+          sendMessage: sendSystem,
+          createProcessingMessage: (sourceId, text, metadata) => telegram.createProcessingMessage!(sourceId, text, metadata),
+          updateProcessingMessage: (sourceId, messageId, text, metadata) =>
+            telegram.updateProcessingMessage!(sourceId, messageId, text, metadata),
+        },
+        isPidAlive,
+        redact,
+      });
+      onTelegramMessage = createTelegramRouter({ bridge: remoteBridge, enqueue: enqueueTelegram, send: sendSystem });
+      remote.holder.bridge = remoteBridge;
+      log.info("Remote session bridge ready");
+    }
     router.register(telegram);
     await telegram.start();
     activeAdapters.push(telegram);
@@ -649,6 +735,11 @@ export async function startDaemon(configDir: string): Promise<void> {
 
     // Stop the queue processing loop (waits for current turn to finish)
     queue.stop();
+
+    // Stop the remote bridge (ends pending long polls) and remove the token file, so hooks stop at once.
+    remoteBridge?.stop();
+    // Remove the token file only if this process wrote it.
+    await remote?.token?.remove();
 
     // Stop all active adapters
     for (const adapter of activeAdapters) {

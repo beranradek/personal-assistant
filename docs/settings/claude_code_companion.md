@@ -63,13 +63,21 @@ allowlist, and path policy. Claude can use PA MCP tools for memory, episodes,
 cron, processes, habits, and Gmail/Calendar/Slack proxy operations; tokens stay
 inside PA rather than in the Claude project.
 
+## Remote mode (Telegram)
+
+You can attach your phone to a live companion session through a Telegram bot. See
+[claude_code_remote_session.md](claude_code_remote_session.md).
+
 ## Security expectations
 
 Prefer `pa claude`. Its restricted mode and external launcher settings are
 defense in depth, not an OS sandbox against a hostile prompt or arbitrary code
 run by broadly allowed interpreters. A direct `claude` session is compatible,
-but is not a security boundary. Do not use `--dangerously-skip-permissions`, put
-credentials into generated files, or replace an existing user-managed `.mcp.json`.
+but is not a security boundary. Avoid `--dangerously-skip-permissions` unless you
+accept that no tool call needs approval (the PA security hook still runs). The
+[remote session mode](claude_code_remote_session.md) is a deliberate case: there a Telegram
+message becomes a prompt, so only use it with an allowlisted Telegram user. Do not put
+credentials into generated files or replace an existing user-managed `.mcp.json`.
 
 Calendar RSVP is an external side effect and still needs the user's explicit
 instruction. Claude Code may keep its own protections for configuration and Git

@@ -355,6 +355,27 @@ export const TmuxAgentsConfigSchema = z.object({
 
 export type TmuxAgentsConfig = z.infer<typeof TmuxAgentsConfigSchema>;
 
+/** Remote interactive session communication (Telegram <-> live Claude Code session). */
+export const ClaudeCodeRemoteConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Detach the session after this many minutes without Telegram traffic. */
+  idleDetachMinutes: z.number().int().positive().default(60),
+  /** A forwarded message not taken by the session within this time gets a "not delivered" notice. */
+  deliveryTimeoutMs: z.number().int().positive().default(20_000),
+  /** Show progress (tool calls, assistant text) in one edited Telegram message. */
+  progress: z.boolean().default(true),
+  maxMessageChars: z.number().int().positive().default(4000),
+  maxMessagesPerMinute: z.number().int().positive().default(20),
+  /** Reserved: send reasoning text in progress. */
+  reasoning: z.boolean().default(false),
+});
+
+export const ClaudeCodeConfigSchema = z.object({
+  remote: ClaudeCodeRemoteConfigSchema.default(() => ClaudeCodeRemoteConfigSchema.parse({})),
+});
+
+export type ClaudeCodeRemoteConfig = z.infer<typeof ClaudeCodeRemoteConfigSchema>;
+
 export const ConfigSchema = z.object({
   security: SecurityConfigSchema,
   adapters: AdaptersConfigSchema,
@@ -371,6 +392,7 @@ export const ConfigSchema = z.object({
   habits: HabitsConfigSchema.default(() => HabitsConfigSchema.parse({})),
   drafts: DraftsConfigSchema.default(() => DraftsConfigSchema.parse({})),
   tmuxAgents: TmuxAgentsConfigSchema.default(() => TmuxAgentsConfigSchema.parse({})),
+  claudeCode: ClaudeCodeConfigSchema.default(() => ClaudeCodeConfigSchema.parse({})),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

@@ -58,6 +58,7 @@ For Telegram and Slack adapters, the queue uses `streamAgentTurn()` to stream in
 | `cron/` | User-created scheduled jobs: CRUD tool, node-cron timer, JSON file persistence |
 | `exec/` | Background process spawning with in-memory registry and completion events |
 | `tmux-agents/` | Optional `agent_session_*` tools: project coding agents in tmux sessions (service, registry, runner, screen detectors, tool table). Off by default. Also `pa agents-view` (`view.ts`, `view-cli.ts`): assistant and agent panes in the user's tmux |
+| `remote/` | Remote interactive session: Telegram <-> live Claude Code session. `bridge` (sessions, queue, progress), `telegram-router` (`/attach`, `/detach`, `/status`, `/pa`), `routes` (token-protected `/remote/*` HTTP routes), `token`, `control-client`. Hook command in `claude/remote-hook.ts`. Off by default |
 | `tools/` | MCP servers: `memory-server` (memory_search tool) and `assistant-server` (cron_list, cron_create, cron_update, cron_remove, exec, process tools) |
 | `templates/` | Workspace seed files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, HEARTBEAT.md) with Czech variants in `cs/` |
 
@@ -79,7 +80,7 @@ For Telegram and Slack adapters, the queue uses `streamAgentTurn()` to stream in
 
 `~/.personal-assistant/settings.json` (create with `pa init`). Loaded once at startup (no hot-reload). Deep-merged over defaults, validated with Zod. Override location with `--config <path>` or `PA_CONFIG` env var.
 
-Key sections: `security` (command allowlist, workspace/data paths, additional read/write dirs), `adapters` (telegram/slack), `heartbeat`, `gateway`, `agent` (model, maxTurns), `session` (maxHistoryMessages, compaction), `memory` (hybrid search weights/thresholds), `mcpServers`.
+Key sections: `security` (command allowlist, workspace/data paths, additional read/write dirs), `adapters` (telegram/slack), `heartbeat`, `gateway`, `agent` (model, maxTurns), `session` (maxHistoryMessages, compaction), `memory` (hybrid search weights/thresholds), `mcpServers`, `claudeCode.remote` (remote Telegram session mode, off by default).
 
 ## Runtime Directories
 

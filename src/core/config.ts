@@ -167,6 +167,17 @@ export const DEFAULTS: Config = {
     httpServer: { enabled: false },
   },
   mcpServers: {},
+  claudeCode: {
+    remote: {
+      enabled: false,
+      idleDetachMinutes: 60,
+      deliveryTimeoutMs: 20_000,
+      progress: true,
+      maxMessageChars: 4000,
+      maxMessagesPerMinute: 20,
+      reasoning: false,
+    },
+  },
   codex: {
     codexPath: null,
     apiKey: null,

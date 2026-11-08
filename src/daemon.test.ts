@@ -79,6 +79,14 @@ vi.mock("./adapters/telegram.js", () => ({
   createTelegramAdapter: vi.fn(),
 }));
 
+vi.mock("./remote/bridge.js", () => ({
+  createRemoteBridge: vi.fn(),
+}));
+
+vi.mock("./remote/telegram-router.js", () => ({
+  createTelegramRouter: vi.fn(),
+}));
+
 vi.mock("./adapters/slack.js", () => ({
   createSlackAdapter: vi.fn(),
 }));
@@ -180,6 +188,11 @@ import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
+import { createRemoteBridge } from "./remote/bridge.js";
+import { createTelegramRouter } from "./remote/telegram-router.js";
+import * as fsPromises from "node:fs/promises";
+import * as osModule from "node:os";
+import * as pathModule from "node:path";
 import { createGithubWebhookAdapter } from "./adapters/github-webhook.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { loadCronStore } from "./cron/store.js";
@@ -740,6 +753,129 @@ describe("daemon", () => {
 
     // GitHub webhook should NOT be created since it's disabled
     expect(createGithubWebhookAdapter).not.toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------------
+  // Remote session mode
+  // -----------------------------------------------------------------------
+  describe("remote session mode", () => {
+    function remoteConfig(telegramEnabled: boolean): Config {
+      const base = makeConfig();
+      return makeConfig({
+        adapters: { ...base.adapters, telegram: { ...base.adapters.telegram, enabled: telegramEnabled, allowedUserIds: [4242] } },
+        claudeCode: { remote: { enabled: true } },
+      } as Partial<Config>);
+    }
+
+    let configDir: string;
+    beforeEach(async () => {
+      configDir = await fsPromises.mkdtemp(pathModule.join(osModule.tmpdir(), "pa-daemon-remote-"));
+      vi.mocked(createRemoteBridge).mockReset();
+      vi.mocked(createTelegramRouter).mockReset();
+    });
+    afterEach(async () => {
+      await fsPromises.rm(configDir, { recursive: true, force: true });
+    });
+
+    it("writes the token file, starts the HTTP server with the holder, binds the bridge and wraps onMessage", async () => {
+      const config = remoteConfig(true);
+      const { mockQueue } = setupMocks(config);
+      const telegram = { ...makeMockAdapter("telegram"), createProcessingMessage: vi.fn(), updateProcessingMessage: vi.fn() };
+      vi.mocked(createTelegramAdapter).mockReturnValue(telegram as any);
+      const bridge = { stop: vi.fn() };
+      vi.mocked(createRemoteBridge).mockReturnValue(bridge as any);
+      const routed = vi.fn();
+      vi.mocked(createTelegramRouter).mockReturnValue(routed);
+
+      await startDaemon(configDir);
+
+      const token = (await fsPromises.readFile(pathModule.join(configDir, "remote-token"), "utf8")).trim();
+      expect(token).toMatch(/^[0-9a-f]{64}$/);
+      expect((await fsPromises.stat(pathModule.join(configDir, "remote-token"))).mode & 0o777).toBe(0o600);
+      const holder = vi.mocked(startHttpMcpServer).mock.calls[0]![2]!;
+      expect(holder).toMatchObject({ token, defaultChatId: "4242", bridge });
+      expect(createTelegramRouter).toHaveBeenCalledWith(expect.objectContaining({ bridge, enqueue: expect.any(Function), send: expect.any(Function) }));
+
+      // The adapter callback goes through the router.
+      const onMessage = vi.mocked(createTelegramAdapter).mock.calls[0]![1];
+      const msg = { source: "telegram", sourceId: "4242", text: "/status" };
+      onMessage(msg);
+      expect(routed).toHaveBeenCalledWith(msg);
+      expect(mockQueue.enqueue).not.toHaveBeenCalled();
+
+      // The router's enqueue keeps the normal queue path.
+      const routerDeps = vi.mocked(createTelegramRouter).mock.calls[0]![0];
+      routerDeps.enqueue(msg);
+      expect(mockQueue.enqueue).toHaveBeenCalledWith(msg);
+    });
+
+    it("stops the bridge and removes the token file on shutdown", async () => {
+      const config = remoteConfig(true);
+      setupMocks(config);
+      vi.mocked(createTelegramAdapter).mockReturnValue(makeMockAdapter("telegram") as any);
+      const bridge = { stop: vi.fn() };
+      vi.mocked(createRemoteBridge).mockReturnValue(bridge as any);
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await startDaemon(configDir);
+      await signalHandlers.get("SIGTERM")!();
+
+      expect(bridge.stop).toHaveBeenCalled();
+      await expect(fsPromises.stat(pathModule.join(configDir, "remote-token"))).rejects.toThrow();
+      exitSpy.mockRestore();
+    });
+
+    it("warns once when remote is enabled but Telegram is disabled: no token, no routes, no bridge", async () => {
+      const config = remoteConfig(false);
+      setupMocks(config);
+
+      await startDaemon(configDir);
+
+      const warnings = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes("adapters.telegram.enabled is false"));
+      expect(warnings).toHaveLength(1);
+      expect(createRemoteBridge).not.toHaveBeenCalled();
+      for (const call of vi.mocked(startHttpMcpServer).mock.calls) expect(call[2]).toBeUndefined();
+      await expect(fsPromises.stat(pathModule.join(configDir, "remote-token"))).rejects.toThrow();
+    });
+
+    it("never touches the token file of a live daemon when the HTTP server cannot bind", async () => {
+      const config = remoteConfig(true);
+      setupMocks(config);
+      vi.mocked(startHttpMcpServer).mockRejectedValue(new Error("listen EADDRINUSE: address already in use"));
+      vi.mocked(createTelegramAdapter).mockReturnValue(makeMockAdapter("telegram") as any);
+      const tokenFile = pathModule.join(configDir, "remote-token");
+      await fsPromises.writeFile(tokenFile, "live-daemon-token\n");
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+      await startDaemon(configDir);
+      expect(await fsPromises.readFile(tokenFile, "utf8")).toBe("live-daemon-token\n");
+      expect(createRemoteBridge).not.toHaveBeenCalled();
+
+      await signalHandlers.get("SIGTERM")!();
+      expect(await fsPromises.readFile(tokenFile, "utf8")).toBe("live-daemon-token\n");
+      exitSpy.mockRestore();
+    });
+
+    it("the startup probe neither writes a token nor mounts remote routes", async () => {
+      const config = remoteConfig(true);
+      setupMocks(config);
+
+      await runDegradedDaemonStartupProbe({ config, configDir });
+
+      await expect(fsPromises.stat(pathModule.join(configDir, "remote-token"))).rejects.toThrow();
+      for (const call of vi.mocked(startHttpMcpServer).mock.calls) expect(call[2]).toBeUndefined();
+    });
+
+    it("does not start the token or router when remote mode is off", async () => {
+      const config = makeConfig();
+      setupMocks(config);
+
+      await startDaemon(configDir);
+
+      expect(createRemoteBridge).not.toHaveBeenCalled();
+      expect(createTelegramRouter).not.toHaveBeenCalled();
+      await expect(fsPromises.stat(pathModule.join(configDir, "remote-token"))).rejects.toThrow();
+    });
   });
 
   // -----------------------------------------------------------------------

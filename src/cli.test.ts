@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildClaudeCompanionArgs, buildClaudeCompanionEnvironment, parseCommand, parseEpisodeEvalJson, parseEpisodeEvalOutputPath, parseReflectDate, runEpisodeEval } from "./cli.js";
+import { buildClaudeCompanionArgs, buildClaudeCompanionEnvironment, commandArgs, formatRemoteControlResponse, parseCommand, parseEpisodeEvalJson, parseEpisodeEvalOutputPath, parseReflectDate, runEpisodeEval, runInit, runRemoteCommand } from "./cli.js";
 import * as episodeEvalRunner from "./memory/episodes/eval-runner.js";
 
 describe("cli", () => {
@@ -58,6 +58,11 @@ describe("cli", () => {
 
     it('parses "claude-security-hook" subcommand', () => {
       expect(parseCommand(["node", "cli.js", "claude-security-hook"])).toBe("claude-security-hook");
+    });
+
+    it('parses "remote" and "claude-remote-hook" subcommands', () => {
+      expect(parseCommand(["node", "cli.js", "remote", "status"])).toBe("remote");
+      expect(parseCommand(["node", "cli.js", "--config", "/x/settings.json", "claude-remote-hook", "listen-start"])).toBe("claude-remote-hook");
     });
 
     it('parses "claude" companion subcommand', () => {
@@ -156,6 +161,53 @@ describe("cli", () => {
     it("does not treat a following flag as an output path", () => {
       expect(parseEpisodeEvalOutputPath(["node", "cli.js", "episode-eval", "--output", "--json"])).toBe("--json");
     });
+  });
+});
+
+describe("pa init --claude-remote", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "pa-init-remote-"));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("merges hooks and allow entries into an existing workspace file and is idempotent", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const configDir = path.join(root, "config");
+    const workspace = path.join(root, "workspace");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(configDir, "settings.json"),
+      JSON.stringify({ security: { workspace, dataDir: path.join(root, "data") } }),
+    );
+    const wsFile = path.join(workspace, ".claude", "settings.json");
+    await fs.mkdir(path.dirname(wsFile), { recursive: true });
+    await fs.writeFile(wsFile, JSON.stringify({ model: "opus", permissions: { allow: ["Read"], deny: ["Bash(rm *)"] } }));
+
+    await runInit(configDir, { claudeCode: false, claudeRemote: true });
+
+    const merged = JSON.parse(await fs.readFile(wsFile, "utf8"));
+    expect(merged.model).toBe("opus");
+    expect(merged.permissions.deny).toEqual(["Bash(rm *)"]);
+    expect(merged.permissions.allow).toEqual([
+      "Read",
+      "mcp__pa__remote_session_status",
+      "mcp__pa__remote_session_attach",
+      "mcp__pa__remote_session_detach",
+    ]);
+    expect(Object.keys(merged.hooks)).toContain("StopFailure");
+    // The launcher file does not exist: it is created from the template.
+    const launcher = JSON.parse(await fs.readFile(path.join(configDir, "claude-code", "settings.json"), "utf8"));
+    expect(launcher.permissions.allow).toContain("mcp__pa__remote_session_attach");
+
+    const before = await fs.readFile(wsFile, "utf8");
+    await runInit(configDir, { claudeCode: false, claudeRemote: true });
+    expect(await fs.readFile(wsFile, "utf8")).toBe(before);
   });
 });
 
@@ -440,6 +492,47 @@ describe("runEpisodeEval", () => {
     logSpy.mockRestore();
     process.exitCode = exitCodeBefore;
     vi.restoreAllMocks();
+  });
+
+  describe("remote command", () => {
+    const response = {
+      ok: true,
+      message: "Attached.",
+      sessions: [{ index: 1, name: "dev", cwd: "/w", pid: 12, attachedChatId: "42" }],
+    };
+    const makeOut = () => ({ log: vi.fn(), error: vi.fn() });
+
+    it("commandArgs returns the arguments after the command without the --config pair", () => {
+      expect(commandArgs(["--config", "/c/settings.json", "remote", "attach", "2"], "remote")).toEqual(["attach", "2"]);
+      expect(commandArgs(["claude-remote-hook", "PreToolUse"], "claude-remote-hook")).toEqual(["PreToolUse"]);
+    });
+
+    it("sends attach with a target and prints the sessions", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      const out = makeOut();
+      expect(await runRemoteCommand(["attach", "2"], control, out)).toBe(0);
+      expect(control).toHaveBeenCalledWith({ action: "attach", target: "2" });
+      expect(out.log).toHaveBeenCalledWith(formatRemoteControlResponse(response));
+      expect(out.log.mock.calls[0][0]).toContain("1. dev (/w, pid 12) [attached: 42]");
+    });
+
+    it("sends detach and status without a target", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      await runRemoteCommand(["detach", "ignored"], control, makeOut());
+      await runRemoteCommand(["status"], control, makeOut());
+      expect(control.mock.calls.map((c) => c[0])).toEqual([{ action: "detach" }, { action: "status" }]);
+    });
+
+    it("returns 1 for an unknown action, a not ok response, and a failing call", async () => {
+      const control = vi.fn().mockResolvedValue({ ...response, ok: false });
+      const out = makeOut();
+      expect(await runRemoteCommand(["bogus"], control, out)).toBe(1);
+      expect(control).not.toHaveBeenCalled();
+      expect(await runRemoteCommand(["status"], control, out)).toBe(1);
+      const failing = vi.fn().mockRejectedValue(new Error("daemon down"));
+      expect(await runRemoteCommand(["status"], failing, out)).toBe(1);
+      expect(out.error).toHaveBeenLastCalledWith("remote status: daemon down");
+    });
   });
 
   it("exits with error when --output has no value", async () => {

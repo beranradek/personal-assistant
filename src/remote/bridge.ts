@@ -1,0 +1,655 @@
+/**
+ * RemoteBridge
+ * ============
+ *
+ * Daemon side of the remote interactive session feature. It connects one Telegram chat to one live Claude Code session:
+ * - Telegram text -> per-session queue -> long poll answer (the asyncRewake hook starts a turn in the session).
+ * - Hook events from the session -> one Telegram "processing" message per turn + the final answer from `Stop`.
+ *
+ * All state is in memory. Everything is injected (config, sender, timers, clock, pid check) so tests use fake time.
+ * See docs/plans/active/2026-11-08-remote-interactive-session-communication/spec.md.
+ */
+
+import * as path from "node:path";
+import { createLogger } from "../core/logger.js";
+import type { ClaudeCodeRemoteConfig } from "../core/types.js";
+import type { StreamEvent } from "../backends/interface.js";
+import { createProcessingAccumulator, type ProcessingMessageAccumulator } from "../gateway/processing-message.js";
+import {
+  REMOTE_FRAME_HEADER_PREFIX,
+  REMOTE_POLL_TIMEOUT_MS,
+  type ForwardResult,
+  type RemoteBridge,
+  type RemoteControlRequest,
+  type RemoteControlResponse,
+  type RemotePollResult,
+  type RemoteQueuedMessage,
+  type RemoteSessionInfo,
+} from "./protocol.js";
+
+const defaultLog = createLogger("remote-bridge");
+
+/** Interval of the pid liveness check. */
+export const REMOTE_LIVENESS_INTERVAL_MS = 30_000;
+/** Window of the per-chat rate limit. */
+const RATE_WINDOW_MS = 60_000;
+const TRUNCATION_MARKER = "\n[...message truncated]";
+const MAX_NAME_CHARS = 100;
+const MAX_NOTICE_CHARS = 300;
+const KNOWN_EVENTS = new Set(["UserPromptSubmit", "PreToolUse", "MessageDisplay", "Stop", "StopFailure", "Notification", "SessionEnd"]);
+/** How long (ms) a timed-out message can still be confirmed late by its UserPromptSubmit. */
+const LATE_CONFIRM_MS = 5 * 60_000;
+/** Control characters except tab and newline. */
+const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
+
+/** Telegram functions the bridge needs (the Telegram adapter fits this shape). */
+export interface RemoteTelegramSender {
+  sendMessage(chatId: string, text: string): Promise<void>;
+  createProcessingMessage(sourceId: string, text: string, metadata?: Record<string, unknown>): Promise<string>;
+  updateProcessingMessage(sourceId: string, messageId: string, text: string, metadata?: Record<string, unknown>): Promise<void>;
+}
+
+/** Timer functions. Default: the global ones (so vitest fake timers work). */
+export interface RemoteBridgeTimers {
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+  setInterval(fn: () => void, ms: number): unknown;
+  clearInterval(handle: unknown): void;
+}
+
+export interface RemoteBridgeLogger {
+  info(obj: Record<string, unknown>, msg?: string): void;
+  warn(obj: Record<string, unknown>, msg?: string): void;
+  error(obj: Record<string, unknown>, msg?: string): void;
+  debug(obj: Record<string, unknown>, msg?: string): void;
+}
+
+export interface RemoteBridgeDeps {
+  config: {
+    remote: ClaudeCodeRemoteConfig;
+    /** `gateway.processingUpdateIntervalMs`. */
+    processingUpdateIntervalMs: number;
+  };
+  sender: RemoteTelegramSender;
+  isPidAlive: (pid: number) => boolean;
+  now?: () => number;
+  timers?: RemoteBridgeTimers;
+  logger?: RemoteBridgeLogger;
+  redact?: (text: string) => string;
+}
+
+interface PendingDelivery {
+  msg: RemoteQueuedMessage;
+  chatId: string;
+  /** Undefined while the delivery timer is paused (session busy). */
+  timer: unknown;
+}
+
+interface LateEntry {
+  msg: RemoteQueuedMessage;
+  chatId: string;
+  expiresAt: number;
+}
+
+interface QueuedForward {
+  msg: RemoteQueuedMessage;
+  chatId: string;
+}
+
+interface Waiter {
+  resolve: (result: RemotePollResult) => void;
+  timer: unknown;
+  signal: AbortSignal;
+  cleanup: () => void;
+}
+
+interface Turn {
+  chatId: string;
+  accumulator?: ProcessingMessageAccumulator;
+  /** Text fed so far (used to separate message blocks). */
+  lastText?: string;
+}
+
+interface Session {
+  pid: number;
+  name: string;
+  cwd: string;
+  attachedChatId?: string;
+  queue: QueuedForward[];
+  sent: Map<number, PendingDelivery>;
+  /** Recently timed-out messages. A matching UserPromptSubmit can still confirm them. */
+  late: Map<number, LateEntry>;
+  /** True from UserPromptSubmit until Stop, StopFailure or SessionEnd. */
+  busy: boolean;
+  waiter?: Waiter;
+  /** Set while a Telegram-origin turn runs. Terminal turns have no turn object. */
+  turn?: Turn;
+  idleTimer?: unknown;
+}
+
+function cleanText(text: string): string {
+  return text.replace(CONTROL_CHARS, "");
+}
+
+function preview(text: string, max = 80): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max)}...` : flat;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function firstString(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const v = obj[key];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  return undefined;
+}
+
+export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
+  const { config, sender, isPidAlive } = deps;
+  const remote = config.remote;
+  const log = deps.logger ?? defaultLog;
+  const now = deps.now ?? (() => Date.now());
+  const timers: RemoteBridgeTimers = deps.timers ?? {
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
+  };
+
+  const sessions = new Map<number, Session>();
+  /** chatId -> pid of the attached session (one per chat). */
+  const attachments = new Map<string, number>();
+  const rateLog = new Map<string, number[]>();
+  let nextMsgId = 1;
+  let stopped = false;
+
+  // ---- helpers ----------------------------------------------------------
+
+  function notify(chatId: string, text: string): void {
+    sender.sendMessage(chatId, text).catch((err) => log.error({ err, chatId }, "remote bridge: telegram send failed"));
+  }
+
+  function sessionLabel(s: Session): string {
+    return `${s.name} (${s.cwd}, pid ${s.pid})`;
+  }
+
+  function listSessions(): RemoteSessionInfo[] {
+    return [...sessions.values()].map((s, i) => ({
+      index: i + 1,
+      name: s.name,
+      cwd: s.cwd,
+      pid: s.pid,
+      ...(s.attachedChatId !== undefined ? { attachedChatId: s.attachedChatId } : {}),
+    }));
+  }
+
+  function clearIdleTimer(s: Session): void {
+    if (s.idleTimer !== undefined) {
+      timers.clearTimeout(s.idleTimer);
+      s.idleTimer = undefined;
+    }
+  }
+
+  function armIdleTimer(s: Session): void {
+    clearIdleTimer(s);
+    if (s.attachedChatId === undefined) return;
+    s.idleTimer = timers.setTimeout(() => {
+      s.idleTimer = undefined;
+      const chatId = s.attachedChatId;
+      if (chatId === undefined) return;
+      log.info({ pid: s.pid, chatId }, "remote bridge: idle detach");
+      detachSession(s);
+      notify(chatId, `Detached from ${sessionLabel(s)}: no Telegram messages for ${remote.idleDetachMinutes} min.`);
+    }, remote.idleDetachMinutes * 60_000);
+  }
+
+  function dropPending(s: Session): void {
+    for (const p of s.sent.values()) if (p.timer !== undefined) timers.clearTimeout(p.timer);
+    s.sent.clear();
+    s.late.clear();
+    s.queue = [];
+  }
+
+  /** Remove the attachment. Queued and unconfirmed messages are dropped. A running turn still finishes. */
+  function detachSession(s: Session): number {
+    const dropped = s.queue.length;
+    if (s.attachedChatId !== undefined && attachments.get(s.attachedChatId) === s.pid) attachments.delete(s.attachedChatId);
+    s.attachedChatId = undefined;
+    clearIdleTimer(s);
+    dropPending(s);
+    return dropped;
+  }
+
+  function stopTurn(s: Session): void {
+    if (s.turn?.accumulator) void s.turn.accumulator.stop().catch(() => undefined);
+    s.turn = undefined;
+  }
+
+  /** Remove the session completely (SessionEnd or dead pid). */
+  function removeSession(s: Session, reason: string): void {
+    const chatId = s.attachedChatId;
+    if (s.waiter) {
+      const w = s.waiter;
+      s.waiter = undefined;
+      w.cleanup();
+      w.resolve({ kind: "timeout" });
+    }
+    detachSession(s);
+    stopTurn(s);
+    sessions.delete(s.pid);
+    log.info({ pid: s.pid, reason }, "remote bridge: session removed");
+    if (chatId !== undefined) notify(chatId, `Session ${sessionLabel(s)} ${reason}. Detached.`);
+  }
+
+  function checkRate(chatId: string): boolean {
+    const t = now();
+    const recent = (rateLog.get(chatId) ?? []).filter((ts) => t - ts < RATE_WINDOW_MS);
+    if (recent.length >= remote.maxMessagesPerMinute) {
+      rateLog.set(chatId, recent);
+      return false;
+    }
+    recent.push(t);
+    rateLog.set(chatId, recent);
+    return true;
+  }
+
+  // ---- delivery ---------------------------------------------------------
+
+  /** Start (or restart) the delivery timer of one sent message. A busy session does not time out. */
+  function armDeliveryTimer(s: Session, p: PendingDelivery): void {
+    if (p.timer !== undefined) timers.clearTimeout(p.timer);
+    p.timer = timers.setTimeout(() => {
+      p.timer = undefined;
+      if (s.sent.get(p.msg.msgId) !== p) return;
+      if (s.busy) return; // wait until the session is idle (see rearmPending)
+      s.sent.delete(p.msg.msgId);
+      s.late.set(p.msg.msgId, { msg: p.msg, chatId: p.chatId, expiresAt: now() + LATE_CONFIRM_MS });
+      log.warn({ pid: s.pid, msgId: p.msg.msgId }, "remote bridge: message not delivered");
+      notify(p.chatId, `Not delivered to the session (no reaction in time): "${preview(p.msg.text)}"`);
+    }, remote.deliveryTimeoutMs);
+  }
+
+  /** The session became idle: restart the paused delivery timers. */
+  function rearmPending(s: Session): void {
+    for (const p of s.sent.values()) if (p.timer === undefined) armDeliveryTimer(s, p);
+  }
+
+  /** Hand out all queued messages to the waiter (or the poll that asks) and track them as "sent". */
+  function takeQueue(s: Session): RemoteQueuedMessage[] {
+    const taken = s.queue;
+    s.queue = [];
+    for (const item of taken) {
+      const p: PendingDelivery = { msg: item.msg, chatId: item.chatId, timer: undefined };
+      s.sent.set(item.msg.msgId, p);
+      armDeliveryTimer(s, p);
+    }
+    return taken.map((q) => q.msg);
+  }
+
+  function wakeWaiter(s: Session): void {
+    if (!s.waiter || s.queue.length === 0 || s.attachedChatId === undefined) return;
+    const w = s.waiter;
+    s.waiter = undefined;
+    w.cleanup();
+    if (w.signal.aborted) {
+      // The client is gone. Keep the messages queued for the next poll.
+      w.resolve({ kind: "timeout" });
+      return;
+    }
+    w.resolve({ kind: "messages", messages: takeQueue(s) });
+  }
+
+  /**
+   * Only a UserPromptSubmit whose prompt contains the frame header of a sent message proves delivery. Other prompts
+   * are terminal prompts: they never start a Telegram turn and they end a stale turn.
+   */
+  function onUserPromptSubmit(s: Session, payload: Record<string, unknown>): void {
+    s.busy = true;
+    const prompt = typeof payload["prompt"] === "string" ? payload["prompt"] : "";
+    const t = now();
+    for (const [id, e] of s.late) if (e.expiresAt <= t) s.late.delete(id);
+    const known: Array<{ msgId: number; chatId: string }> = [];
+    for (const p of s.sent.values()) known.push({ msgId: p.msg.msgId, chatId: p.chatId });
+    for (const e of s.late.values()) known.push({ msgId: e.msg.msgId, chatId: e.chatId });
+    const hits = known.filter((c) => prompt.includes(`${REMOTE_FRAME_HEADER_PREFIX}${c.msgId}]`));
+    stopTurn(s); // a turn that is still set here is stale (no Stop after interrupt or error)
+    if (hits.length === 0) return;
+    for (const h of hits) {
+      const p = s.sent.get(h.msgId);
+      if (p?.timer !== undefined) timers.clearTimeout(p.timer);
+      s.sent.delete(h.msgId);
+      s.late.delete(h.msgId);
+    }
+    s.turn = { chatId: hits[0].chatId };
+    log.debug({ pid: s.pid, chatId: hits[0].chatId }, "remote bridge: delivery confirmed, turn origin telegram");
+  }
+
+  function getAccumulator(turn: Turn): ProcessingMessageAccumulator | undefined {
+    if (!remote.progress) return undefined;
+    if (!turn.accumulator) {
+      turn.accumulator = createProcessingAccumulator(
+        sender,
+        turn.chatId,
+        undefined,
+        config.processingUpdateIntervalMs,
+        deps.redact,
+      );
+      turn.accumulator.start();
+    }
+    return turn.accumulator;
+  }
+
+  function feed(turn: Turn, events: StreamEvent[]): void {
+    const acc = getAccumulator(turn);
+    if (!acc) return;
+    for (const e of events) {
+      if (e.type === "text_delta") {
+        // Each MessageDisplay event is a whole message block: separate blocks with a blank line.
+        if (turn.lastText && !turn.lastText.endsWith("\n")) acc.handleEvent({ type: "text_delta", text: "\n\n" });
+        turn.lastText = e.text;
+      }
+      acc.handleEvent(e);
+    }
+  }
+
+  // ---- hooks ------------------------------------------------------------
+
+  /** Claude Code fires StopFailure (not Stop) when a turn ends with an API error. */
+  function onStopFailure(s: Session): void {
+    const turn = s.turn;
+    stopTurn(s);
+    if (turn) notify(turn.chatId, "Turn failed in the session (API error).");
+  }
+
+  async function onStop(s: Session, payload: Record<string, unknown>): Promise<void> {
+    const turn = s.turn;
+    if (!turn) return; // terminal turn: nothing goes to Telegram
+    s.turn = undefined; // exactly once
+    const final = firstString(payload, ["last_assistant_message"])?.trim() ?? "";
+    if (turn.accumulator) {
+      try {
+        await turn.accumulator.stop();
+        if (final) await turn.accumulator.trimSuffixFromProcessingMessage(final);
+      } catch (err) {
+        log.error({ err, pid: s.pid }, "remote bridge: progress finalize failed");
+      }
+    }
+    const text = final || "(The session finished without a text answer.)";
+    try {
+      await sender.sendMessage(turn.chatId, deps.redact ? deps.redact(text) : text);
+    } catch (err) {
+      log.error({ err, pid: s.pid }, "remote bridge: final answer send failed");
+    }
+  }
+
+  async function handleHook(event: string, pid: number, payload: unknown, cwd?: string): Promise<void> {
+    try {
+      if (stopped || !KNOWN_EVENTS.has(event)) return;
+      const s = sessions.get(pid);
+      if (!s) return;
+      if (typeof cwd === "string" && cwd) s.cwd = cleanText(cwd);
+      const data = asRecord(payload);
+
+      if (event === "SessionEnd") {
+        removeSession(s, "ended");
+        return;
+      }
+
+      switch (event) {
+        case "UserPromptSubmit":
+          onUserPromptSubmit(s, data);
+          return;
+        case "PreToolUse": {
+          if (!s.turn) return;
+          const toolName = firstString(data, ["tool_name"]);
+          if (!toolName) return;
+          const events: StreamEvent[] = [{ type: "tool_start", toolName }];
+          const input = data["tool_input"];
+          if (input !== null && typeof input === "object" && !Array.isArray(input)) {
+            events.push({ type: "tool_input", toolName, input: input as Record<string, unknown> });
+          }
+          feed(s.turn, events);
+          return;
+        }
+        case "MessageDisplay": {
+          if (!s.turn) return;
+          const text = firstString(data, ["delta", "text", "message", "content", "last_assistant_message"]);
+          if (text) feed(s.turn, [{ type: "text_delta", text }]);
+          return;
+        }
+        case "Notification": {
+          const chatId = s.turn?.chatId ?? s.attachedChatId;
+          if (chatId === undefined) return;
+          const msg = firstString(data, ["message", "notification_type"]);
+          if (msg) notify(chatId, `Claude Code notification: ${preview(cleanText(msg), MAX_NOTICE_CHARS)}`);
+          return;
+        }
+        case "Stop":
+          s.busy = false;
+          await onStop(s, data);
+          rearmPending(s);
+          return;
+        case "StopFailure":
+          s.busy = false;
+          onStopFailure(s);
+          rearmPending(s);
+          return;
+        default:
+          return;
+      }
+    } catch (err) {
+      log.error({ err, event, pid }, "remote bridge: hook handling failed");
+    }
+  }
+
+  // ---- poll -------------------------------------------------------------
+
+  function poll(args: { pid: number; cwd: string; name: string; signal: AbortSignal }): Promise<RemotePollResult> {
+    const { pid, signal } = args;
+    if (stopped || signal.aborted) return Promise.resolve({ kind: "timeout" });
+
+    const cwd = cleanText(args.cwd ?? "");
+    const name = cleanText(args.name || path.basename(cwd) || `pid-${pid}`).slice(0, MAX_NAME_CHARS);
+    let s = sessions.get(pid);
+    if (!s) {
+      s = { pid, name, cwd, queue: [], sent: new Map(), late: new Map(), busy: false };
+      sessions.set(pid, s);
+      log.info({ pid, name, cwd }, "remote bridge: session registered");
+    } else {
+      s.name = name;
+      s.cwd = cwd;
+    }
+    const session = s;
+
+    if (session.waiter) {
+      const old = session.waiter;
+      session.waiter = undefined;
+      old.cleanup();
+      old.resolve({ kind: "replaced" });
+    }
+
+    if (session.attachedChatId !== undefined && session.queue.length > 0) {
+      return Promise.resolve({ kind: "messages", messages: takeQueue(session) });
+    }
+
+    return new Promise<RemotePollResult>((resolve) => {
+      const onAbort = () => {
+        if (session.waiter !== waiter) return;
+        session.waiter = undefined;
+        waiter.cleanup();
+        resolve({ kind: "timeout" });
+      };
+      const waiter: Waiter = {
+        resolve,
+        signal,
+        timer: timers.setTimeout(() => {
+          if (session.waiter !== waiter) return;
+          session.waiter = undefined;
+          waiter.cleanup();
+          resolve({ kind: "timeout" });
+        }, REMOTE_POLL_TIMEOUT_MS),
+        cleanup: () => {
+          timers.clearTimeout(waiter.timer);
+          signal.removeEventListener("abort", onAbort);
+        },
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      session.waiter = waiter;
+    });
+  }
+
+  // ---- forward ----------------------------------------------------------
+
+  function forward(chatId: string, text: string): ForwardResult {
+    if (stopped) return { accepted: false, reason: "bridge stopped" };
+    const pid = attachments.get(chatId);
+    const s = pid !== undefined ? sessions.get(pid) : undefined;
+    if (!s) return { accepted: false, reason: "not attached to a session" };
+
+    let clean = cleanText(text).trim();
+    if (!clean) return { accepted: false, reason: "empty message" };
+    if (clean.length > remote.maxMessageChars) {
+      clean = clean.slice(0, remote.maxMessageChars).trimEnd() + TRUNCATION_MARKER;
+    }
+    if (!checkRate(chatId)) {
+      return { accepted: false, reason: `rate limit: max ${remote.maxMessagesPerMinute} messages per minute` };
+    }
+
+    const msgId = nextMsgId++;
+    s.queue.push({ msg: { msgId, text: clean }, chatId });
+    armIdleTimer(s);
+    log.info({ chatId, pid: s.pid, msgId, chars: clean.length }, "remote bridge: message forwarded to session queue");
+    wakeWaiter(s);
+    return { accepted: true, msgId };
+  }
+
+  // ---- control ----------------------------------------------------------
+
+  function resolveTarget(target: string | undefined): { session: Session } | { error: string } {
+    const all = [...sessions.values()];
+    if (all.length === 0) return { error: "No sessions registered. Start Claude Code with the remote hooks." };
+    const t = target?.trim();
+    if (!t) {
+      if (all.length === 1) return { session: all[0] };
+      return { error: "Several sessions found. Choose one by number or name (see status)." };
+    }
+    if (/^\d+$/.test(t)) {
+      const s = all[Number(t) - 1];
+      return s ? { session: s } : { error: `No session with index ${t}.` };
+    }
+    const byName = all.filter((s) => s.name === t);
+    if (byName.length === 1) return { session: byName[0] };
+    if (byName.length > 1) return { error: `Several sessions are named "${t}". Use the number.` };
+    return { error: `No session named "${t}".` };
+  }
+
+  function formatStatus(chatId: string | undefined): string {
+    const list = listSessions();
+    if (list.length === 0) return "No sessions registered.";
+    return list
+      .map((i) => {
+        const mark = i.attachedChatId === undefined ? "" : i.attachedChatId === chatId ? " [attached to this chat]" : " [attached]";
+        return `${i.index}. ${i.name} (${i.cwd}, pid ${i.pid})${mark}`;
+      })
+      .join("\n");
+  }
+
+  async function control(request: RemoteControlRequest): Promise<RemoteControlResponse> {
+    const reply = (ok: boolean, message: string): RemoteControlResponse => ({ ok, message, sessions: listSessions() });
+    const chatId = request.chatId?.trim();
+    if (!chatId) return reply(false, "chatId is required.");
+
+    switch (request.action) {
+      case "status":
+        return reply(true, formatStatus(chatId));
+      case "attach": {
+        const found = resolveTarget(request.target);
+        if ("error" in found) return reply(false, found.error);
+        const s = found.session;
+        if (s.attachedChatId !== undefined && s.attachedChatId !== chatId) {
+          return reply(false, `${s.name} is attached to another chat.`);
+        }
+        const previous = attachments.get(chatId);
+        if (previous !== undefined && previous !== s.pid) {
+          const old = sessions.get(previous);
+          if (old) detachSession(old);
+          attachments.delete(chatId);
+        }
+        const already = s.attachedChatId === chatId;
+        s.attachedChatId = chatId;
+        attachments.set(chatId, s.pid);
+        armIdleTimer(s);
+        const message = already
+          ? `Already attached to ${sessionLabel(s)}.`
+          : `Attached to ${sessionLabel(s)}. Send messages now. /detach to stop.`;
+        if (!already) notify(chatId, message);
+        log.info({ chatId, pid: s.pid }, "remote bridge: attached");
+        return reply(true, message);
+      }
+      case "detach": {
+        const pid = attachments.get(chatId);
+        const s = pid !== undefined ? sessions.get(pid) : undefined;
+        if (!s) {
+          attachments.delete(chatId);
+          return reply(false, "Not attached to a session.");
+        }
+        const dropped = detachSession(s);
+        const message =
+          `Detached from ${sessionLabel(s)}.` + (dropped > 0 ? ` ${dropped} queued message(s) were dropped.` : "");
+        notify(chatId, message);
+        log.info({ chatId, pid: s.pid }, "remote bridge: detached");
+        return reply(true, message);
+      }
+      default:
+        return reply(false, `Unknown action: ${String((request as { action?: unknown }).action)}`);
+    }
+  }
+
+  // ---- liveness ---------------------------------------------------------
+
+  const livenessTimer = timers.setInterval(() => {
+    for (const s of [...sessions.values()]) {
+      let alive = true;
+      try {
+        alive = isPidAlive(s.pid);
+      } catch (err) {
+        log.warn({ err, pid: s.pid }, "remote bridge: pid check failed");
+      }
+      if (!alive) removeSession(s, "process is gone");
+    }
+  }, REMOTE_LIVENESS_INTERVAL_MS);
+  // Do not keep the Node process alive for the check (real timers only).
+  (livenessTimer as { unref?: () => void } | undefined)?.unref?.();
+
+  function stop(): void {
+    if (stopped) return;
+    stopped = true;
+    timers.clearInterval(livenessTimer);
+    for (const s of [...sessions.values()]) {
+      if (s.waiter) {
+        const w = s.waiter;
+        s.waiter = undefined;
+        w.cleanup();
+        w.resolve({ kind: "timeout" });
+      }
+      clearIdleTimer(s);
+      dropPending(s);
+      stopTurn(s);
+    }
+    sessions.clear();
+    attachments.clear();
+  }
+
+  return {
+    poll,
+    handleHook,
+    forward,
+    control,
+    isAttached: (chatId) => attachments.has(chatId),
+    stop,
+  };
+}

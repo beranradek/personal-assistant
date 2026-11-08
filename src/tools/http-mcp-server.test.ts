@@ -462,6 +462,44 @@ describe("startHttpMcpServer", () => {
     handle = undefined;
   });
 
+  describe("remote routes", () => {
+    const get = (port: number, path: string, headers: http.OutgoingHttpHeaders = {}) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        http.get({ hostname: "127.0.0.1", port, path, headers }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (c: Buffer) => chunks.push(c));
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+        }).on("error", reject);
+      });
+
+    it("does not serve /remote/* without the optional holder (MCP path as before)", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0);
+      const res = await get(handle.port, "/remote/poll?pid=1");
+      expect(res.status).toBe(200);
+      expect(mockTransports).toHaveLength(1);
+    });
+
+    it("serves /remote/* before MCP body parsing: 401 without token, 503 without bridge, no MCP session", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0, { token: "secret" });
+      expect((await get(handle.port, "/remote/poll?pid=1")).status).toBe(401);
+      expect((await get(handle.port, "/remote/poll?pid=1", { Authorization: "Bearer secret" })).status).toBe(503);
+      expect(mockTransports).toHaveLength(0);
+    });
+
+    it("still applies the Host check to /remote/* (403)", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0, { token: "secret" });
+      const res = await get(handle.port, "/remote/poll?pid=1", { Host: "evil.example", Authorization: "Bearer secret" });
+      expect(res.status).toBe(403);
+    });
+
+    it("keeps MCP requests working next to the remote routes", async () => {
+      handle = await startHttpMcpServer(makeDeps(), 0, { token: "secret" });
+      const res = await httpPost(handle.port);
+      expect(res.status).toBe(200);
+      expect(mockTransports).toHaveLength(1);
+    });
+  });
+
   describe("Host and Origin check", () => {
     it("rejects a foreign Host header with 403 and never creates a session", async () => {
       handle = await startHttpMcpServer(makeDeps(), 0);
