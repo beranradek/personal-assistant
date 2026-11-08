@@ -25,7 +25,7 @@ Non-goals:
 
 ## Decisions
 
-- **D1** - Decision: New module `src/tmux-agents/` with one transport-free service (`TmuxAgentService`) | Reason: One logic, two adapters,
+- **D1** - Decision: New module `../../../src/tmux-agents` with one transport-free service (`TmuxAgentService`) | Reason: One logic, two adapters,
   easy tests
 - **D2** - Decision: Tool table with Zod shapes is the single source; JSON schema for stdio/HTTP comes from `z.toJSONSchema()` | Reason: No
   hand-written drift
@@ -63,11 +63,11 @@ Non-goals:
   outlives the daemon
 - **D16** - Decision: Audit: structured pino logs plus `<dataDir>/tmux-agents/audit.jsonl`. Never log input or output text, only length and
   short hash | Reason: Secrets stay out of logs
-- **D17** - Decision (changed 2026-11-06): Skill is a repo template `src/templates/skills/tmux-agents/SKILL.md`, listed in
+- **D17** - Decision (changed 2026-11-06): Skill is a repo template `../../../src/templates/skills/tmux-agents/SKILL.md`, listed in
   `SKILL_FILES` (`src/core/workspace.ts`), so `ensureWorkspace` copies it to `<workspace>/.claude/skills/tmux-agents/SKILL.md`
   like `integrations` (never overwrites) | Reason: Uniform setup; the skill has a precondition step that tells the user how to
   enable a disabled feature
-- **D18** - Decision (changed 2026-11-06): the repo template `src/templates/claude-code/settings.json` `permissions.allow` lists
+- **D18** - Decision (changed 2026-11-06): the repo template `../../../src/templates/claude-code/settings.json` `permissions.allow` lists
   `list, status, read, attach, start, send, interrupt`; `stop` and `recover` stay confirmation-gated (OD3, decided). Entries for absent
   tools are harmless (a disabled feature registers no tools). `pa init claude` copies the template only when the target file is
   missing, so existing installs add the entries by hand (docs snippet) | Reason: Radek wants autonomous agent talk; the template
@@ -102,7 +102,7 @@ OD1, OD2 and OD3 are decided (2026-11-06).
   built in `src/daemon.ts:203-218` (tool names `mcp__<server>__<tool>`). (b) The raw `Server` from
   `createStdioMcpServer` (`src/tools/stdio-mcp-server.ts:249`), used by `pa mcp-server` (`src/cli.ts:260`) and by the shared
   HTTP server (`src/daemon.ts:234-252`). The Claude Code companion reaches (b) as `mcp__pa__*` through
-  `src/templates/claude-code/.mcp.json`. (c) `pa mcp-server` is a separate process. The plan adds the group to (a) and (b).
+  `../../../src/templates/claude-code/.mcp.json`. (c) `pa mcp-server` is a separate process. The plan adds the group to (a) and (b).
 - **F2. The HTTP server (b) starts only if `agent.backend === "codex"` or `mcp.httpServer.enabled === true`**
   (`src/daemon.ts:232`). For `mcp__pa__agent_session_*` in Claude Code, Radek must set `mcp.httpServer.enabled: true`
   (or use the stdio fallback). Not a code change; documented in operator steps. Review confirmed: without that flag the
@@ -125,7 +125,7 @@ OD1, OD2 and OD3 are decided (2026-11-06).
   BUT: if `tmux` is in the live `security.allowedCommands` (or the `exec` allowlist), Amy can run `tmux new-session '<anything>'`,
   `run-shell` or `send-keys` through Bash and bypass the whole design. So with `tmuxAgents.enabled=true` the daemon logs a WARN at start
   when `tmux` is in the allowlist, and the docs tell the operator to remove it (Task 8, operator step 3). Review also confirmed:
-  `exec` uses `spawn(command, { shell: true })` (`src/exec/tool.ts`), so the new module shares no code with it.
+  `exec` uses `spawn(command, { shell: true })` (`../../../src/exec/tool.ts`), so the new module shares no code with it.
 - **F6. Peer messaging is not the default channel (verified 2026-11-06).** `ListAgents`/`SendMessage` work inside interactive Claude
   Code sessions, but in a real run the assistant (`--dangerously-skip-permissions`) sent a message to an agent in default mode and
   Claude Code HELD it in the agent session ("Held peer message ... The sending session's permission mode class doesn't match this
@@ -133,17 +133,17 @@ OD1, OD2 and OD3 are decided (2026-11-06).
   `crossSessionInbound: "accept"` would deliver without approval but lets any same-user session feed instructions to the agent, so we do
   not recommend it. Whether the Agent SDK run of Amy (`src/core/agent-runner.ts:134`) exposes these tools is still unknown; the design
   does not depend on it.
-- **F7. Settings-file template is minimal.** `settings.json` in the repo omits many keys (no `habits`, `drafts`). New config
+- **F7. Settings-file template is minimal.** `../../../settings.json` in the repo omits many keys (no `habits`, `drafts`). New config
   must still have defaults in `DEFAULTS` (`src/core/config.ts:10`, typed `Config`), or the build fails.
 - **F8. systemd cgroup risk (needs owner check).** A `tmux` server spawned by the daemon lives in the daemon's cgroup.
   If `pa-daemon.service` uses the default `KillMode=control-group`, `systemctl restart` kills the sessions, which breaks D15.
-  The unit file is not in the repo (only `deploy/systemd/codex-watchdog.service` is). The plan spawns tmux detached and
+  The unit file is not in the repo (only `../../../deploy/systemd/codex-watchdog.service` is). The plan spawns tmux detached and
   tells Radek to check the unit (operator step 3). Also check that `codex-watchdog.sh` does not reap `claude` processes.
 - **F9. Redactor is aggressive.** `CONSERVATIVE_PATTERNS` (`src/security/content-redaction.ts:20-45`) also hits any 13+ digit
   run and any 40+ alphanumeric run. Screen text can be over-redacted (hashes, long ids). Accepted; result has `redacted: true`.
 - **F10. Live hook note.** During planning, `grep` calls with `|` inside quotes were blocked by the live Bash hook
   ("Command 'integ' is not in the allowed commands list"). Commits `0a038e3` and `bc30c37` should have fixed this. The
-  installed `pa`/`dist` may be older than the source (`dist/` exists in the repo dir). Rebuild or re-check; not part of this plan.
+  installed `pa`/`dist` may be older than the source (`../../../dist` exists in the repo dir). Rebuild or re-check; not part of this plan.
 - **F11. The HTTP MCP server has no authentication.** `src/tools/http-mcp-server.ts:82-146` listens on `127.0.0.1` only, with no token
   and no Host/Origin check. Any local process (or a browser page by DNS rebinding) gets the full `agent_session_*` rights, as it
   already gets `exec` today. Task 8 adds a Host/Origin check; a bearer token is an accepted-risk follow-up (see Out of scope).
@@ -152,11 +152,11 @@ OD1, OD2 and OD3 are decided (2026-11-06).
 
 ## Context verified in code
 
-- Plans live in `docs/plans/active/<date>-<slug>.md`; done plans move to `completed/`: `CLAUDE.md` "Maintenance";
-  `docs/plans/active/2026-11-03-claude-code-companion-mode.md`
-- Tests are co-located `foo.test.ts`; vitest, globals on; 70% coverage threshold; no linter: `CLAUDE.md` "Commands"; `vitest.config.ts:4-9`
-- Build: `tsc` (strict, NodeNext, `rootDir: src`), tests excluded from build: `tsconfig.json`; `package.json` script `build`
-- Zod 4 (`zod ^4.4.3`), MCP SDK `^1.30.0`, Node 22+, ESM: `package.json`
+- Plans live in `docs/plans/active/<date>-<slug>.md`; done plans move to `completed/`: `../../../CLAUDE.md` "Maintenance";
+  `../completed/2026-11-03-claude-code-companion-mode.md`
+- Tests are co-located `foo.test.ts`; vitest, globals on; 70% coverage threshold; no linter: `../../../CLAUDE.md` "Commands"; `vitest.config.ts:4-9`
+- Build: `tsc` (strict, NodeNext, `rootDir: src`), tests excluded from build: `../../../tsconfig.json`; `package.json` script `build`
+- Zod 4 (`zod ^4.4.3`), MCP SDK `^1.30.0`, Node 22+, ESM: `../../../package.json`
 - SDK tool style: `tool(name, desc, zodShape, handler, { annotations })`: `src/tools/assistant-server.ts:60-110`
 - Optional tools by deps: `memory_lint`, `habit_*`, `episode_*`, `integ_*` are filtered by presence of deps:
   `src/tools/stdio-mcp-server.ts:255-265`
@@ -179,10 +179,10 @@ OD1, OD2 and OD3 are decided (2026-11-06).
 - Daemon builds `redact` from them: `src/memory/startup-services.ts:74`
 - Pino logger factory with token field redaction: `src/core/logger.ts:8-33`
 - Existing audit log is per turn (`appendAuditEntry`), not per tool server: `src/memory/daily-log.ts:63`; `src/core/agent-runner.ts:473,713`
-- Skills template precedent and `SKILL_FILES`: `src/templates/skills/integrations/SKILL.md`; `src/core/workspace.ts:29-33`
+- Skills template precedent and `SKILL_FILES`: `../../../src/templates/skills/integrations/SKILL.md`; `src/core/workspace.ts:29-33`
 - Claude Code companion templates and explicit permission list: `src/claude/templates.ts:4-8`;
   `src/templates/claude-code/settings.json:25-52`
-- Tool docs file: `docs/agent-tools.md`
+- Tool docs file: `../../agent-tools.md`
 - Existing test mock style for SDK and MCP servers: `src/tools/integ-server.test.ts:1-40`; `src/tools/stdio-mcp-server.test.ts:1-50`
 
 ## Security model
@@ -215,7 +215,7 @@ OD1, OD2 and OD3 are decided (2026-11-06).
 - **T10** - Threat: Daemon secrets leak into the child | Control: tmux is started with a minimal env allowlist (`PATH, HOME, LANG, LC_ALL,
   TERM, USER, LOGNAME, SHELL, TMPDIR`, plus `tmuxAgents.envAllowlist`); dedicated socket means our env applies to the new tmux server.
   The env applies only when the server STARTS: after changing `envAllowlist` or the daemon env, every session must be stopped (the
-  server exits with the last session) before the new env is used. Documented in `docs/settings/tmux_agents.md`
+  server exits with the last session) before the new env is used. Documented in `../../settings/tmux_agents.md`
 - **T11** - Threat: Hung or forgotten sessions waste RAM (4 GB VPS) | Control: `maxSessions`; optional idle reaper; `recover` tool; `stop`
   graceful path
 - **T12** - Threat: Registry tampering or two writers | Control: Directory lock (`mkdir`, atomic stale takeover by `rename`, Task 4);
@@ -248,9 +248,9 @@ OD1, OD2 and OD3 are decided (2026-11-06).
 ## Global Constraints
 
 - Language: TypeScript strict, ESM, Node 22. Imports end with `.js`. No new runtime dependency.
-- Factory functions with dependency injection (project pattern). Tests co-located. Types for config only in `src/core/types.ts`.
+- Factory functions with dependency injection (project pattern). Tests co-located. Types for config only in `../../../src/core/types.ts`.
 - English text, short dashes, lines at most 140 characters (code, docs, skill).
-- The module never imports from `src/exec/` and never spawns through a shell.
+- The module never imports from `../../../src/exec` and never spawns through a shell.
 - Every tmux call goes through ONE function `TmuxRunner.run(args, opts)`; it prepends `-S <socketPath>`.
 - Claims about tmux 3.6 or the Claude Code TUI that cannot be proven by reading this repo are marked "verify in the integration test /
   operator step" and have a check in Task 9 or the operator steps.
@@ -295,7 +295,7 @@ src/templates/skills/tmux-agents/SKILL.md
 docs/settings/tmux_agents.md
 ```
 
-Changed files: `src/core/types.ts`, `src/core/config.ts`, `src/core/config.test.ts`, `src/tools/stdio-mcp-server.ts`,
+Changed files: `../../../src/core/types.ts`, `src/core/config.ts`, `src/core/config.test.ts`, `src/tools/stdio-mcp-server.ts`,
 `src/tools/stdio-mcp-server.test.ts`, `src/tools/http-mcp-server.ts`, `src/tools/http-mcp-server.test.ts` (Host/Origin check),
 `src/daemon.ts`, `src/daemon.test.ts`, `src/cli.ts`, `src/cli.test.ts`, `settings.json` (template block), `docs/agent-tools.md`,
 `README.md` (one link line), `CLAUDE.md` (one table row).
@@ -386,7 +386,7 @@ Order matters. Each task: write the failing test first, then the code, then run 
 
 ### Task 1 - Config schema, defaults, template
 
-Files: `src/core/types.ts`, `src/core/config.ts`, `src/core/config.test.ts`, `settings.json`.
+Files: `../../../src/core/types.ts`, `src/core/config.ts`, `src/core/config.test.ts`, `settings.json`.
 
 1. Test first in `config.test.ts`: `loadConfig` of an empty dir gives `tmuxAgents.enabled === false`, `maxSessions === 3`,
    `allowPermissionBypass === false`, `trustedRoots` empty; `socketPath` is derived as `<dataDir>/tmux-agents/tmux.sock` when empty;
@@ -397,14 +397,14 @@ Files: `src/core/types.ts`, `src/core/config.ts`, `src/core/config.test.ts`, `se
 3. Add the same defaults to `DEFAULTS` in `config.ts` (type `Config` forces it). In `loadConfig`, resolve `~` in `allowedRoots`
    with `resolveUserPath` (like `additionalReadDirs`, `config.ts:268`); do the same for `trustedRoots` and `socketPath`, and derive
    the default `socketPath` from `security.dataDir`.
-4. Add `"tmuxAgents": { "enabled": false }` to the repo `settings.json` template.
+4. Add `"tmuxAgents": { "enabled": false }` to the repo `../../../settings.json` template.
 
 Acceptance: `npx vitest run src/core/config.test.ts` passes; `npx tsc --noEmit` has no errors; with no `tmuxAgents` key in settings the
 config parses and `enabled` is false.
 
 ### Task 2 - Pure core: names, text, roots, kinds
 
-Files: `src/tmux-agents/names.ts`, `kinds.ts`, `roots.ts` (+ tests).
+Files: `../../../src/tmux-agents/names.ts`, `kinds.ts`, `roots.ts` (+ tests).
 
 1. Tests first:
    - `names.test.ts`: `validateProject` accepts `my-proj`, rejects `""`, `A`, `-x`, `a b`, `a;b`, `$(x)`, 33 chars, unicode, `..`.
@@ -437,7 +437,7 @@ No `child_process` import in these three files (grep check).
 
 ### Task 3 - Screen detectors, diff, redaction
 
-Files: `src/tmux-agents/screen.ts`, `screen.test.ts`, `fixtures/claude-*.txt`.
+Files: `../../../src/tmux-agents/screen.ts`, `screen.test.ts`, `fixtures/claude-*.txt`.
 
 Detector facts come from the PoC (do not re-test): idle = a line like `✻ <verb> for Ns · done HH:MM`, an empty prompt line
 starting with `❯`, and footer WITHOUT `esc to interrupt`. Busy = spinner line like `* Discombobulating… (5s · ↓ 104 tokens)`
@@ -468,7 +468,7 @@ Acceptance: `npx vitest run src/tmux-agents/screen.test.ts` passes. Every detect
 
 ### Task 4 - Tmux runner and registry
 
-Files: `src/tmux-agents/runner.ts`, `runner.test.ts`, `registry.ts`, `registry.test.ts`, `audit.ts`, `audit.test.ts`.
+Files: `../../../src/tmux-agents/runner.ts`, `runner.test.ts`, `registry.ts`, `registry.test.ts`, `audit.ts`, `audit.test.ts`.
 
 1. `runner.test.ts` first (mock `node:child_process` `execFile`):
    - argv is `[ "-S", socketPath, ...args ]`; binary is `tmuxBinary`; `shell` option is never set; the socket directory is created
@@ -498,7 +498,7 @@ Acceptance: `npx vitest run src/tmux-agents/runner.test.ts src/tmux-agents/regis
 
 ### Task 5 - Service part 1: start, list, status, read, attach, reconcile
 
-Files: `src/tmux-agents/service.ts`, `service.test.ts`, `index.ts`.
+Files: `../../../src/tmux-agents/service.ts`, `service.test.ts`, `index.ts`.
 
 Use a fake `TmuxRunner` (records argv, replays scripted outputs) and a temp registry.
 
@@ -537,7 +537,7 @@ Acceptance: `npx vitest run src/tmux-agents/service.test.ts` passes (start/list/
 
 ### Task 6 - Service part 2: send, interrupt, stop, recover, reaper
 
-Files: `src/tmux-agents/service.ts`, `service.test.ts`.
+Files: `../../../src/tmux-agents/service.ts`, `service.test.ts`.
 
 1. Tests first (fake runner, fake clock):
    - `send` single line runs, in order: `send-keys -t <pane_id> -l -- <text>`, then (after 150 ms) a SEPARATE
@@ -562,7 +562,7 @@ Files: `src/tmux-agents/service.ts`, `service.test.ts`.
      the old record `stopped`, then starts a NEW instance in the same cwd, kind and mode through the normal `start` path (all `start`
      gates are re-checked, so `bypass` needs the settings gate again and `maxSessions` is counted after the kill), stores
      `recoveredFrom`, returns the new session name, logs WARN; work in the old session is lost (documented in tool description,
-     skill and `docs/settings/tmux_agents.md`);
+     skill and `../../settings/tmux_agents.md`);
    - when the tmux session is gone after an exit the registry shows `stopped`, not `running`;
    - reaper (`idleReapMinutes=1`): idle and `lastInputAt` older than 1 min => graceful stop; busy or waiting => untouched;
      `idleReapMinutes=0` never creates a timer; `stop()` of the service clears the timer and does NOT kill sessions.
@@ -574,7 +574,7 @@ service equals the fixed set from Task 4.
 
 ### Task 7 - Tool table and both adapters
 
-Files: `src/tmux-agents/tools.ts`, `tools.test.ts`, `src/tools/tmux-agents-server.ts`, `src/tools/tmux-agents-server.test.ts`,
+Files: `../../../src/tmux-agents/tools.ts`, `tools.test.ts`, `src/tools/tmux-agents-server.ts`, `src/tools/tmux-agents-server.test.ts`,
 `src/tools/stdio-mcp-server.ts`, `src/tools/stdio-mcp-server.test.ts`.
 
 1. Tests first:
@@ -601,7 +601,7 @@ Acceptance: `npx vitest run src/tmux-agents/tools.test.ts src/tools/tmux-agents-
 
 ### Task 8 - Wiring in daemon and `pa mcp-server`
 
-Files: `src/daemon.ts`, `src/daemon.test.ts`, `src/cli.ts`, `src/cli.test.ts`, `src/tools/http-mcp-server.ts`,
+Files: `../../../src/daemon.ts`, `src/daemon.test.ts`, `src/cli.ts`, `src/cli.test.ts`, `src/tools/http-mcp-server.ts`,
 `src/tools/http-mcp-server.test.ts`.
 
 1. Tests first:
@@ -636,7 +636,7 @@ Acceptance: `npx vitest run src/daemon.test.ts src/cli.test.ts` passes; `npx tsc
 
 ### Task 9 - Integration test with a fake agent under real tmux
 
-Files: `src/tmux-agents/integration.tmux.test.ts`, `src/tmux-agents/fixtures/fake-agent.mjs`.
+Files: `../../../src/tmux-agents/integration.tmux.test.ts`, `src/tmux-agents/fixtures/fake-agent.mjs`.
 
 1. `fake-agent.mjs` (Node, no deps): prints a prompt line `❯ ` and a footer without `esc to interrupt` when idle. On a line of input
    it prints `* Working… (1s)` and a footer WITH `esc to interrupt` for 2 s, then `✻ Worked for 2s · done 12:00`, then the idle screen.
@@ -669,11 +669,11 @@ The test itself asserts that its socket reports `no server running` (or is gone)
 
 ### Task 10 - Skill and docs
 
-Files: `src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.md`, `docs/agent-tools.md`, `README.md`, `CLAUDE.md`.
+Files: `../../../src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.md`, `docs/agent-tools.md`, `README.md`, `CLAUDE.md`.
 
 1. Skill (frontmatter `name`, `description`, `version` like the integrations skill). Content:
    - Preconditions: tools `agent_session_*` exist only when `tmuxAgents.enabled`. If they are absent, tell the user how to enable
-     (link `docs/settings/tmux_agents.md`) and stop.
+     (link `../../settings/tmux_agents.md`) and stop.
    - Which channel to use (D11, changed 2026-11-06). Talk to the project agent with `agent_session_send` (`waitForIdleMs`) and
      `agent_session_read`/`status`. Use `agent_session_start`, `list`, `stop`, `recover` (forced restart, work lost) for the
      lifecycle. Do not use Claude Code peer messaging unless the user asks and both sessions have the same permission mode; a "Held
@@ -690,7 +690,7 @@ Files: `src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.m
      with `!`, `#` or `/` (the tool refuses it); rephrase the task.
    - Czech user text is fine; keep each sent task short and self-contained; name the project directory and expected result.
    - When done, write an episode with `episode_write` (project name, outcome); the server does not do it.
-2. `docs/settings/tmux_agents.md`: settings example, every key, security notes (F3, F4, F5, F8, F11, T14), including: `allowedRoots` should
+2. `../../settings/tmux_agents.md`: settings example, every key, security notes (F3, F4, F5, F8, F11, T14), including: `allowedRoots` should
    be outside directories Amy can write (otherwise trust equals `exec`), `trustedRoots` semantics, remove `tmux` from
    `security.allowedCommands` (the MCP server runs tmux itself), the HTTP MCP server has no token (local processes are trusted), env
    changes apply only after all sessions stop (server restart), `recover` is a forced restart, enabling for Claude Code (F2), the optional
@@ -699,15 +699,15 @@ Files: `src/templates/skills/tmux-agents/SKILL.md`, `docs/settings/tmux_agents.m
    the `pa-tmux` alias section (alias line for `~/.zshrc`, how to derive the socket path from `security.dataDir` or
    `tmuxAgents.socketPath`, `pa-tmux ls`, `pa-tmux attach -t <session>`, `pa-tmux attach -r -t <session>` for read-only; before the first
    start `pa-tmux ls` prints `no server running`), and the PoC results as the acceptance example (see Operator steps).
-3. `docs/agent-tools.md`: a new section "Tmux Agent Tools (optional)" with a table of the nine tools.
+3. `../../agent-tools.md`: a new section "Tmux Agent Tools (optional)" with a table of the nine tools.
    `README.md`: one line in "Setup guides". `CLAUDE.md`: one row `tmux-agents/` in the source layout table.
-4. The skill lives as a repo template in `src/templates/skills/tmux-agents/SKILL.md` and is listed in `SKILL_FILES` in
+4. The skill lives as a repo template in `../../../src/templates/skills/tmux-agents/SKILL.md` and is listed in `SKILL_FILES` in
    `src/core/workspace.ts` (D17, changed 2026-11-06: uniform with `integrations`; the skill itself explains how to enable a disabled
    feature).
 5. `memory_lint` is not needed (these are repo docs, not the workspace knowledge base).
 
 Acceptance: skill passes the `skill-creator` format check (frontmatter fields present); every tool name in the skill and docs exists in
-`tools.ts` (a test in `tools.test.ts` reads `SKILL.md` and `docs/agent-tools.md`, checks each `agent_session_*` mention
+`tools.ts` (a test in `tools.test.ts` reads `SKILL.md` and `../../agent-tools.md`, checks each `agent_session_*` mention
 against the table);
 all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing); no em dashes.
 
@@ -731,12 +731,12 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
    does, remove `tmux` from `security.allowedCommands` in settings (and from the Claude Code hook allowlist).
    Also check that `~/.claude/settings.json` has no broad allow rules (it is inherited by the child through `HOME`).
 2. Claude Code companion: set `"mcp": { "httpServer": { "enabled": true } }` (F2). Check `mcp__pa__agent_session_list` is visible
-   after restarting `claude`. Add the OD3 allow snippet from `docs/settings/tmux_agents.md` to the live Claude Code settings;
+   after restarting `claude`. Add the OD3 allow snippet from `../../settings/tmux_agents.md` to the live Claude Code settings;
    `stop` and `recover` keep prompting.
 3. systemd: run `systemctl --user show pa-daemon.service -p KillMode` (or the system unit). If `control-group`, either set
    `KillMode=process` or accept that sessions die on restart (then reconcile marks them `lost`). Also check
    `~/.personal-assistant/bin/codex-watchdog.sh` does not kill `claude` or `tmux` processes.
-4. The skill `src/templates/skills/tmux-agents/SKILL.md` is copied to `<workspace>/.claude/skills/tmux-agents/SKILL.md` by
+4. The skill `../../../src/templates/skills/tmux-agents/SKILL.md` is copied to `<workspace>/.claude/skills/tmux-agents/SKILL.md` by
    `ensureWorkspace` (listed in `SKILL_FILES`, D17 changed 2026-11-06); check it exists after the daemon restart. Make sure `tmux` is on
    the `PATH` that the daemon sees (`claude` is found automatically, round 3b). Add the alias to `~/.zshrc`
    (can be done before the first start): `alias pa-tmux='tmux -S ~/.personal-assistant/data/tmux-agents/tmux.sock'`, then
@@ -756,7 +756,7 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
    idle shows `✻ ... for Ns · done HH:MM`, an empty `❯` prompt and no `esc to interrupt`; text and Enter in two `send-keys`
    calls works; `/exit` ends `claude`, and the last session removes the server; no process is left. The same flow through the
    MCP tools must give the same result.
-8. Move this plan to `docs/plans/completed/` with the date and a short result note.
+8. Move this plan to `` with the date and a short result note.
 
 ## Risks
 
@@ -801,7 +801,7 @@ all lines are at most 140 characters (`awk 'length>140' <file>` prints nothing);
 
 ## Implementation notes (2026-11-06)
 
-Verified on a real tmux 3.6 (integration test `src/tmux-agents/integration.tmux.test.ts`, fake agent):
+Verified on a real tmux 3.6 (integration test `../../../src/tmux-agents/integration.tmux.test.ts`, fake agent):
 
 - Id targets work: `-t $N` for `has-session`, `kill-session`, `display-message`; `-t %N` for `send-keys`, `capture-pane`, `paste-buffer`.
   `new-session -P -F "#{session_id} #{pane_id} #{session_created}"` prints the three fields. The agent command is passed as several
@@ -816,7 +816,7 @@ Deviations from the plan text:
 
 - Extra files for DRY: `errors.ts` (error class and codes), `schemas.ts` (Zod shapes shared by tools and service), `types.ts`
   (service interface, results, clock), `startup.ts` (shared start logic of daemon and `pa mcp-server`: log, tmux allowlist WARN,
-  reconcile, reaper), `fake-tmux.test-helper.ts` (in-memory tmux for unit tests; excluded from the build in `tsconfig.json`).
+  reconcile, reaper), `fake-tmux.test-helper.ts` (in-memory tmux for unit tests; excluded from the build in `../../../tsconfig.json`).
 - `createTmuxAgentService(config, options)` reads the data directory from `config.security.dataDir` (no `dataDir` option). The
   service has `close()` (clears the reaper timer, kills nothing) instead of `stop()`, to avoid confusion with `agent_session_stop`.
 - `agent_session_stop` with `force` kills at once and reports method `forced` (a third value next to `graceful` and
@@ -944,7 +944,7 @@ box, footer) changes between captures, so no overlap was found. Changed (`extrac
 ## Task 11: `pa agents-view` (2026-11-06)
 
 Radek wants one simple command that shows the main assistant and the agents it starts on one screen. Implemented in
-`src/tmux-agents/view.ts` (runner for the user's tmux, layout, controller, pure `planView`), `view-cli.ts` (command) and wired in
+`../../../src/tmux-agents/view.ts` (runner for the user's tmux, layout, controller, pure `planView`), `view-cli.ts` (command) and wired in
 `src/cli.ts` (`agents-view`; `parseCommand` skips the values of `--assistant`, `--session`, `--watch`).
 
 - Layout in the USER's tmux (not the agents' socket): window `amy` with `main-vertical` (assistant left, `main-pane-width 50%`, the
@@ -996,7 +996,7 @@ Radek wants one simple command that shows the main assistant and the agents it s
   the command starts after the rc files (1.4 s zsh and 1.1 s bash with a 1 s sleep in the rc, 0.07 s without the flag); rc output is
   visible in the pane; no job-control warnings in the pane. Not `exec <command>`: after `exec` the alias is not expanded (zsh: "command
   not found", bash: "exec: not found"), so the interactive shell stays the parent process.
-- Documented in `docs/settings/tmux_agents.md`: a plain `claude` is not the `pa claude` companion (no launcher-owned settings; it sees
+- Documented in `../../settings/tmux_agents.md`: a plain `claude` is not the `pa claude` companion (no launcher-owned settings; it sees
   `mcp__pa__agent_session_*` only through the `.mcp.json` of the start directory and `mcp.httpServer.enabled`); with bypass permissions
   there are no confirmation prompts for `stop` and `recover`, only the server-side guards remain.
 - Security: typing into an agent yourself is the user's own action; the guards of the assistant tools (input guard, prompt and trust
@@ -1069,7 +1069,7 @@ pane and window die, a NEW tmux server exits with its last window, and the confi
 
 - Real run: the assistant (`--dangerously-skip-permissions`) sent a message to an agent in default mode through `ListAgents`/`SendMessage`.
   Claude Code held it in the agent session because the permission mode classes differ (F6).
-- D11 changed: `agent_session_send` is the default channel. The skill, `docs/settings/tmux_agents.md` ("Peer messaging (Claude Code)
+- D11 changed: `agent_session_send` is the default channel. The skill, `../../settings/tmux_agents.md` ("Peer messaging (Claude Code)
   vs `agent_session_send`") and operator steps are updated. `crossSessionInbound: "accept"` is explicitly not recommended.
 - Existing installs keep the old workspace copy of the skill (`ensureWorkspace` never overwrites, the `version` field is not
   compared), so a `version` bump would not help; the docs give the `cp` command for a manual replacement.
@@ -1094,7 +1094,7 @@ An independent adversarial review found these problems; each is applied as liste
 - **M8** (trust dialog): F12; T17; Task 3 (`claude-trust.txt`, `waiting_trust`); Task 5 (`start` waits about 3 s); Task 6; Task 10 skill;
   operator step 6
 - **M9** (HTTP MCP without auth): F11; T16; Task 8 (Host/Origin check and tests); Risks; Out of scope (bearer token). Note: the file is
-  `src/tools/http-mcp-server.ts` (not `src/mcp/`)
+  `../../../src/tools/http-mcp-server.ts` (not `src/mcp/`)
 - **Minor** - multilinePaste: Task 2 kind table, Task 6, Risks; fixtures sentence: Task 3 point 1; test-only kind `fake`: Task 9 (DI
   `createTmuxAgentService(config, { kinds })`); Zod `io: "input"`: Task 7; `recover`: kept as a real forced restart (Task 6, contracts);
   name suffix retry: D8, Task 5; tmux env at server start: T10; skills location: D17, Task 10, operator step 4

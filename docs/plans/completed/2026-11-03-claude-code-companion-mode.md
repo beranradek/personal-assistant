@@ -10,11 +10,11 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 
 ## Current state (verified)
 
-- `buildAgentOptions()` (`src/core/agent-runner.ts`) uses the `claude_code` preset, `cwd` = workspace and
+- `buildAgentOptions()` (`../../../src/core/agent-runner.ts`) uses the `claude_code` preset, `cwd` = workspace and
   `settingSources: ["user","project","local"]`. Skills in `workspace/.claude/skills` already load in plain Claude Code.
-- `readMemoryFiles()` (`src/memory/files.ts`) joins AGENTS.md, SOUL.md, USER.md, MEMORY.md (+ HEARTBEAT.md) for `systemPrompt.append`.
+- `readMemoryFiles()` (`../../../src/memory/files.ts`) joins AGENTS.md, SOUL.md, USER.md, MEMORY.md (+ HEARTBEAT.md) for `systemPrompt.append`.
 - The `memory` and `assistant` MCP servers are in-process SDK servers. Plain Claude Code cannot use them.
-- `pa mcp-server` (`src/tools/stdio-mcp-server.ts`) is a stdio MCP server made for the Codex backend. It exposes
+- `pa mcp-server` (`../../../src/tools/stdio-mcp-server.ts`) is a stdio MCP server made for the Codex backend. It exposes
   `memory_search`, `episode_*`, `cron_*`, `exec`, `process`. It does not expose habit tools.
 - Gmail, Calendar and Slack use PA MCP proxy tools (the integ-api service and credentials remain local to PA).
 
@@ -58,7 +58,7 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 
 ### 1. `pa claude-context` command
 
-- Add `claude-context` to `VALID_COMMANDS` in `src/cli.ts`.
+- Add `claude-context` to `VALID_COMMANDS` in `../../../src/cli.ts`.
 - Print the output of `readMemoryFiles(workspace, { includeHeartbeat: false })` to stdout.
 - Option `--hook-json`: print the SessionStart hook JSON format
   (`{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}`).
@@ -74,7 +74,7 @@ PA reached through Slack or `pa terminal`. No new agent runner. Plain Claude Cod
 
 ### 3. Workspace config templates and docs
 
-- Add `src/templates/claude-code/` with `.mcp.json` and `.claude/settings.json` examples:
+- Add `../../../src/templates/claude-code` with `.mcp.json` and `.claude/settings.json` examples:
   - MCP server `pa` -> `pa mcp-server`; preserve user-managed servers without merging or copying secrets.
   - SessionStart hook -> `pa claude-context --hook-json`.
   - Permissions: deny reads/writes outside workspace and `additionalReadDirs`/`additionalWriteDirs`; default Bash and

@@ -33,12 +33,12 @@ The personal assistant already has solid foundations:
 6. Memory watcher triggers reindexing automatically
 
 **Implementation:**
-- New file: `src/memory/daily-reflection.ts`
+- New file: `../../../../src/memory/daily-reflection.ts`
   - `runDailyReflection(config, vectorStore)` — orchestrates the pipeline
   - Reads JSONL, filters to conversation entries, formats for LLM
   - Calls Anthropic API with curation prompt
   - Appends to MEMORY.md with timestamp markers
-- New template: `src/templates/REFLECTION_PROMPT.md` — the curation system prompt
+- New template: `../../../../src/templates/REFLECTION_PROMPT.md` — the curation system prompt
 - Integration: Register as a built-in cron job in `daemon.ts` startup sequence (after memory init)
 - Config: `reflection.enabled`, `reflection.schedule` (cron expression), `reflection.maxDailyLogEntries`
 
@@ -61,10 +61,10 @@ The personal assistant already has solid foundations:
 5. JSONL entries are converted to a searchable text format before chunking (extract role, content, timestamp — skip raw tool call JSON noise)
 
 **Implementation:**
-- Modify `src/memory/collect-files.ts`:
+- Modify `../../../../src/memory/collect-files.ts`:
   - New function `collectDailyLogFiles(workspaceDir, retentionDays)` — scans `daily/` dir, filters by date in filename, returns paths within window
   - `collectMemoryFiles()` calls this and includes results
-- Modify `src/memory/indexer.ts`:
+- Modify `../../../../src/memory/indexer.ts`:
   - Add JSONL-aware text extraction: for `.jsonl` files, parse each line, extract meaningful text (role + content), skip tool_use/tool_result noise, join with timestamps
   - Existing chunking and hash-based dedup apply as-is
 - Config: `memory.dailyLogRetentionDays` (default 90), `memory.indexDailyLogs` (boolean, default true)
@@ -88,11 +88,11 @@ The personal assistant already has solid foundations:
 5. Save current snapshot as new state
 
 **Implementation:**
-- New file: `src/heartbeat/state.ts`
+- New file: `../../../../src/heartbeat/state.ts`
   - `HeartbeatState` type: `{ lastRun: ISO string, snapshot: Record<string, unknown>, notifiedItems: string[] }`
   - `loadState(dataDir)` / `saveState(dataDir, state)`
   - `diffState(previous, current)` — returns additions, removals, changes
-- Modify `src/heartbeat/prompts.ts`:
+- Modify `../../../../src/heartbeat/prompts.ts`:
   - `HEARTBEAT_PROMPT()` receives diff context instead of raw context
   - New section in prompt: "Changes since last heartbeat at {time}: ..."
 - Config: `heartbeat.stateDiffing` (boolean, default true)
@@ -124,12 +124,12 @@ The personal assistant already has solid foundations:
 3. The agent still makes commits via its normal Bash tool — this only automates transport
 
 **Implementation:**
-- New file: `src/heartbeat/git-sync.ts`
+- New file: `../../../../src/heartbeat/git-sync.ts`
   - `pullWorkspace(workspaceDir)` — stash → pull --rebase → stash pop, returns `{ success: boolean, stashed: boolean, error?: string }`
   - `pushWorkspace(workspaceDir)` — git push, returns `{ success: boolean, error?: string }`
   - Both use `child_process.execFile` (not shell) for safety
   - All operations logged via pino logger
-- Modify `src/heartbeat/scheduler.ts` (or wherever heartbeat session is orchestrated):
+- Modify `../../../../src/heartbeat/scheduler.ts` (or wherever heartbeat session is orchestrated):
   - Call `pullWorkspace()` before enqueuing heartbeat message
   - Call `pushWorkspace()` after heartbeat turn completes
 - Config: `heartbeat.gitSync.enabled` (boolean, default true), `heartbeat.gitSync.remote` (default "origin")
@@ -332,7 +332,7 @@ Adding a future integration (e.g., Linear, Notion) = create a new folder under `
 - `pa integapi calendar event <eventId>`
 - `pa integapi auth google` — run OAuth2 setup flow (interactive)
 
-**MCP integration:** New `src/tools/integ-server.ts` MCP server
+**MCP integration:** New `../../../../src/tools/integ-server.ts` MCP server
 - Tools call `pa integapi` CLI under the hood
 - Agent sees only filtered/sanitized data with structured errors
 
@@ -397,8 +397,8 @@ Adding a future integration (e.g., Linear, Notion) = create a new folder under `
 5. User can check off self-reported pillars via chat command
 
 **Implementation:**
-- New template: `src/templates/HABITS.md` — default pillars with detection rules
-- New file: `src/heartbeat/habits.ts`
+- New template: `../../../../src/templates/HABITS.md` — default pillars with detection rules
+- New file: `../../../../src/heartbeat/habits.ts`
   - `checkHabits(config)` — evaluates auto-detection rules
   - `resetDaily(workspacePath)` — archives yesterday, creates fresh checklist
   - `formatHabitStatus()` — generates status string for heartbeat prompt
@@ -415,7 +415,7 @@ Adding a future integration (e.g., Linear, Notion) = create a new folder under `
 
 **What:** Before the session compactor summarizes and truncates conversation history, flush key context (decisions, action items, important facts) to the daily log.
 
-**Why this matters:** The current compactor (`src/session/compactor.ts`) uses LLM summarization to compress long sessions. This works well for continuing the conversation, but the full context of discarded messages is lost. A pre-compaction flush ensures nothing important disappears — it gets captured in the daily log before the compactor runs, and the daily reflection (Improvement #1) can later promote it to long-term memory.
+**Why this matters:** The current compactor (`../../../../src/session/compactor.ts`) uses LLM summarization to compress long sessions. This works well for continuing the conversation, but the full context of discarded messages is lost. A pre-compaction flush ensures nothing important disappears — it gets captured in the daily log before the compactor runs, and the daily reflection (Improvement #1) can later promote it to long-term memory.
 
 **How it works:**
 1. Before compaction runs, extract the messages that will be compacted away
@@ -424,7 +424,7 @@ Adding a future integration (e.g., Linear, Notion) = create a new folder under `
 4. Then proceed with normal compaction
 
 **Implementation:**
-- Modify `src/session/compactor.ts`:
+- Modify `../../../../src/session/compactor.ts`:
   - New function `flushPreCompactionContext(messages, config)` called before compaction
   - Uses `dailyLog.append()` to save extracted context
   - Adds `source: "pre-compaction"` field to audit entries
