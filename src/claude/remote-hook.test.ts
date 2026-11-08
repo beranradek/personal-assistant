@@ -89,7 +89,7 @@ describe("parseRemoteHookArgs", () => {
 describe("echo line helper", () => {
   it("removes only leading echo lines", () => {
     expect(stripRemoteEcho(`${REMOTE_ECHO_PREFIX} hi\n\nAnswer`)).toBe("Answer");
-    expect(stripRemoteEcho("Answer 📱 stays")).toBe("Answer 📱 stays");
+    expect(stripRemoteEcho(`Answer\n${REMOTE_ECHO_PREFIX} stays`)).toBe(`Answer\n${REMOTE_ECHO_PREFIX} stays`);
     expect(stripRemoteEcho("plain")).toBe("plain");
     expect(stripRemoteEcho(`${REMOTE_ECHO_PREFIX} only`)).toBe("");
   });

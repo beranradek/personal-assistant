@@ -830,14 +830,14 @@ describe("RemoteBridge", () => {
     it("hides the terminal echo line in the processing message and in the final answer", async () => {
       const h = setup();
       await startTurn(h);
-      await h.bridge.handleHook("MessageDisplay", 100, { delta: "📱 Telegram: open alza\n\nOn it.", final: false });
+      await h.bridge.handleHook("MessageDisplay", 100, { delta: "Zpráva: open alza\n\nOn it.", final: false });
       await h.bridge.handleHook("PreToolUse", 100, { tool_name: "Bash", tool_input: { command: "ls" } });
       await vi.advanceTimersByTimeAsync(5000);
       const [, shown] = h.sender.createProcessingMessage.mock.calls[0]!;
       expect(shown).toContain("On it.");
-      expect(shown).not.toContain("📱");
+      expect(shown).not.toContain("Zpráva:");
       h.sender.sendMessage.mockClear();
-      await h.bridge.handleHook("Stop", 100, { last_assistant_message: "📱 Telegram: open alza\n\nDone, 3 results." });
+      await h.bridge.handleHook("Stop", 100, { last_assistant_message: "Zpráva: open alza\n\nDone, 3 results." });
       expect(h.sender.sendMessage).toHaveBeenCalledWith(CHAT, "Done, 3 results.");
       h.bridge.stop();
     });

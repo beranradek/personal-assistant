@@ -26,14 +26,16 @@ export const REMOTE_FRAME_HEADER_PREFIX = "[Telegram message from the user, id "
  * The frame asks the model to start its reply with a line `REMOTE_ECHO_PREFIX <message>`. The terminal shows it as a
  * normal assistant line (Claude Code hides the hook feedback text). The bridge removes such lines before Telegram.
  */
-export const REMOTE_ECHO_PREFIX = "📱 Telegram:";
+export const REMOTE_ECHO_PREFIX = "Zpráva:";
 
-/** Remove echo lines (see REMOTE_ECHO_PREFIX) at the start of a text. Other text stays unchanged. */
+/**
+ * Remove the echo line (see REMOTE_ECHO_PREFIX) when it is the FIRST line of a text. Other text stays unchanged.
+ * Only the first line is checked, so a later line that starts with the same word is kept.
+ */
 export function stripRemoteEcho(text: string): string {
   const lines = text.split("\n");
-  let i = 0;
-  while (i < lines.length && lines[i]!.trimStart().startsWith("📱")) i += 1;
-  return i === 0 ? text : lines.slice(i).join("\n").replace(/^\s+/, "");
+  if (!lines[0]!.trimStart().startsWith(REMOTE_ECHO_PREFIX)) return text;
+  return lines.slice(1).join("\n").replace(/^\s+/, "");
 }
 
 /** Environment variable. When set to `off`, the remote hook exits 0 at once (used for PA's own Agent SDK turns). */

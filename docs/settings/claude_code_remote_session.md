@@ -194,8 +194,10 @@ What you see in the terminal:
 
 - Claude Code shows a Telegram message only as the line "Stop hook feedback". It hides the text. The hook cannot change this.
 - To make the message visible, the frame asks the model to start its reply with one line
-  `📱 Telegram: <the message, at most 100 characters>`. This is a normal assistant line in the terminal.
-- The daemon removes such lines before it sends the progress message and the final answer to Telegram.
+  `Zpráva: <the message, at most 100 characters>`. This is a normal assistant line in the terminal. The line does not
+  name the source.
+- The daemon removes this first line before it sends the progress message and the final answer to Telegram. It checks
+  only the first line of a text, so a later line that starts with "Zpráva:" stays.
 - The model follows this instruction on its own. If it does not, the terminal shows only "Stop hook feedback".
   Nothing else breaks.
 
