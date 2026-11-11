@@ -5,7 +5,7 @@
 **Related:** [Telegram remote session spec](../2026-11-08-remote-interactive-session-communication/spec.md),
 [Telegram remote session plan](../2026-11-08-remote-interactive-session-communication/implementation-plan.md),
 [Claude Code remote session guide](../../../settings/claude_code_remote_session.md),
-[Slack setup guide](../../../settings/slack_configuration.md), [implementation plan](implementation-plan.md)
+[Slack setup guide](../../../settings/slack_configuration.md), [implementation plan](slack-implementation-plan.md)
 
 ## 1. Goal
 
@@ -20,10 +20,15 @@ through Telegram. The user wants the same through Slack, in the PERSONAL Slack w
 
 ## 2. Owner decisions (fixed)
 
-1. Target the PERSONAL Slack workspace first: own Slack app, own bot token and app token in the PA config. No company
-   workspace approval is needed. The company workspace is a later option (see section 9).
-2. One registered slash command (Socket Mode, ack within 3 s, no public URL). Plain DM text goes to the attached session.
-3. One attached chat per session across all channels (Telegram and Slack).
+1. Target the PERSONAL Slack workspace first: a Slack app with its own bot token and app token in the PA config. Preferably the
+   Slack app that already works with PA is extended (new scopes, `message.im`, `/cc`) and its tokens stay in `settings.json`; a new
+   app from the manifest is the alternative. No company workspace approval is needed. The company workspace is a later option
+   (see section 9).
+2. Implementation needs NO Slack token, workspace or network access (decided 2026-11-11). Code and tests use mocks. Facts come
+   from the official Slack docs (see the plan, "Verified in the official Slack docs"). The owner runs the live checklist after
+   delivery.
+3. One registered slash command (Socket Mode, ack within 3 s, no public URL). Plain DM text goes to the attached session.
+4. One attached chat per session across all channels (Telegram and Slack).
 
 ## 3. Verified current state (checked in the code on 2026-11-11)
 
@@ -266,7 +271,8 @@ DECISION: `/cc`.
   `/topic`, `/who`, `/apps`, `/call`, `/dnd`, `/feed`, `/join`, `/keys`, `/pref`, `/rename`, `/remove`, `/star`,
   `/archive`. So a direct `/status` or `/attach` is not possible: `/status` is the built-in user status command.
   That is the reason for ONE command with subcommands.
-- Slack rejects a reserved name when the command is saved in the app. The spike (task 0) records the real result.
+- Slack rejects a reserved name when the command is saved in the app (no official reserved list was found in the docs). The
+  owner records the real result in manual check item 0 of the plan.
   Fallbacks if `/cc` is taken in the workspace by another app: `/cmp`, `/companion`.
 - `/claude` is NOT used: other Claude apps for Slack may register it. Avoid a clash.
 
@@ -299,7 +305,8 @@ with the forwarded text.
 
 Bolt acks Events API events RIGHT AWAY, before the listener runs (verified in `node_modules`, see section 3). A slow listener
 therefore does not cause a redelivery. The `channel:ts` dedupe is the safety net for replays after a reconnect and does not
-depend on `retryNum`. NOT VERIFIED at run time: whether Slack replays events after a reconnect (docs are silent). The spike checks.
+depend on `retryNum`. The Slack docs document `retry_num` for HTTP only and say events can be lost while no connection is open, so
+a replay after a reconnect is not expected, and the code does not rely on one. Manual check item 15 of the plan looks at it.
 
 ### 6.3 Slash command path
 
@@ -335,7 +342,7 @@ awaited). Any handler error still ends in an ephemeral `ack`. If anything could 
 - The default WebClient retries by itself for a long time (10 retries over about 30 min) and has NO request timeout (both
   verified in `node_modules`). That would block the final answer loop for minutes or forever. DECISION: create the Bolt app with
   `clientOptions: { rejectRateLimitedCalls: true, retryConfig: { retries: 2 }, timeout: 15000 }`. Option names and the
-  `WebAPIRateLimitedError` (`retryAfter` seconds) are verified in `node_modules`; run-time behavior is checked by the spike. The
+  `WebAPIRateLimitedError` (`retryAfter` seconds) are verified in `node_modules`; the run-time behavior is a manual check (item 17). The
   channel maps that error to `retryAfterMs(err)`, capped by the existing `MAX_RETRY_AFTER_MS` (30 s). These options also apply
   to the existing PA thread flow of the same adapter (it gets faster failure, no 30 min retry). That is intended and tested.
 - The bridge `sendFinal` loop stays: 3 tries, delays 1 s and 3 s, or the channel `retryAfterMs`. Then
@@ -407,8 +414,8 @@ A new measurement is not needed for the decision. Task 9 may record `ps` memory 
 |---|---|
 | Generalizing the bridge breaks Telegram | Regression first: keep all `bridge.test.ts` and `telegram-router.test.ts` cases green with a `TelegramChannel` fake. New cases only add |
 | Existing Slack adapter hole (no `user` passes) | Fix and test in task 4 before any remote code uses the adapter |
-| Slash command clash or rename | Spike task 0. Fallback names listed |
-| WebClient retries block the final answer | `rejectRateLimitedCalls`, 2 retries, our own loop (verify in the spike) |
+| Slash command clash or rename | Manual check item 0 of the plan. Fallback names listed |
+| WebClient retries block the final answer | `rejectRateLimitedCalls`, 2 retries, our own loop (manual check item 17) |
 | Lost events during reconnect | `eyes` receipt, guide note |
 | Event redelivery | `channel:ts` dedupe |
 | mrkdwn converter bugs | Small subset, property style tests, `plain` fallback flag |
@@ -435,4 +442,5 @@ A new measurement is not needed for the decision. Task 9 may record `ps` memory 
 - A6. Attach from the second channel is refused with a clear message, `force` replaces and the old chat is told.
 - A7. Idle detach, session end and `/cc detach` behave as the table in 5.5 says, for both channels.
 - A8. The guide, manifest and README link exist. No real token appears anywhere in the repository (grep check in task 9).
-- A9. Targeted unit and integration tests pass. The manual E2E checklist is run in the personal workspace.
+- A9. Targeted unit and integration tests pass (all with mocks, no Slack token). The manual E2E checklist is run by the owner in
+  the personal workspace after delivery; it is not an agent task.

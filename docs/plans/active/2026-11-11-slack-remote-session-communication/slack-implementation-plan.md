@@ -4,6 +4,13 @@
 **Status:** Plan (not implemented)
 **Spec:** [spec.md](spec.md)
 
+**No token needed to implement (decided 2026-11-11).** Implementation, tests and review use NO Slack token, NO Slack workspace and NO
+network call to Slack. Tests use fake strings (`xoxb-test`, `xapp-test`) and a mocked `@slack/bolt`. The live checks that need a real
+app are the manual checklist at the end of this file. The owner runs it AFTER the code is delivered. Agents never run it. Facts that
+were open before are taken from the official Slack docs (section "Verified in the official Slack docs") and the code. The Slack
+integration that exists already (`src/adapters/slack.ts`, `docs/settings/slack_configuration.md`, Socket Mode, `connections:write`
+app token) is reused: the plan extends it and does not replace it.
+
 ## Verified current state
 
 Short list. Full table with sources: spec section 3.
@@ -28,16 +35,37 @@ Short list. Full table with sources: spec section 3.
   `defaultChatId: "4242"`), `src/cli.test.ts` (line 560-575 `[attached: 42]`), `src/tools/stdio-mcp-server.test.ts` (tool schema
   gets `channel`, `force`), `src/core/config.test.ts` (line 331 `toEqual` of the remote defaults gets the `slack` block),
   `src/adapters/slack.test.ts` (mock needs `command`, `client.reactions`, `client.conversations`; `makeConfig` stays).
-- Not verified offline: Slack behavior at run time (slash command in Socket Mode without request URL, name acceptance, reconnect
-  replay, rate limit behavior of WebClient). Task 0 verifies them. Verified online on 2026-11-11 (docs.slack.dev): slash commands are
-  not namespaced (last installed wins), 3 s ack and ephemeral default, `chat.postMessage` with a user id opens a DM, text about 4,000
-  / 40,000 limits, reactions Tier 3, Socket Mode disconnect warning and up to 10 connections, manifest field names.
+- Slack behavior at run time is NOT checked by the implementation. The official docs answer most open points (next section). The
+  rest is a manual check by the owner after delivery (E2E checklist), and the design tolerates both outcomes.
+
+## Verified in the official Slack docs (2026-11-11, docs.slack.dev, no private data sent)
+
+| Topic | Result | Design consequence |
+|---|---|---|
+| App-level token scope | `connections:write` (scope reference). Created in the app UI only (Basic Information), not by manifest | Already in the existing app and config. Nothing new |
+| Slash command ack | Within 3000 ms. Default `response_type` is `ephemeral`. Payload: `command`, `text`, `response_url`, `trigger_id`, `user_id`, `channel_id` (no `thread_ts` listed) | `/cc` answers are ephemeral. A command has no `ts` (top level DM answer for `/cc pa`) |
+| Slash command in a thread | NOT possible ("cannot be invoked in message threads") | Documented in the guide: use DM text in a thread |
+| Slash command names | NOT namespaced, the most recently installed app wins. Max 32 chars with the `/` | Guide warning, fallback names `/cmp`, `/companion`. No official reserved list found |
+| Manifest `url` of a slash command | Docs call it "the full https URL" and do not say it is optional. UNCLEAR for Socket Mode | Guide: if Slack asks for a Request URL, enter any https placeholder (Socket Mode delivers over the socket). Manual check |
+| `message.im` | `channel_type` is `"im"`. Needs `im:history` and the `message.im` event. Subtypes exist (`message_changed`, `message_deleted`, `bot_message`). Rules for a missing `user` are not documented | Drop events with a `subtype`, a `bot_id` or no `user` (already in task 4) |
+| Inbound text escaping | NOT documented for events. Outgoing rules are (`&amp;` `&lt;` `&gt;`, `<url\|label>`, `<@U..>`) | Keep the defensive decoder (task 6), tests use these shapes. Manual check |
+| Socket Mode delivery | Each event must be acked with its `envelope_id`. Up to 10 connections, a payload goes to ANY of them. Events can be lost while no connection is open. `retry_num` is documented for HTTP only | Dedupe stays (cheap). One daemon per app token. Gap tolerance in the guide |
+| Web API limits | `chat.postMessage` about 1 message per second per channel. `reactions.add` Tier 3, `reactions.remove` Tier 2 (20+/min), `conversations.open` Tier 3. 429 with `Retry-After` seconds. WebClient `retryConfig` default is 10 retries in about 30 minutes | `rejectRateLimitedCalls`, 2 retries, 1 s pacing, status reactions best effort (task 4, 5) |
+| Text limits | 4,000 chars recommended, truncated above 40,000. `mrkdwn` defaults to true. Unescaped third party text can notify the whole workspace | Chunk 3,500, escape `& < >` (this makes `<!channel>` inert), no `link_names` |
+| DM target | The method page says a user id opens a DM, the messaging guide says the message lands in the DM with `USLACK`. Pages disagree | ALWAYS `conversations.open` and post to the `D...` id (already the design) |
+| Reactions | Bot token with `reactions:write`. Errors: `already_reacted`, `no_reaction` (also when the reaction is not ours), `message_not_found`, `too_many_reactions`, `thread_locked`. Works in DMs: not stated | Ignore those errors (task 5). Manual check in DM |
+| Scopes | `commands`, `chat:write`, `im:history`, `im:write`, `reactions:write`. `im:read`, `channels:history` NOT needed for this feature. Messages tab must be on so a user can write to the app | Manifest below. Existing app keeps its channel scopes |
+| Changing an installed app | New scopes need a reinstall. Docs do not say if the token strings change | Guide: reinstall, then compare the Bot token on the page with `settings.json` |
+
+Sources: docs.slack.dev reference pages for the app manifest, `using-socket-mode`, `implementing-slash-commands`, `message.im`,
+`chat.postMessage`, `reactions.add`, `reactions.remove`, `conversations.open`, rate limits, `node-slack-sdk` web-api, scope references.
 
 ## Slack app manifest (ready to paste)
 
-Create the app: https://api.slack.com/apps -> Create New App -> From an app manifest -> choose the PERSONAL workspace ->
-paste YAML. Names of scopes are the minimal set for this feature (from the author's knowledge of the Slack docs; task 0
-confirms that Slack accepts the manifest).
+Two ways, the owner chooses (see "Slack app setup steps"): A) extend the Slack app that already works with PA (recommended: its
+tokens are already in `settings.json`), B) a new app: https://api.slack.com/apps -> Create New App -> From an app manifest ->
+choose the PERSONAL workspace -> paste YAML. The scope names are the minimal set for this feature and match the official scope
+references (see "Verified in the official Slack docs"). For way A, copy only the missing items (command, scopes, event, messages tab).
 
 ```yaml
 display_information:
@@ -86,20 +114,28 @@ settings:
 | `messages_tab_enabled: true` | Lets the user write to the app in a DM |
 | No `im:read` | Not needed: `channel_type` is in the event, the DM id comes from `conversations.open` |
 
-The existing PA channel mode (thread per message in a private channel) needs more scopes (`channels:history`,
-`groups:history`, events `message.channels` and `message.groups`, see `docs/settings/slack_configuration.md`). Do not add them
-for remote mode. Use a separate app for channel mode if you want both.
+The existing PA channel mode (thread per message in a private channel) uses more scopes (`channels:history`, `groups:history`,
+events `message.channels` and `message.groups`, see `docs/settings/slack_configuration.md`). Remote mode does not need them. When
+the existing app is extended (way A) it keeps them, and the Slack router ignores channel messages for the bridge (DM only). Add
+them to a NEW app (way B) only if you want channel mode there too.
 
-The app-level token is created by hand (it is not part of a manifest): app page -> Basic Information -> App-Level Tokens ->
-Generate Token and Scopes -> scope `connections:write`. NOT VERIFIED: that a manifest cannot create it, and the exact scope name
-(the Socket Mode docs page names neither; manifest field names in the YAML above ARE verified online, scope names are not).
-Slash command `url` is optional in the manifest schema (verified online); that it works in Socket Mode without one is the spike.
+The app-level token is created by hand in the app UI (Basic Information -> App-Level Tokens -> scope `connections:write`, confirmed
+by the official scope reference). A manifest cannot create it (the docs show no such field). The existing app already has one.
+The slash command `url` is an open point: the manifest reference calls it "the full https URL" and does not say it is optional.
+If Slack refuses the manifest or the command form without a Request URL, enter any https placeholder (for example
+`https://example.com/slack/commands`). With Socket Mode on, the command payload arrives over the socket and the URL is not called.
+That this is accepted is NOT verified in the docs: manual check item 0 of the checklist.
 
 ## Slack app setup steps for the user (guide content, task 8)
 
-1. Create the app from the manifest above in the personal workspace. Install it to the workspace (Install App).
-2. Copy the Bot User OAuth Token (starts with `xoxb-`). Generate the App-Level Token with `connections:write` (starts with `xapp-`).
-   Both are SECRETS. Do not paste them into chat, screenshots, issues or git.
+1. Way A (recommended, the PA Slack app exists): open the app on https://api.slack.com/apps. Add the bot scopes `commands`,
+   `im:write`, `reactions:write` (and `im:history`, `chat:write` if missing). Event Subscriptions -> add `message.im`. App Home ->
+   turn the Messages tab on and allow messages. Slash Commands -> Create New Command `/cc` (usage hint as in the manifest).
+   Reinstall the app to the workspace (Slack requires it for new scopes). Way B: create a new app from the manifest above and
+   install it.
+2. Way A: open OAuth & Permissions and compare the Bot User OAuth Token (`xoxb-`) with `settings.json` (the docs do not say if it
+   changes on reinstall); the App-Level Token (`xapp-`) stays. Way B: copy the Bot token and generate the App-Level Token with
+   `connections:write`. Tokens are SECRETS. Do not paste them into chat, screenshots, issues or git.
 3. Find your Slack member id: profile -> three dots -> Copy member ID (looks like `U` plus letters and digits).
 4. Edit `settings.json` in the PA config dir (`PA_CONFIG`, default `~/.personal-assistant`). This file is outside any repository.
    Run `chmod 600` on it. Put the values there. The example uses placeholders only:
@@ -133,25 +169,19 @@ Use spec sections 5.4 (one chat per session) and 5.5 (behavior table). The tasks
 Rules for all agents: TDD (write the failing test first, then the code). Do not run the full test suite, a full build or
 `pnpm typecheck` (4 GB RAM). Use targeted `npx vitest run <files>`, `npx tsc --noEmit -p` only on request, and
 `git diff --check`. Agents do NOT commit. Lines in md and ts max about 140 chars. No real token anywhere (tests use
-`xoxb-test`, `xapp-test` style fake strings).
+`xoxb-test`, `xapp-test` style fake strings). NO Slack token, workspace or network access is needed or allowed: every Slack call
+in code and tests goes through a mock or a fake `SlackRemoteApi`. If a task needs a Slack fact that is missing here, take it from
+the official docs (docs.slack.dev, search the exact page) and write the URL in the code comment or in "Delivery notes". Do not guess.
 
-### 0. Spike on the real personal workspace (human + one agent, first, no repo changes)
+### 0. (no work) Slack facts
 
-Scratch dir under the scratchpad or `tmp/`. A 60 line Bolt script (or the existing adapter in a scratch config) and the manifest above.
-Record the answers in "Delivery notes" at the end of this file:
-- Does Slack accept the manifest (slash command with no `url`, Socket Mode on)? Is `/cc` accepted as a name?
-- `/cc` typed in a DM and in a channel where the app is not present: payload fields (`user_id`, `channel_id`), does `ack` with
-  `response_type: "ephemeral"` show only to the user, is an empty `ack()` silent?
-- Does `message.im` arrive with `channel_type: "im"`? Fields of a message event without `user`?
-- Event ack timing: a listener that sleeps 5 s. Offline reading says Bolt acks first (no redelivery): confirm.
-- Does another installed app already own `/cc` in the workspace (last installed wins)? `conversations.open` result (needs `im:write`).
-- `/cc` typed inside a thread: confirm it is not available.
-- Text of a DM with a link, `&`, `<` and a mention: raw payload shape (input for the inbound decoder tests).
-- `reactions.add` of `eyes` on a user DM message with a bot token: works? Errors for a repeated add and remove.
-- WebClient with `rejectRateLimitedCalls: true`: error shape and `retryAfter` (send 20 messages quickly to a test DM).
-- Kill the network for 20 s: reconnect log lines, are messages sent during the gap delivered after?
-- Length: send a 5,000 char `text` and a 41,000 char `text`: what does Slack do (truncate, error, split)?
-- Acceptance: all answers written. Spec items marked NOT VERIFIED are updated.
+Done at planning time: see "Verified in the official Slack docs". The live spike was removed. Items that only a real app can answer
+(empty `url` accepted, empty `ack()` silent, reaction in a DM, events lost during a gap, inbound text escaping, `/cc` clash) are in the
+manual checklist, items 0, 2, 4, 15, 16a, 16d. The code must work with either outcome:
+- an empty `ack()` that is NOT silent is harmless (no text is passed on success, the bridge posts its own notice in the DM);
+- a gap that loses events is tolerated (the user sees no `eyes` and sends again);
+- inbound text that is NOT escaped passes through unchanged (plain text without entities or link markup stays as it is, test it).
+- Acceptance: nothing to do. Agents read the section and start at task 1 and task 4.
 
 ### 1. Chat keys, channel types, config (agent A)
 
@@ -284,8 +314,10 @@ Files: `src/daemon.ts`, `src/daemon.test.ts`, `src/remote/routes.ts` + test, `sr
 
 ### 8. Docs (agent D, after 7)
 
-- New `docs/settings/claude_code_remote_slack.md` (STE English, lines max 140): what it does, important facts, app creation
-  with the manifest (copy from this plan), tokens and config (placeholders only), start and control (`/cc ...` table),
+- New `docs/settings/claude_code_remote_slack.md` (STE English, lines max 140): what it does, important facts, app setup with the
+  two ways (A: extend the existing PA Slack app, B: new app from the manifest; copy the steps and the manifest from this plan, say
+  that a reinstall is needed after new scopes and that the slash command may need a placeholder Request URL), tokens and config
+  (placeholders only), start and control (`/cc ...` table),
   what you see (reactions, answer chunks), one chat per session and `force`, security, troubleshooting (no `/cc` command
   in Slack, `eyes` missing, token errors, second daemon on one app token, reconnect), tested / not tested, manual checklist.
 - `docs/settings/claude_code_remote_session.md`: short pointer at the top and in "Security"; Telegram-only wording stays.
@@ -302,12 +334,18 @@ Files: `src/daemon.ts`, `src/daemon.test.ts`, `src/remote/routes.ts` + test, `sr
 - Agent F (completeness vs spec): every F and A item of the spec has a test or a checklist line.
 - Targeted tests: `npx vitest run src/remote src/adapters/slack.test.ts src/daemon.test.ts src/tools/stdio-mcp-server.test.ts
   src/cli.test.ts src/core/config.test.ts src/security/content-redaction.test.ts` (one line when typed).
-- Real E2E in the personal workspace (checklist below). A fake `claude` is not needed: use the real `claude` in tmux as for Telegram.
+- The real E2E is NOT an agent task. The owner runs the checklist below in the personal workspace after delivery, with the real
+  `claude` in tmux as for Telegram. The agents only make sure the guide (task 8) contains the checklist and the "not tested" list.
 
-## E2E manual test checklist (personal workspace, real Slack app, real `claude`)
+## E2E manual test checklist (OWNER, after delivery, personal workspace, real Slack app, real `claude`)
 
-Setup: spike app, tokens in the laptop `settings.json`, `pa init --claude-remote`, daemon running, `claude` session in the workspace.
+Not part of any agent task. Agents never run it and never ask for tokens.
+Setup: the Slack app (way A or B of the setup steps), tokens in the laptop `settings.json`, `pa init --claude-remote`, daemon running,
+`claude` session in the workspace.
 
+0. App check (replaces the removed spike): Slack accepts the `/cc` command (with a placeholder Request URL if it asks for one);
+   an empty `/cc` reply does not show an error; Socket Mode stays on; another app owning `/cc` is not installed. If `/cc` is refused
+   or clashes, set the fallback name in the app and in the adapter config (`/cmp` or `/companion`).
 1. Daemon log shows "Slack adapter started" and "Remote session bridge ready". Token file `remote-token` exists.
 2. In Slack DM with the app: `/cc status` lists the session (ephemeral, only you see it). `/cc help` shows help.
 3. `/cc attach`: the DM gets "Attached to ...". No duplicate ephemeral text.
@@ -338,7 +376,7 @@ Setup: spike app, tokens in the laptop `settings.json`, `pa init --claude-remote
     chunks after the network is back, one "could not be delivered" notice.
 16c. Telegram and Slack both enabled: same-channel second chat refused with the old text; `pa remote detach` on the laptop
     detaches a Slack chat; `pa remote status` shows `[attached: slack:U...]`.
-16d. Another app owns `/cc` (if you have one installed): the spike result decides the final command name.
+16d. Another app owns `/cc` (if you have one installed): the manual result (item 0) decides the final command name.
 17. Rate limit: a very long answer in many chunks while another chat is busy: no hang, a final notice if sending fails.
 18. Telegram regression: run the old Telegram checklist (attach, progress message, final answer, detach).
 19. Token hygiene: `rg` for token patterns in the repo and in `docs/`: no matches. `git status` shows no config file.
@@ -347,22 +385,21 @@ Setup: spike app, tokens in the laptop `settings.json`, `pa init --claude-remote
 
 | Agent | Tasks | Files (disjoint) |
 |---|---|---|
-| Human + B | 0 | scratch only |
 | A | 1, 2, 3 | `src/remote/{protocol,chat-key,bridge,telegram-router}*`, `src/remote/channels/telegram-channel*`, `src/core/{types,config}*` |
 | B | 4, 5, 6 | `src/adapters/slack*`, `src/security/content-redaction*`, `src/remote/channels/slack-*`, `src/remote/slack-router*` |
 | C | 7 | `src/daemon*`, `src/remote/{routes,control-client}*`, `src/tools/stdio-mcp-server*`, `src/cli*` |
 | D | 8 | `docs/**`, `README.md`, `CLAUDE.md` |
 | E, F | 9 | read only, then fixes through A-C |
 
-Order: 0 first. Then A (1) and B (4) in parallel. Then A (2, 3) and B (5, 6) in parallel (B needs only the types from 1).
+Order: A (1) and B (4) in parallel. Then A (2, 3) and B (5, 6) in parallel (B needs only the types from 1).
 Then C (7). Then D (8). Then E and F (9). One subagent run = one task.
 
 ## Risks and open questions
 
 | # | Question or risk | Plan |
 |---|---|---|
-| Q1 | Does Slack allow `/cc` and a command without request URL in Socket Mode? | Spike. Fallback names `/cmp`, `/companion` |
-| Q2 | Reconnect gap: lost events? | Spike, `eyes` receipt, guide note |
+| Q1 | Does Slack allow `/cc` and a command without request URL in Socket Mode? | Docs are unclear for the empty `url` (manual item 0). Fallback names `/cmp`, `/companion` |
+| Q2 | Reconnect gap: lost events? | Docs: events can be lost while no connection is open. `eyes` receipt, guide note, manual item 15 |
 | Q3 | Should a DM notice be sent at daemon start ("remote mode ready, attach again")? | Not in phase 1. Decide after E2E |
 | Q4 | Company workspace later: admin approval, token policy, a bot in many channels | Out of scope. Same code, new app, review the allowlist and the logging policy first |
 | Q5 | Progress message in Slack (`slack.progress`) is a flag, default off. Is a status reaction enough? | Decide after E2E (check 4 and 5) |
@@ -371,7 +408,7 @@ Then C (7). Then D (8). Then E and F (9). One subagent run = one task.
 | Q8 | `pa remote detach` from the laptop for a chat on another channel | Decided: required in task 7 (operator action, localhost + token) |
 | Q9 | `/cc attach` typed outside the DM gives no visible reply there (the notice is in the DM) | Open, recommend: ephemeral "Attached. See your DM with the app." when `channel_id` is not the DM. Decide at task 6 |
 | R1 | Generalizing the bridge regresses Telegram | Tasks 2 and 3 keep all old tests, texts and flows green first |
-| R2 | Slack WebClient retry behavior blocks answers | `rejectRateLimitedCalls`, spike |
+| R2 | Slack WebClient retry behavior blocks answers | `rejectRateLimitedCalls`, 2 retries, `timeout: 15000` (docs: 10 retries in 30 min by default). Manual item 17 |
 | R3 | Two daemons with one app token split events | Guide warning |
 
 ## Rollout and rollback
@@ -383,7 +420,7 @@ Then C (7). Then D (8). Then E and F (9). One subagent run = one task.
 
 ## Delivery notes
 
-- (filled in by the spike and the implementation)
+- (filled in by the implementation agents; Slack facts come from the official docs, see "Verified in the official Slack docs")
 
 ## Review 2026-11-11
 
@@ -400,14 +437,14 @@ Found and fixed (in spec and plan):
 | 5 | major | Inbound Slack text is entity escaped and has link markup; echo stripping would not match | Inbound decoder in the Slack router (task 6, spec 6.2) |
 | 6 | major | `pa remote detach` and MCP detach act on the default chat only: cannot detach a Slack chat from the laptop | Required in task 7 (was open "if cheap" item Q8) |
 | 7 | major | Bridge is created inside the Telegram block of `daemon.ts`; default chat id has two code paths (`daemon.ts`, `routes.ts`) | Task 7 states the move, lazy registry, shared helper |
-| 8 | major | Plan claim "Bolt acks after the listener" is wrong: Bolt acks events first | Spec 6.2 corrected, spike item reduced to a confirmation |
+| 8 | major | Plan claim "Bolt acks after the listener" is wrong: Bolt acks events first | Spec 6.2 corrected. The docs do not say it: manual check |
 | 9 | minor | Idle and attach notice texts would change for Telegram ("no messages", "/detach") | Channel `label` and `detachCommand`; Telegram text byte for byte |
 | 10 | minor | `setTurnStatus` races (add vs remove), missing calls for stale turn, `removeSession`, `stop()`; must not delay the answer | Serialization per ref, never awaited, extra cases in task 2 |
 | 11 | minor | Channel functions: key or id part? Negative Telegram ids as bare ids | Id part only; `parseChatKey` accepts `-?\d+`, splits at first colon |
 | 12 | minor | Telegram router uses the raw id for `send`; a key there would break replies | Task 3: raw id for `send`, key for the bridge |
 | 13 | minor | Existing tests to change were not listed | Listed in "Verified current state" |
 | 14 | minor | Bolt version `^5.1.0` (package.json says `^5.0.0`); `attachedChatId` lives in `sessions[]` | Fixed |
-| 15 | minor | Slash commands are not namespaced: another app with `/cc` silently wins | Spec 6.1, spike item, E2E 16d |
+| 15 | minor | Slash commands are not namespaced: another app with `/cc` silently wins | Spec 6.1, E2E 0 and 16d |
 | 16 | minor | Reaction error list incomplete; answer length unbounded; no `settings.json` mode check | More error names; 20 chunk cap; 0600 warning in task 7 |
 | 17 | minor | Four prose lines over 140 chars | Wrapped |
 
@@ -416,8 +453,11 @@ Verified offline (`node_modules`): web-api options, `WebAPIRateLimitedError.retr
 Verified online: slash command 3 s ack, ephemeral default, no namespacing, optional manifest `url`, `command` max 32 chars;
 `chat.postMessage` with a user id opens a DM, 4,000 / 40,000 text limits, rate hints; `reactions.add` Tier 3 and error names;
 Socket Mode disconnect warning, refresh, 10 connections, events to any connection; manifest field names.
-Still NOT VERIFIED (spike task 0): slash command without URL in Socket Mode, `/cc` acceptance, built-in command list, scope names
-(`connections:write` and others), replay after reconnect, 429 behavior at run time.
+Update after the owner decision "no token for implementation" (2026-11-11): the spike (task 0) is removed. The official docs now
+confirm the scope names (`connections:write`, `commands`, `im:history`, `im:write`, `reactions:write`) and the rate limits. Still
+open in the docs and left to the manual checklist: slash command without a Request URL in Socket Mode, `/cc` acceptance and a
+built-in command list (none found), replay or loss of events after a reconnect (docs: events can be lost), inbound text escaping,
+reactions in a DM, 429 behavior at run time. The code tolerates every outcome (task 0).
 
 Confirmed correct in the plan: a second chat is refused today (`bridge.ts` `control`, "is attached to another chat."), the allowlist
 hole (`msg.user &&`), no `channel_type` check, no exposed Bolt `app` or client, daemon remote gating on Telegram, token file and hook
