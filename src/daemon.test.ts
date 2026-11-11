@@ -87,6 +87,10 @@ vi.mock("./remote/telegram-router.js", () => ({
   createTelegramRouter: vi.fn(),
 }));
 
+vi.mock("./remote/slack-router.js", () => ({
+  createSlackRouter: vi.fn(),
+}));
+
 vi.mock("./adapters/slack.js", () => ({
   createSlackAdapter: vi.fn(),
 }));
@@ -190,6 +194,7 @@ import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
 import { createRemoteBridge } from "./remote/bridge.js";
 import { createTelegramRouter } from "./remote/telegram-router.js";
+import { createSlackRouter } from "./remote/slack-router.js";
 import * as fsPromises from "node:fs/promises";
 import * as osModule from "node:os";
 import * as pathModule from "node:path";
@@ -759,12 +764,23 @@ describe("daemon", () => {
   // Remote session mode
   // -----------------------------------------------------------------------
   describe("remote session mode", () => {
-    function remoteConfig(telegramEnabled: boolean): Config {
+    function remoteConfig(telegramEnabled: boolean, slackEnabled = false, defaultChannel?: "telegram" | "slack"): Config {
       const base = makeConfig();
       return makeConfig({
-        adapters: { ...base.adapters, telegram: { ...base.adapters.telegram, enabled: telegramEnabled, allowedUserIds: [4242] } },
-        claudeCode: { remote: { enabled: true } },
+        adapters: {
+          ...base.adapters,
+          telegram: { ...base.adapters.telegram, enabled: telegramEnabled, allowedUserIds: [4242] },
+          slack: { ...base.adapters.slack, enabled: slackEnabled, botToken: "xoxb-test", appToken: "xapp-test", allowedUserIds: ["U1"] },
+        },
+        claudeCode: { remote: { enabled: true, slack: { progress: false, reactions: true, format: "mrkdwn" }, ...(defaultChannel ? { defaultChannel } : {}) } },
       } as Partial<Config>);
+    }
+
+    function mockSlack() {
+      const remoteApi = { openDm: vi.fn(), postMessage: vi.fn(), updateMessage: vi.fn(), addReaction: vi.fn(), removeReaction: vi.fn() };
+      const slack = { ...makeMockAdapter("slack"), remote: remoteApi };
+      vi.mocked(createSlackAdapter).mockReturnValue(slack as any);
+      return slack;
     }
 
     let configDir: string;
@@ -772,6 +788,7 @@ describe("daemon", () => {
       configDir = await fsPromises.mkdtemp(pathModule.join(osModule.tmpdir(), "pa-daemon-remote-"));
       vi.mocked(createRemoteBridge).mockReset();
       vi.mocked(createTelegramRouter).mockReset();
+      vi.mocked(createSlackRouter).mockReset();
     });
     afterEach(async () => {
       await fsPromises.rm(configDir, { recursive: true, force: true });
@@ -793,7 +810,7 @@ describe("daemon", () => {
       expect(token).toMatch(/^[0-9a-f]{64}$/);
       expect((await fsPromises.stat(pathModule.join(configDir, "remote-token"))).mode & 0o777).toBe(0o600);
       const holder = vi.mocked(startHttpMcpServer).mock.calls[0]![2]!;
-      expect(holder).toMatchObject({ token, defaultChatId: "4242", bridge });
+      expect(holder).toMatchObject({ token, defaultChatIds: { telegram: "telegram:4242" }, bridge });
       expect(createTelegramRouter).toHaveBeenCalledWith(expect.objectContaining({ bridge, enqueue: expect.any(Function), send: expect.any(Function) }));
 
       // The adapter callback goes through the router.
@@ -825,13 +842,120 @@ describe("daemon", () => {
       exitSpy.mockRestore();
     });
 
-    it("warns once when remote is enabled but Telegram is disabled: no token, no routes, no bridge", async () => {
+    it("Slack only: bridge ready, token file written, routers wired, default chat is slack", async () => {
+      const config = remoteConfig(false, true);
+      const { mockQueue } = setupMocks(config);
+      const slack = mockSlack();
+      const bridge = { stop: vi.fn() };
+      vi.mocked(createRemoteBridge).mockReturnValue(bridge as any);
+      const slackRouter = { onMessage: vi.fn(), onCommand: vi.fn().mockResolvedValue("ok") };
+      vi.mocked(createSlackRouter).mockReturnValue(slackRouter);
+      // Bridge must be bound before the Slack adapter starts.
+      let holderBridgeAtStart: unknown;
+      slack.start.mockImplementation(() => {
+        holderBridgeAtStart = vi.mocked(startHttpMcpServer).mock.calls[0]![2]!.bridge;
+      });
+
+      await startDaemon(configDir);
+
+      expect(createTelegramAdapter).not.toHaveBeenCalled();
+      expect(createTelegramRouter).not.toHaveBeenCalled();
+      expect((await fsPromises.readFile(pathModule.join(configDir, "remote-token"), "utf8")).trim()).toMatch(/^[0-9a-f]{64}$/);
+      expect(vi.mocked(startHttpMcpServer).mock.calls[0]![2]).toMatchObject({ defaultChatIds: { slack: "slack:U1" }, bridge });
+      expect(holderBridgeAtStart).toBe(bridge);
+      expect(createSlackRouter).toHaveBeenCalledWith(expect.objectContaining({ bridge, enqueue: expect.any(Function) }));
+
+      const [, onMessage, options] = vi.mocked(createSlackAdapter).mock.calls[0]!;
+      const msg = { source: "slack", sourceId: "D1--1", text: "hi" } as any;
+      onMessage(msg);
+      expect(slackRouter.onMessage).toHaveBeenCalledWith(msg);
+      expect(mockQueue.enqueue).not.toHaveBeenCalled();
+      await expect(options!.onCommand!({ userId: "U1", text: "status", channelId: "D1" })).resolves.toBe("ok");
+      expect(slackRouter.onCommand).toHaveBeenCalled();
+    });
+
+    it("both channels share ONE bridge and the registry resolves both", async () => {
+      const config = remoteConfig(true, true, "slack");
+      setupMocks(config);
+      vi.mocked(createTelegramAdapter).mockReturnValue({ ...makeMockAdapter("telegram"), createProcessingMessage: vi.fn(), updateProcessingMessage: vi.fn() } as any);
+      mockSlack();
+      const bridge = { stop: vi.fn() };
+      vi.mocked(createRemoteBridge).mockReturnValue(bridge as any);
+      vi.mocked(createSlackRouter).mockReturnValue({ onMessage: vi.fn(), onCommand: vi.fn() });
+
+      await startDaemon(configDir);
+
+      expect(createRemoteBridge).toHaveBeenCalledTimes(1);
+      const registry = vi.mocked(createRemoteBridge).mock.calls[0]![0].channels;
+      expect(registry.get("telegram")?.id).toBe("telegram");
+      expect(registry.get("slack")?.id).toBe("slack");
+      expect(createTelegramRouter).toHaveBeenCalledWith(expect.objectContaining({ bridge }));
+      expect(createSlackRouter).toHaveBeenCalledWith(expect.objectContaining({ bridge }));
+      expect(vi.mocked(startHttpMcpServer).mock.calls[0]![2]).toMatchObject({
+        defaultChatIds: { telegram: "telegram:4242", slack: "slack:U1" },
+        defaultChannel: "slack",
+        bridge,
+      });
+    });
+
+    it("the in-daemon MCP handler resolves the default chat with the shared helper", async () => {
+      const config = remoteConfig(true, true);
+      setupMocks(config);
+      vi.mocked(createTelegramAdapter).mockReturnValue(makeMockAdapter("telegram") as any);
+      mockSlack();
+      const bridge = { stop: vi.fn(), control: vi.fn().mockResolvedValue({ ok: true, message: "m", sessions: [] }) };
+      vi.mocked(createRemoteBridge).mockReturnValue(bridge as any);
+      vi.mocked(createSlackRouter).mockReturnValue({ onMessage: vi.fn(), onCommand: vi.fn() });
+
+      await startDaemon(configDir);
+
+      const deps = vi.mocked(startHttpMcpServer).mock.calls[0]![0];
+      await deps.handleRemoteControl!({ action: "attach", channel: "slack" });
+      expect(bridge.control).toHaveBeenLastCalledWith({ action: "attach", channel: "slack", chatId: "slack:U1" });
+      await deps.handleRemoteControl!({ action: "attach" });
+      expect(bridge.control).toHaveBeenLastCalledWith({ action: "attach", chatId: "telegram:4242" });
+      await deps.handleRemoteControl!({ action: "detach" });
+      expect(bridge.control).toHaveBeenLastCalledWith({ action: "detach" });
+    });
+
+    it("the in-daemon MCP handler refuses a channel that is not enabled", async () => {
+      const config = remoteConfig(true);
+      setupMocks(config);
+      vi.mocked(createTelegramAdapter).mockReturnValue(makeMockAdapter("telegram") as any);
+      vi.mocked(createRemoteBridge).mockReturnValue({ stop: vi.fn(), control: vi.fn() } as any);
+
+      await startDaemon(configDir);
+
+      const deps = vi.mocked(startHttpMcpServer).mock.calls[0]![0];
+      await expect(deps.handleRemoteControl!({ action: "attach", channel: "slack" })).rejects.toThrow(/slack is not enabled/);
+    });
+
+    it("warns when settings.json is group/world readable and Slack is enabled (mode check only)", async () => {
+      const config = remoteConfig(false, true);
+      setupMocks(config);
+      mockSlack();
+      vi.mocked(createRemoteBridge).mockReturnValue({ stop: vi.fn() } as any);
+      vi.mocked(createSlackRouter).mockReturnValue({ onMessage: vi.fn(), onCommand: vi.fn() });
+      const file = pathModule.join(configDir, "settings.json");
+      await fsPromises.writeFile(file, "{}", { mode: 0o644 });
+      await fsPromises.chmod(file, 0o644);
+
+      await startDaemon(configDir);
+      expect(mockLogger.warn.mock.calls.some(([, msg]) => String(msg).includes("group/world readable"))).toBe(true);
+      mockLogger.warn.mockClear();
+
+      await fsPromises.chmod(file, 0o600);
+      await startDaemon(configDir);
+      expect(mockLogger.warn.mock.calls.some(([, msg]) => String(msg).includes("group/world readable"))).toBe(false);
+    });
+
+    it("warns once when remote is enabled but no channel is: no token, no routes, no bridge", async () => {
       const config = remoteConfig(false);
       setupMocks(config);
 
       await startDaemon(configDir);
 
-      const warnings = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes("adapters.telegram.enabled is false"));
+      const warnings = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes("neither adapters.telegram nor adapters.slack"));
       expect(warnings).toHaveLength(1);
       expect(createRemoteBridge).not.toHaveBeenCalled();
       for (const call of vi.mocked(startHttpMcpServer).mock.calls) expect(call[2]).toBeUndefined();

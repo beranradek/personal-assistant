@@ -557,7 +557,7 @@ describe("runEpisodeEval", () => {
     const response = {
       ok: true,
       message: "Attached.",
-      sessions: [{ index: 1, name: "dev", cwd: "/w", pid: 12, attachedChatId: "42" }],
+      sessions: [{ index: 1, name: "dev", cwd: "/w", pid: 12, attachedChatId: "telegram:42" }],
     };
     const makeOut = () => ({ log: vi.fn(), error: vi.fn() });
 
@@ -572,7 +572,26 @@ describe("runEpisodeEval", () => {
       expect(await runRemoteCommand(["attach", "2"], control, out)).toBe(0);
       expect(control).toHaveBeenCalledWith({ action: "attach", target: "2" });
       expect(out.log).toHaveBeenCalledWith(formatRemoteControlResponse(response));
-      expect(out.log.mock.calls[0][0]).toContain("1. dev (/w, pid 12) [attached: 42]");
+      expect(out.log.mock.calls[0][0]).toContain("1. dev (/w, pid 12) [attached: telegram:42]");
+    });
+
+    it("passes --channel and --force (attach only) in any position", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      await runRemoteCommand(["attach", "--channel", "slack", "2", "--force"], control, makeOut());
+      await runRemoteCommand(["status", "--channel", "slack", "--force"], control, makeOut());
+      expect(control.mock.calls.map((c) => c[0])).toEqual([
+        { action: "attach", target: "2", channel: "slack", force: true },
+        { action: "status", channel: "slack" },
+      ]);
+    });
+
+    it("rejects a bad channel, a missing channel value and unknown flags", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      const out = makeOut();
+      for (const args of [["attach", "--channel", "irc"], ["attach", "--channel"], ["attach", "--bogus"], ["attach", "1", "2"]]) {
+        expect(await runRemoteCommand(args, control, out)).toBe(1);
+      }
+      expect(control).not.toHaveBeenCalled();
     });
 
     it("sends detach and status without a target", async () => {

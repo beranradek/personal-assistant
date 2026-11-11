@@ -218,6 +218,18 @@ describe("RemoteBridge", () => {
       bridge.stop();
     });
 
+    it("detach without chatId detaches whichever chat holds the session; status works without chatId", async () => {
+      const { bridge } = setup();
+      startPoll(bridge);
+      expect((await bridge.control({ action: "detach" })).ok).toBe(false);
+      await attach(bridge);
+      expect((await bridge.control({ action: "status" })).message).toContain("[attached");
+      const res = await bridge.control({ action: "detach" });
+      expect(res.ok).toBe(true);
+      expect(bridge.isAttached(CHAT)).toBe(false);
+      bridge.stop();
+    });
+
     it("detach drops queued messages", async () => {
       const { bridge } = setup();
       startPoll(bridge);

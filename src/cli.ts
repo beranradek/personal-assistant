@@ -27,7 +27,7 @@ import { buildClaudeContext, formatSessionStartHookOutput } from "./claude/conte
 import { evaluateClaudePreToolUse } from "./claude/security-hook.js";
 import { claudeCompanionSettingsPath, installClaudeCodeTemplates, installClaudeRemoteConfig } from "./claude/templates.js";
 import { createRemoteControlClient, type RemoteControlFn } from "./remote/control-client.js";
-import type { RemoteControlAction, RemoteControlResponse } from "./remote/protocol.js";
+import { REMOTE_CHANNEL_IDS, type RemoteChannelId, type RemoteControlRequest, type RemoteControlResponse } from "./remote/protocol.js";
 
 const log = createLogger("cli");
 
@@ -80,8 +80,8 @@ Commands:
   mcp-server            Start stdio MCP server (for Codex backend integration)
   claude-context        Print safe SessionStart context for Claude Code
   claude-security-hook  Apply PA's PreToolUse security policy for Claude Code
-  claude-remote-hook    Hook command for remote Telegram sessions (used by Claude Code hooks)
-  remote <sub>          Remote Telegram session control: attach [target] | detach | status
+  claude-remote-hook    Hook command for remote sessions (used by Claude Code hooks)
+  remote <sub>          Remote session control: attach [target] [--channel slack|telegram] [--force] | detach | status
   claude                Start Claude Code in workspace-restricted companion mode
   agents-view           tmux view: assistant left, agent sessions right (writable)
                           [--assistant <cmd>] [--assistant-cwd <dir>] [-i|--interactive-shell] [--read-only]
@@ -169,20 +169,51 @@ export function formatRemoteControlResponse(response: RemoteControlResponse): st
   return lines.join("\n");
 }
 
-/** `pa remote attach|detach|status [target]`. Returns the exit code. */
+const REMOTE_USAGE = "Usage: pa remote attach [target] [--channel slack|telegram] [--force] | detach [--channel ...] | status [--channel ...]";
+
+/** Parse `[target] [--channel <id>] [--force]` (flags in any position). Returns undefined for invalid input. */
+function parseRemoteArgs(args: string[]): { target?: string; channel?: RemoteChannelId; force: boolean } | undefined {
+  let target: string | undefined;
+  let channel: RemoteChannelId | undefined;
+  let force = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--force") {
+      force = true;
+    } else if (arg === "--channel") {
+      const value = args[++i];
+      channel = REMOTE_CHANNEL_IDS.find((id) => id === value);
+      if (!channel) return undefined;
+    } else if (!arg.startsWith("--") && target === undefined) {
+      target = arg;
+    } else {
+      return undefined;
+    }
+  }
+  return { ...(target ? { target } : {}), ...(channel ? { channel } : {}), force };
+}
+
+/** `pa remote attach|detach|status [target] [--channel <id>] [--force]`. Returns the exit code. */
 export async function runRemoteCommand(
   args: string[],
   control: RemoteControlFn,
   out: { log: (text: string) => void; error: (text: string) => void } = console,
 ): Promise<number> {
   const action = args[0];
-  if (action !== "attach" && action !== "detach" && action !== "status") {
-    out.error("Usage: pa remote attach [target] | detach | status");
+  const parsed = parseRemoteArgs(args.slice(1));
+  if ((action !== "attach" && action !== "detach" && action !== "status") || !parsed) {
+    out.error(REMOTE_USAGE);
     return 1;
   }
-  const target = action === "attach" ? args[1] : undefined;
+  const request: RemoteControlRequest = {
+    action,
+    // The target is for attach; detach and status ignore it (and `--force` only applies to attach).
+    ...(action === "attach" && parsed.target ? { target: parsed.target } : {}),
+    ...(parsed.channel ? { channel: parsed.channel } : {}),
+    ...(action === "attach" && parsed.force ? { force: true } : {}),
+  };
   try {
-    const response = await control({ action: action satisfies RemoteControlAction, ...(target ? { target } : {}) });
+    const response = await control(request);
     out.log(formatRemoteControlResponse(response));
     return response.ok ? 0 : 1;
   } catch (err) {

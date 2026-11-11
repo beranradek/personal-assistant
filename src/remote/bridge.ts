@@ -775,9 +775,20 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
   async function control(request: RemoteControlRequest): Promise<RemoteControlResponse> {
     const reply = (ok: boolean, message: string): RemoteControlResponse => ({ ok, message, sessions: listSessions() });
     const rawChat = request.chatId?.trim();
-    if (!rawChat) return reply(false, "chatId is required.");
-    const chatId = normalizeChat(rawChat);
-    if (!parseChatKey(chatId)) return reply(false, `Invalid chat id: ${preview(cleanText(rawChat), 40)}.`);
+    if (!rawChat && request.action === "status") return reply(true, formatStatus(undefined));
+    let chatId: string;
+    if (rawChat) {
+      chatId = normalizeChat(rawChat);
+      if (!parseChatKey(chatId)) return reply(false, `Invalid chat id: ${preview(cleanText(rawChat), 40)}.`);
+    } else if (request.action === "detach") {
+      // No chat given: detach whichever chat (any channel) holds the target session.
+      const found = resolveTarget(request.target);
+      if ("error" in found) return reply(false, found.error);
+      if (found.session.attachedChatId === undefined) return reply(false, "Not attached to a session.");
+      chatId = found.session.attachedChatId;
+    } else {
+      return reply(false, "chatId is required.");
+    }
 
     switch (request.action) {
       case "status":

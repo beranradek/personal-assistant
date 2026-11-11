@@ -10,10 +10,13 @@
 import type http from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createLogger } from "../core/logger.js";
+import { resolveControlChat, type RemoteDefaultChats } from "./default-chat.js";
 import {
+  REMOTE_CHANNEL_IDS,
   REMOTE_MAX_CWD_CHARS,
   REMOTE_MAX_NAME_CHARS,
   type RemoteBridge,
+  type RemoteChannelId,
   type RemoteControlAction,
   type RemoteControlRequest,
 } from "./protocol.js";
@@ -23,12 +26,13 @@ const log = createLogger("remote-routes");
 /** Max size of a JSON request body. */
 export const REMOTE_MAX_BODY_BYTES = 256 * 1024;
 
-/** Shared state between the daemon and the routes. The daemon sets `bridge` after the Telegram adapter exists. */
-export interface RemoteRouteHolder {
+/**
+ * Shared state between the daemon and the routes. The daemon sets `bridge` after the adapters exist.
+ * `defaultChatIds` / `defaultChannel` give the chat `control` uses when the request has none (see `default-chat.ts`).
+ */
+export interface RemoteRouteHolder extends RemoteDefaultChats {
   bridge?: RemoteBridge;
   token: string;
-  /** Chat id used by `control` when the request has none (first allowed Telegram user id). */
-  defaultChatId?: string;
 }
 
 export function isRemotePath(url: string | undefined): boolean {
@@ -143,18 +147,25 @@ async function handleControl(
     sendError(res, 400, "Invalid control request");
     return;
   }
-  const chatId = typeof body["chatId"] === "string" && body["chatId"] !== "" ? body["chatId"] : holder.defaultChatId;
-  if (!chatId) {
-    sendError(res, 400, "No chatId given and no default Telegram user configured");
-    return;
-  }
   const rawTarget = body["target"];
   const target = typeof rawTarget === "string" || typeof rawTarget === "number" ? String(rawTarget) : undefined;
-  const request: RemoteControlRequest = {
-    action: body["action"] as RemoteControlAction,
-    chatId,
-    ...(target ? { target } : {}),
-  };
+  const chatId = typeof body["chatId"] === "string" && body["chatId"] !== "" ? body["chatId"] : undefined;
+  const channel = REMOTE_CHANNEL_IDS.find((id) => id === body["channel"]) as RemoteChannelId | undefined;
+  const resolved = resolveControlChat(
+    {
+      action: body["action"] as RemoteControlAction,
+      ...(chatId ? { chatId } : {}),
+      ...(channel ? { channel } : {}),
+      ...(body["force"] === true ? { force: true } : {}),
+      ...(target ? { target } : {}),
+    },
+    holder,
+  );
+  if ("error" in resolved) {
+    sendError(res, 400, resolved.error);
+    return;
+  }
+  const request: RemoteControlRequest = resolved.request;
   sendJson(res, 200, await bridge.control(request));
 }
 

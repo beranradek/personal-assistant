@@ -20,6 +20,7 @@
  */
 
 import * as path from "node:path";
+import { stat } from "node:fs/promises";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./core/config.js";
@@ -37,7 +38,7 @@ import { createIntegServer } from "./tools/integ-server.js";
 import { createMessageQueue } from "./gateway/queue.js";
 import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
-import { createSlackAdapter } from "./adapters/slack.js";
+import { createSlackAdapter, type SlackCommandHandler } from "./adapters/slack.js";
 import { createGithubWebhookAdapter } from "./adapters/github-webhook.js";
 import { createHeartbeatScheduler } from "./heartbeat/scheduler.js";
 import { drainSystemEvents } from "./heartbeat/system-events.js";
@@ -64,9 +65,12 @@ import { generateRemoteToken, writeRemoteToken, type RemoteTokenHandle } from ".
 import type { RemoteRouteHolder } from "./remote/routes.js";
 import { createRemoteBridge } from "./remote/bridge.js";
 import { createTelegramChannel } from "./remote/channels/telegram-channel.js";
+import { createSlackChannel } from "./remote/channels/slack-channel.js";
 import { createTelegramRouter } from "./remote/telegram-router.js";
+import { createSlackRouter } from "./remote/slack-router.js";
+import { buildDefaultChatIds, resolveControlChat } from "./remote/default-chat.js";
 import { isPidAlive } from "./claude/process-tree.js";
-import type { RemoteBridge } from "./remote/protocol.js";
+import type { RemoteBridge, RemoteChannel } from "./remote/protocol.js";
 
 const log = createLogger("daemon");
 
@@ -240,17 +244,24 @@ async function createDaemonCoreFromConfig(args: {
   let httpMcpServer: HttpMcpServerHandle | undefined;
 
   // Remote session mode: the routes live on the same HTTP server, protected by a random token in a 0600 file.
-  // The holder is created now; the bridge is set later, when the Telegram adapter exists (routes answer 503 until then).
+  // The holder is created now; the bridge is set later, when the adapters exist (routes answer 503 until then).
   // The token file is written only after the HTTP server has bound its port (see below). Probes (skipRemote) never use remote mode.
   let remote: DaemonCoreRuntime["remote"];
   if (args.config.claudeCode?.remote?.enabled === true && !args.skipRemote) {
-    if (!args.config.adapters.telegram.enabled) {
+    const { telegram, slack } = args.config.adapters;
+    if (!telegram.enabled && !slack.enabled) {
       // No token file and no routes: the hooks exit at once.
-      log.warn("claudeCode.remote.enabled is true but adapters.telegram.enabled is false: remote sessions are disabled");
+      log.warn("claudeCode.remote.enabled is true but neither adapters.telegram nor adapters.slack is enabled: remote sessions are disabled");
     } else {
-      const firstUserId = args.config.adapters.telegram.allowedUserIds[0];
       remote = {
-        holder: { token: generateRemoteToken(), ...(firstUserId !== undefined ? { defaultChatId: String(firstUserId) } : {}) },
+        holder: {
+          token: generateRemoteToken(),
+          defaultChatIds: buildDefaultChatIds({
+            ...(telegram.enabled ? { telegram: telegram.allowedUserIds[0] } : {}),
+            ...(slack.enabled ? { slack: slack.allowedUserIds[0] } : {}),
+          }),
+          ...(args.config.claudeCode.remote.defaultChannel ? { defaultChannel: args.config.claudeCode.remote.defaultChannel } : {}),
+        },
       };
     }
   }
@@ -279,10 +290,10 @@ async function createDaemonCoreFromConfig(args: {
         ? {
             handleRemoteControl: async (request) => {
               const bridge = remote!.holder.bridge;
-              if (!bridge) throw new Error("Remote bridge is not ready (Telegram adapter not started)");
-              const chatId = request.chatId ?? remote!.holder.defaultChatId;
-              if (!chatId) throw new Error("No default Telegram user configured (adapters.telegram.allowedUserIds)");
-              return bridge.control({ ...request, chatId });
+              if (!bridge) throw new Error("Remote bridge is not ready (no remote channel adapter started yet)");
+              const resolved = resolveControlChat(request, remote!.holder);
+              if ("error" in resolved) throw new Error(resolved.error);
+              return bridge.control(resolved.request);
             },
           }
         : {}),
@@ -438,9 +449,23 @@ export async function runDegradedDaemonStartupProbe(args: {
  *
  * @param configDir - Path to the directory containing settings.json
  */
+/** Warn when `settings.json` (holds the Slack tokens) is readable by group or world. Checks the file mode only. */
+async function warnIfSettingsReadable(configDir: string): Promise<void> {
+  const file = path.join(configDir, "settings.json");
+  try {
+    const { mode } = await stat(file);
+    if ((mode & 0o077) !== 0) {
+      log.warn({ file, mode: (mode & 0o777).toString(8) }, "settings.json holds Slack tokens and is group/world readable: run chmod 600");
+    }
+  } catch {
+    // Missing file (defaults in use) or no access: nothing to warn about.
+  }
+}
+
 export async function startDaemon(configDir: string): Promise<void> {
   // 1. Load config & ensure workspace
   const config = loadConfig(configDir);
+  if (config.adapters.slack.enabled) await warnIfSettingsReadable(configDir);
   await ensureWorkspace(config);
   await migrateLegacySessionsToUnified(config);
 
@@ -536,74 +561,88 @@ export async function startDaemon(configDir: string): Promise<void> {
   // 7. Start adapters (only if enabled)
   const activeAdapters: Adapter[] = [];
 
-  if (config.adapters.telegram.enabled) {
-    // Normal path: queue the message and tell the user when the queue is full.
-    const enqueueTelegram = (msg: AdapterMessage): void => {
-      const result = queue.enqueue(msg);
-      if (!result.accepted) {
-        log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
-        telegram.sendResponse({
+  // Normal path: queue the message and tell the user when the queue is full. `adapterOf` is late bound (the adapter is
+  // created with this callback).
+  const enqueueVia = (adapterOf: () => Adapter | undefined) => (msg: AdapterMessage): void => {
+    const result = queue.enqueue(msg);
+    if (!result.accepted) {
+      log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
+      adapterOf()
+        ?.sendResponse({
           source: msg.source,
           sourceId: msg.sourceId,
           text: "I'm currently busy processing other messages. Please try again in a moment.",
           metadata: {
-            ...(msg.metadata && typeof msg.metadata === "object"
-              ? (msg.metadata as Record<string, unknown>)
-              : {}),
+            ...(msg.metadata && typeof msg.metadata === "object" ? (msg.metadata as Record<string, unknown>) : {}),
             responseKind: "system",
           },
-        }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
-      }
-    };
-    // With remote mode the router decides: attached chat -> live session, otherwise the normal path.
-    // It is set before telegram.start(), so no message arrives earlier.
-    let onTelegramMessage = enqueueTelegram;
-    const telegram = createTelegramAdapter(
-      config.adapters.telegram,
-      (msg) => onTelegramMessage(msg),
-      { workspaceDir: config.security.workspace },
-    );
-    if (remote) {
-      const sendSystem = (chatId: string, text: string) =>
-        telegram.sendResponse({ source: "telegram", sourceId: chatId, text, metadata: { responseKind: "system" } });
-      const telegramChannel = createTelegramChannel(telegram);
-      remoteBridge = createRemoteBridge({
-        config: { remote: config.claudeCode.remote, processingUpdateIntervalMs: config.gateway.processingUpdateIntervalMs },
-        channels: { get: (id) => (id === "telegram" ? telegramChannel : undefined) },
-        isPidAlive,
-        redact,
-      });
-      onTelegramMessage = createTelegramRouter({ bridge: remoteBridge, enqueue: enqueueTelegram, send: sendSystem });
-      remote.holder.bridge = remoteBridge;
-      log.info("Remote session bridge ready");
+        })
+        .catch((err) => log.error({ err }, "failed to send queue-full notice"));
     }
+  };
+
+  // With remote mode the routers decide: attached chat -> live session, otherwise the normal path. The callbacks are late
+  // bound and set before any adapter starts, so no message is handled before the router and the bridge exist.
+  let telegram: Adapter | undefined;
+  let slack: ReturnType<typeof createSlackAdapter> | undefined;
+  const enqueueTelegram = enqueueVia(() => telegram);
+  const enqueueSlack = enqueueVia(() => slack);
+  let onTelegramMessage = enqueueTelegram;
+  let onSlackMessage = enqueueSlack;
+  let onSlackCommand: SlackCommandHandler = () => "Remote session mode is not ready yet.";
+
+  if (config.adapters.telegram.enabled) {
+    telegram = createTelegramAdapter(config.adapters.telegram, (msg) => onTelegramMessage(msg), {
+      workspaceDir: config.security.workspace,
+    });
+  }
+  if (config.adapters.slack.enabled) {
+    slack = createSlackAdapter(config.adapters.slack, (msg) => onSlackMessage(msg), {
+      // `/cc` exists only in remote mode; without it the adapter acknowledges the command with an empty answer.
+      ...(remote ? { onCommand: (command) => onSlackCommand(command) } : {}),
+    });
+  }
+
+  if (remote) {
+    // One bridge for all enabled channels. The registry reads the channels lazily.
+    const telegramChannel = telegram ? createTelegramChannel(telegram) : undefined;
+    const slackChannel = slack ? createSlackChannel(slack.remote, config.claudeCode.remote.slack) : undefined;
+    const channels: Record<string, RemoteChannel | undefined> = { telegram: telegramChannel, slack: slackChannel };
+    remoteBridge = createRemoteBridge({
+      config: { remote: config.claudeCode.remote, processingUpdateIntervalMs: config.gateway.processingUpdateIntervalMs },
+      channels: { get: (id) => channels[id] },
+      isPidAlive,
+      redact,
+    });
+    if (telegram) {
+      const tg = telegram;
+      onTelegramMessage = createTelegramRouter({
+        bridge: remoteBridge,
+        enqueue: enqueueTelegram,
+        send: (chatId, text) => tg.sendResponse({ source: "telegram", sourceId: chatId, text, metadata: { responseKind: "system" } }),
+      });
+    }
+    if (slackChannel) {
+      const slackRouter = createSlackRouter({
+        bridge: remoteBridge,
+        enqueue: enqueueSlack,
+        send: (userId, text) => slackChannel.sendText(userId, text),
+      });
+      onSlackMessage = slackRouter.onMessage;
+      onSlackCommand = slackRouter.onCommand;
+    }
+    remote.holder.bridge = remoteBridge;
+    log.info("Remote session bridge ready");
+  }
+
+  if (telegram) {
     router.register(telegram);
     await telegram.start();
     activeAdapters.push(telegram);
     log.info("Telegram adapter started");
   }
 
-  if (config.adapters.slack.enabled) {
-    const slack = createSlackAdapter(
-      config.adapters.slack,
-      (msg) => {
-        const result = queue.enqueue(msg);
-        if (!result.accepted) {
-          log.warn({ source: msg.source, reason: result.reason }, "message rejected by queue");
-          slack.sendResponse({
-            source: msg.source,
-            sourceId: msg.sourceId,
-            text: "I'm currently busy processing other messages. Please try again in a moment.",
-            metadata: {
-              ...(msg.metadata && typeof msg.metadata === "object"
-                ? (msg.metadata as Record<string, unknown>)
-                : {}),
-              responseKind: "system",
-            },
-          }).catch((err) => log.error({ err }, "failed to send queue-full notice"));
-        }
-      },
-    );
+  if (slack) {
     router.register(slack);
     await slack.start();
     activeAdapters.push(slack);
