@@ -161,13 +161,13 @@ export function createSlackAdapter(
       channel_type?: string;
     };
 
-    // Ignore bot messages (including our own) and non-standard events (edits, deletes, file shares, ...)
+    // Filter order: 1) drop bot messages (incl. our own) and subtype events (edits, deletes, file shares, ...),
+    // 2) then allowlist check, which also rejects events without a user
     if (msg.bot_id || msg.subtype) {
       log.debug({ bot_id: msg.bot_id, subtype: msg.subtype }, "ignoring bot or subtype message");
       return;
     }
 
-    // Filter by allowed user IDs; events without a user are dropped too
     if (!isAllowed(msg.user)) {
       log.warn({ userId: msg.user }, "unauthorized or missing user, ignoring message");
       return;
@@ -242,6 +242,21 @@ export function createSlackAdapter(
   const dmCache = new Map<string, string>();
   const dmInFlight = new Map<string, Promise<string>>();
 
+  const requireNonEmpty = (name: string, value: string): void => {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`Slack remote API: ${name} must be a non-empty string`);
+    }
+  };
+
+  /** Resolve channel/thread, preferring metadata over values decoded from sourceId. */
+  const resolveTarget = (sourceId: string, metadata?: Record<string, unknown>) => {
+    const parsed = decodeSourceId(sourceId);
+    return {
+      channelId: (metadata?.channelId as string) ?? parsed.channelId,
+      threadTs: (metadata?.threadId as string) ?? parsed.threadTs,
+    };
+  };
+
   const remote: SlackRemoteApi = {
     async openDm(userId) {
       const cached = dmCache.get(userId);
@@ -262,6 +277,7 @@ export function createSlackAdapter(
       return pending;
     },
     async postMessage(channel, text, opts) {
+      requireNonEmpty("channel", channel);
       const res = await app.client.chat.postMessage({
         channel,
         text,
@@ -270,12 +286,20 @@ export function createSlackAdapter(
       return res.ts as string;
     },
     async updateMessage(channel, ts, text) {
+      requireNonEmpty("channel", channel);
+      requireNonEmpty("ts", ts);
       await app.client.chat.update({ channel, ts, text });
     },
     async addReaction(channel, ts, name) {
+      requireNonEmpty("channel", channel);
+      requireNonEmpty("ts", ts);
+      requireNonEmpty("name", name);
       await app.client.reactions.add({ channel, timestamp: ts, name });
     },
     async removeReaction(channel, ts, name) {
+      requireNonEmpty("channel", channel);
+      requireNonEmpty("ts", ts);
+      requireNonEmpty("name", name);
       await app.client.reactions.remove({ channel, timestamp: ts, name });
     },
   };
@@ -299,10 +323,7 @@ export function createSlackAdapter(
     },
 
     async sendResponse(message: AdapterMessage): Promise<void> {
-      // Extract channel and thread from sourceId or metadata
-      const { channelId: parsedChannel, threadTs: parsedThread } = decodeSourceId(message.sourceId);
-      const channelId = (message.metadata?.channelId as string) ?? parsedChannel;
-      const threadTs = (message.metadata?.threadId as string) ?? parsedThread;
+      const { channelId, threadTs } = resolveTarget(message.sourceId, message.metadata);
 
       try {
         await app.client.chat.postMessage({
@@ -321,9 +342,7 @@ export function createSlackAdapter(
       text: string,
       metadata?: Record<string, unknown>,
     ): Promise<string> {
-      const { channelId: parsedChannel, threadTs: parsedThread } = decodeSourceId(sourceId);
-      const channelId = (metadata?.channelId as string) ?? parsedChannel;
-      const threadTs = (metadata?.threadId as string) ?? parsedThread;
+      const { channelId, threadTs } = resolveTarget(sourceId, metadata);
 
       try {
         const result = await app.client.chat.postMessage({
@@ -344,8 +363,7 @@ export function createSlackAdapter(
       text: string,
       metadata?: Record<string, unknown>,
     ): Promise<void> {
-      const { channelId: parsedChannel } = decodeSourceId(sourceId);
-      const channelId = (metadata?.channelId as string) ?? parsedChannel;
+      const { channelId } = resolveTarget(sourceId, metadata);
 
       try {
         await app.client.chat.update({

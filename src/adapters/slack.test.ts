@@ -717,5 +717,14 @@ describe("Slack Adapter", () => {
       await remote.removeReaction("D1", "1.1", "eyes");
       expect(mocks.reactionsRemove).toHaveBeenCalledWith({ channel: "D1", timestamp: "1.1", name: "eyes" });
     });
+
+    it("rejects empty channel/ts/name without calling Slack", async () => {
+      const { remote } = createSlackAdapter(makeConfig(), vi.fn());
+      await expect(remote.postMessage("", "x")).rejects.toThrow(/channel/);
+      await expect(remote.updateMessage("D1", "", "y")).rejects.toThrow(/ts/);
+      await expect(remote.addReaction("D1", "1.1", "")).rejects.toThrow(/name/);
+      await expect(remote.removeReaction("", "1.1", "eyes")).rejects.toThrow(/channel/);
+      expect(mocks.reactionsRemove).not.toHaveBeenCalled();
+    });
   });
 });
