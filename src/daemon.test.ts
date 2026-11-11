@@ -826,6 +826,36 @@ describe("daemon", () => {
       expect(mockQueue.enqueue).toHaveBeenCalledWith(msg);
     });
 
+    it.each(["telegram", "slack"] as const)(
+      "%s: a failing queue-full notice is logged and never throws into the adapter callback",
+      async (channel) => {
+        const config = remoteConfig(channel === "telegram", channel === "slack");
+        const { mockQueue } = setupMocks(config);
+        mockQueue.enqueue.mockReturnValue({ accepted: false, reason: "full" } as any);
+        const adapter = channel === "slack" ? mockSlack() : makeMockAdapter("telegram");
+        adapter.sendResponse.mockRejectedValue(new Error("send failed"));
+        if (channel === "telegram") vi.mocked(createTelegramAdapter).mockReturnValue(adapter as any);
+        vi.mocked(createRemoteBridge).mockReturnValue({ stop: vi.fn() } as any);
+        vi.mocked(createTelegramRouter).mockReturnValue(vi.fn());
+        vi.mocked(createSlackRouter).mockReturnValue({ onMessage: vi.fn(), onCommand: vi.fn() });
+
+        await startDaemon(configDir);
+
+        const routerDeps =
+          channel === "slack"
+            ? vi.mocked(createSlackRouter).mock.calls[0]![0]
+            : vi.mocked(createTelegramRouter).mock.calls[0]![0];
+        expect(() => routerDeps.enqueue({ source: channel, sourceId: "1", text: "hi" } as any)).not.toThrow();
+        await new Promise((resolve) => setImmediate(resolve));
+
+        expect(adapter.sendResponse).toHaveBeenCalledTimes(1);
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          expect.objectContaining({ err: expect.any(Error) }),
+          "failed to send queue-full notice",
+        );
+      },
+    );
+
     it("stops the bridge and removes the token file on shutdown", async () => {
       const config = remoteConfig(true);
       setupMocks(config);
