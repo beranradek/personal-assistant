@@ -18,6 +18,17 @@ describe("content-redaction", () => {
   describe("CONSERVATIVE_PATTERNS", () => {
     const redact = (text: string) => redactString(text, CONSERVATIVE_PATTERNS);
 
+    describe("Slack tokens", () => {
+      it("redacts fake xoxb- and xapp- tokens", () => {
+        expect(redact("bot xoxb-1234567890-abcdefghij end")).toBe(`bot ${R} end`);
+        expect(redact("app xapp-1-A0123-456-abcdef end")).toBe(`app ${R} end`);
+      });
+
+      it("redacts other xox variants", () => {
+        expect(redact("xoxp-1234567890-abc")).toBe(R);
+      });
+    });
+
     describe("API keys (sk-/pk-)", () => {
       it("redacts sk- prefixed keys", () => {
         expect(redact("key is sk-abc123DEF456_ghi789-jklmno")).toBe(

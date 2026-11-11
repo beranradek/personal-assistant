@@ -15,6 +15,10 @@ const mockLog = vi.hoisted(() => ({
 const mocks = vi.hoisted(() => {
   const appMessage = vi.fn();
   const appEvent = vi.fn();
+  const appCommand = vi.fn();
+  const reactionsAdd = vi.fn().mockResolvedValue({ ok: true });
+  const reactionsRemove = vi.fn().mockResolvedValue({ ok: true });
+  const conversationsOpen = vi.fn().mockResolvedValue({ ok: true, channel: { id: "D_DM_1" } });
   const appStart = vi.fn().mockResolvedValue(undefined);
   const appStop = vi.fn().mockResolvedValue(undefined);
   const chatPostMessage = vi.fn().mockResolvedValue({ ok: true, ts: "1234567890.123456" });
@@ -23,14 +27,17 @@ const mocks = vi.hoisted(() => {
   const AppCtor = vi.fn(function (this: Record<string, unknown>) {
     this.message = appMessage;
     this.event = appEvent;
+    this.command = appCommand;
     this.start = appStart;
     this.stop = appStop;
     this.client = {
       chat: { postMessage: chatPostMessage, update: chatUpdate },
       auth: { test: authTest },
+      reactions: { add: reactionsAdd, remove: reactionsRemove },
+      conversations: { open: conversationsOpen },
     };
   });
-  return { appMessage, appEvent, appStart, appStop, chatPostMessage, chatUpdate, authTest, AppCtor };
+  return { appMessage, appEvent, appCommand, reactionsAdd, reactionsRemove, conversationsOpen, appStart, appStop, chatPostMessage, chatUpdate, authTest, AppCtor };
 });
 
 vi.mock("../core/logger.js", () => ({
@@ -67,6 +74,8 @@ function makeSlackMessageEvent(overrides: {
   ts?: string;
   thread_ts?: string;
   bot_id?: string;
+  subtype?: string;
+  channel_type?: string;
 } = {}) {
   const {
     user = "U_USER_1",
@@ -75,6 +84,8 @@ function makeSlackMessageEvent(overrides: {
     ts = "1234567890.000001",
     thread_ts,
     bot_id,
+    subtype,
+    channel_type,
   } = overrides;
   return {
     user,
@@ -83,6 +94,8 @@ function makeSlackMessageEvent(overrides: {
     ts,
     thread_ts,
     bot_id,
+    subtype,
+    channel_type,
   };
 }
 
@@ -516,6 +529,193 @@ describe("Slack Adapter", () => {
         ),
       ).rejects.toThrow("update failed");
       expect(mockLog.error).toHaveBeenCalled();
+    });
+  });
+  // -------------------------------------------------------------------------
+  // Hardening (plan task 4)
+  // -------------------------------------------------------------------------
+  describe("hardening", () => {
+    async function send(event: Record<string, unknown>, onMessage = vi.fn()) {
+      createSlackAdapter(makeConfig(), onMessage);
+      const handler = mocks.appMessage.mock.calls[0][0];
+      await handler({ message: event, say: makeSayFn() });
+      return onMessage;
+    }
+
+    it("drops a message without user", async () => {
+      const event = { ...makeSlackMessageEvent(), user: undefined };
+      expect(await send(event)).not.toHaveBeenCalled();
+    });
+
+    it("drops a message with a subtype", async () => {
+      expect(await send(makeSlackMessageEvent({ subtype: "message_changed" }))).not.toHaveBeenCalled();
+    });
+
+    it("drops a non-allowlisted user", async () => {
+      expect(await send(makeSlackMessageEvent({ user: "U_OTHER" }))).not.toHaveBeenCalled();
+    });
+
+    it("passes channelType in metadata", async () => {
+      const onMessage = await send(makeSlackMessageEvent({ channel_type: "im" }));
+      expect(onMessage.mock.calls[0][0].metadata).toEqual(expect.objectContaining({ channelType: "im" }));
+    });
+
+    it("drops duplicate channel:ts events", async () => {
+      const onMessage = vi.fn();
+      createSlackAdapter(makeConfig(), onMessage);
+      const handler = mocks.appMessage.mock.calls[0][0];
+      const event = makeSlackMessageEvent();
+      await handler({ message: event, say: makeSayFn() });
+      await handler({ message: event, say: makeSayFn() });
+      expect(onMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("dedupe entries expire and the set is size capped", async () => {
+      vi.useFakeTimers();
+      try {
+        const onMessage = vi.fn();
+        createSlackAdapter(makeConfig(), onMessage);
+        const handler = mocks.appMessage.mock.calls[0][0];
+        const event = makeSlackMessageEvent({ ts: "1.1" });
+        await handler({ message: event, say: makeSayFn() });
+        vi.advanceTimersByTime(11 * 60 * 1000);
+        await handler({ message: event, say: makeSayFn() });
+        expect(onMessage).toHaveBeenCalledTimes(2);
+
+        // size cap: 1001 distinct events evict the oldest ("1.1" is re-accepted)
+        for (let i = 0; i < 1001; i++) {
+          await handler({ message: makeSlackMessageEvent({ ts: `2.${i}` }), say: makeSayFn() });
+        }
+        onMessage.mockClear();
+        await handler({ message: event, say: makeSayFn() });
+        expect(onMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("creates Bolt App with rate limit, retry and timeout options", () => {
+      createSlackAdapter(makeConfig(), vi.fn());
+      expect(mocks.AppCtor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientOptions: {
+            rejectRateLimitedCalls: true,
+            retryConfig: { retries: 2 },
+            timeout: 15000,
+          },
+        }),
+      );
+    });
+
+    it("sendResponse omits thread_ts when thread id is empty", async () => {
+      const adapter = createSlackAdapter(makeConfig(), vi.fn());
+      await adapter.sendResponse({
+        source: "slack",
+        sourceId: "D1--",
+        text: "hi",
+        metadata: { channelId: "D1", threadId: "" },
+      } as AdapterMessage);
+      const arg = mocks.chatPostMessage.mock.calls[0][0];
+      expect(arg).toEqual({ channel: "D1", text: "hi" });
+      expect("thread_ts" in arg).toBe(false);
+    });
+
+    it("never logs bot or app tokens", async () => {
+      const onMessage = vi.fn(() => {
+        throw new Error("boom");
+      });
+      await send(makeSlackMessageEvent(), onMessage);
+      await send(makeSlackMessageEvent({ user: "U_OTHER" }));
+      const logged = JSON.stringify(Object.values(mockLog).flatMap((f) => f.mock.calls));
+      expect(logged).not.toContain("xoxb-test");
+      expect(logged).not.toContain("xapp-test");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // /cc command
+  // -------------------------------------------------------------------------
+  describe("/cc command", () => {
+    function setup(onCommand?: (c: unknown) => unknown) {
+      createSlackAdapter(makeConfig(), vi.fn(), { onCommand: onCommand as never });
+      const call = mocks.appCommand.mock.calls[0];
+      return { name: call[0] as string, handler: call[1] as (a: unknown) => Promise<void> };
+    }
+    const cmd = (user_id = "U_USER_1") => ({ user_id, text: "status", channel_id: "D1" });
+
+    it("registers /cc", () => {
+      expect(setup().name).toBe("/cc");
+    });
+
+    it("acks empty and skips the handler for non-allowlisted users", async () => {
+      const onCommand = vi.fn();
+      const { handler } = setup(onCommand);
+      const ack = vi.fn();
+      await handler({ command: cmd("U_OTHER"), ack });
+      expect(onCommand).not.toHaveBeenCalled();
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(ack).toHaveBeenCalledWith();
+    });
+
+    it("calls the handler and passes ephemeral text through, ack once", async () => {
+      const onCommand = vi.fn().mockResolvedValue("Attached.");
+      const { handler } = setup(onCommand);
+      const ack = vi.fn();
+      await handler({ command: cmd(), ack });
+      expect(onCommand).toHaveBeenCalledWith({ userId: "U_USER_1", text: "status", channelId: "D1" });
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(ack).toHaveBeenCalledWith({ response_type: "ephemeral", text: "Attached." });
+    });
+
+    it("acks empty when the handler returns nothing", async () => {
+      const { handler } = setup(vi.fn().mockResolvedValue(undefined));
+      const ack = vi.fn();
+      await handler({ command: cmd(), ack });
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(ack).toHaveBeenCalledWith();
+    });
+
+    it("acks a short ephemeral error when the handler throws", async () => {
+      const { handler } = setup(vi.fn().mockRejectedValue(new Error("secret internals")));
+      const ack = vi.fn();
+      await handler({ command: cmd(), ack });
+      expect(ack).toHaveBeenCalledTimes(1);
+      const arg = ack.mock.calls[0][0];
+      expect(arg.response_type).toBe("ephemeral");
+      expect(arg.text).not.toContain("secret internals");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // SlackRemoteApi
+  // -------------------------------------------------------------------------
+  describe("remote api", () => {
+    it("openDm caches successes and does not cache failures", async () => {
+      const { remote } = createSlackAdapter(makeConfig(), vi.fn());
+      mocks.conversationsOpen.mockRejectedValueOnce(new Error("fail"));
+      await expect(remote.openDm("U1")).rejects.toThrow("fail");
+      expect(await remote.openDm("U1")).toBe("D_DM_1");
+      expect(await remote.openDm("U1")).toBe("D_DM_1");
+      expect(mocks.conversationsOpen).toHaveBeenCalledTimes(2);
+      expect(mocks.conversationsOpen).toHaveBeenCalledWith({ users: "U1" });
+    });
+
+    it("openDm rejects when no channel id is returned", async () => {
+      const { remote } = createSlackAdapter(makeConfig(), vi.fn());
+      mocks.conversationsOpen.mockResolvedValueOnce({ ok: true });
+      await expect(remote.openDm("U1")).rejects.toThrow(/no channel id/);
+    });
+
+    it("postMessage, updateMessage and reactions call the Web API", async () => {
+      const { remote } = createSlackAdapter(makeConfig(), vi.fn());
+      expect(await remote.postMessage("D1", "x", { mrkdwn: false })).toBe("1234567890.123456");
+      expect(mocks.chatPostMessage).toHaveBeenCalledWith({ channel: "D1", text: "x", mrkdwn: false });
+      await remote.updateMessage("D1", "1.1", "y");
+      expect(mocks.chatUpdate).toHaveBeenCalledWith({ channel: "D1", ts: "1.1", text: "y" });
+      await remote.addReaction("D1", "1.1", "eyes");
+      expect(mocks.reactionsAdd).toHaveBeenCalledWith({ channel: "D1", timestamp: "1.1", name: "eyes" });
+      await remote.removeReaction("D1", "1.1", "eyes");
+      expect(mocks.reactionsRemove).toHaveBeenCalledWith({ channel: "D1", timestamp: "1.1", name: "eyes" });
     });
   });
 });

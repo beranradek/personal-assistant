@@ -25,6 +25,9 @@ const CONSERVATIVE_SOURCES: Array<[string, string]> = [
   [`AKIA[0-9A-Z]{16}`, "g"],
   // Google API keys
   [`AIza[0-9A-Za-z_-]{35}`, "g"],
+  // Slack bot/user/app tokens (xoxb-, xoxp-, ... and xapp-)
+  [`xox[baprs]-[A-Za-z0-9-]{10,}`, "g"],
+  [`xapp-[A-Za-z0-9-]{10,}`, "g"],
   // Bearer tokens
   [`Bearer\\s+\\S+`, "g"],
   // Google access tokens
