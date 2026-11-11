@@ -196,6 +196,7 @@ export function createSlackAdapter(
       text,
       {
         threadId: threadTs,
+        messageTs: msg.ts,
         channelId,
         userId: msg.user,
         channelType: msg.channel_type,
