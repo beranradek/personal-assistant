@@ -1,19 +1,52 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { createRemoteBridge, REMOTE_LIVENESS_INTERVAL_MS, type RemoteBridgeDeps, type RemoteTelegramSender } from "./bridge.js";
-import { REMOTE_FRAME_HEADER_PREFIX, REMOTE_POLL_TIMEOUT_MS, type RemoteBridge, type RemotePollResult } from "./protocol.js";
+import { createRemoteBridge, REMOTE_LIVENESS_INTERVAL_MS, type RemoteBridgeDeps } from "./bridge.js";
+import {
+  REMOTE_FRAME_HEADER_PREFIX,
+  REMOTE_POLL_TIMEOUT_MS,
+  RemotePartialSendError,
+  type RemoteBridge,
+  type RemoteChannel,
+  type RemoteChannelId,
+  type RemotePollResult,
+} from "./protocol.js";
 import { ClaudeCodeRemoteConfigSchema } from "../core/types.js";
 
 const CHAT = "111";
 const noopLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
+/** Telegram functions the fake Telegram channel forwards to (same texts and retry rules as the real channel). */
+interface FakeSender {
+  sendMessage: ReturnType<typeof vi.fn>;
+  createProcessingMessage: ReturnType<typeof vi.fn>;
+  updateProcessingMessage: ReturnType<typeof vi.fn>;
+}
+
 interface Harness {
   bridge: RemoteBridge;
-  sender: RemoteTelegramSender & {
-    sendMessage: ReturnType<typeof vi.fn>;
-    createProcessingMessage: ReturnType<typeof vi.fn>;
-    updateProcessingMessage: ReturnType<typeof vi.fn>;
-  };
+  sender: FakeSender;
   alive: Set<number>;
+}
+
+function telegramChannel(sender: FakeSender): RemoteChannel {
+  return {
+    id: "telegram",
+    label: "Telegram",
+    detachCommand: "/detach",
+    deliveryFailedText: "Answer could not be delivered (Telegram error).",
+    sendText: (chat, text) => sender.sendMessage(chat, text),
+    progress: {
+      create: (chat, text) => sender.createProcessingMessage(chat, text),
+      update: (chat, mid, text) => sender.updateProcessingMessage(chat, mid, text, undefined),
+    },
+    retryAfterMs: (err) => {
+      const sec = (err as { parameters?: { retry_after?: unknown } } | null)?.parameters?.retry_after;
+      return typeof sec === "number" && sec > 0 ? Math.min(sec * 1000, 30_000) : undefined;
+    },
+  };
+}
+
+function registry(...list: RemoteChannel[]): RemoteBridgeDeps["channels"] {
+  return { get: (id: RemoteChannelId) => list.find((c) => c.id === id) };
 }
 
 function setup(remote: Record<string, unknown> = {}, extra: Partial<RemoteBridgeDeps> = {}): Harness {
@@ -25,7 +58,7 @@ function setup(remote: Record<string, unknown> = {}, extra: Partial<RemoteBridge
   const alive = new Set<number>([100, 200]);
   const bridge = createRemoteBridge({
     config: { remote: ClaudeCodeRemoteConfigSchema.parse({ enabled: true, ...remote }), processingUpdateIntervalMs: 5000 },
-    sender,
+    channels: registry(telegramChannel(sender)),
     isPidAlive: (pid) => alive.has(pid),
     logger: noopLogger,
     ...extra,
@@ -98,7 +131,8 @@ describe("RemoteBridge", () => {
       startPoll(bridge);
       const res = await attach(bridge);
       expect(res.ok).toBe(true);
-      expect(res.sessions[0].attachedChatId).toBe(CHAT);
+      expect(res.sessions[0].attachedChatId).toBe("telegram:111");
+      expect(res.sessions[0].attachedChannel).toBe("telegram");
       expect(bridge.isAttached(CHAT)).toBe(true);
       expect(sender.sendMessage).toHaveBeenCalledWith(CHAT, expect.stringContaining("Attached to ws"));
       bridge.stop();
@@ -146,7 +180,7 @@ describe("RemoteBridge", () => {
       startPoll(bridge, 200, "b");
       await attach(bridge, "1");
       const res = await attach(bridge, "2");
-      expect(res.sessions.filter((s) => s.attachedChatId === CHAT).map((s) => s.pid)).toEqual([200]);
+      expect(res.sessions.filter((s) => s.attachedChatId === "telegram:111").map((s) => s.pid)).toEqual([200]);
       bridge.stop();
     });
 
@@ -181,6 +215,18 @@ describe("RemoteBridge", () => {
       expect(res.ok).toBe(true);
       expect(bridge.isAttached(CHAT)).toBe(false);
       expect(sender.sendMessage).toHaveBeenCalledWith(CHAT, expect.stringContaining("Detached"));
+      bridge.stop();
+    });
+
+    it("detach without chatId detaches whichever chat holds the session; status works without chatId", async () => {
+      const { bridge } = setup();
+      startPoll(bridge);
+      expect((await bridge.control({ action: "detach" })).ok).toBe(false);
+      await attach(bridge);
+      expect((await bridge.control({ action: "status" })).message).toContain("[attached");
+      const res = await bridge.control({ action: "detach" });
+      expect(res.ok).toBe(true);
+      expect(bridge.isAttached(CHAT)).toBe(false);
       bridge.stop();
     });
 
@@ -1141,6 +1187,331 @@ describe("RemoteBridge", () => {
       await h.bridge.handleHook("UserPromptSubmit", 100, { prompt: "b" });
       expect(h.sender.sendMessage).not.toHaveBeenCalled();
       h.bridge.stop();
+    });
+  });
+
+  describe("channels", () => {
+    const SLACK_CHAT = "slack:U1";
+
+    interface FakeChannel extends RemoteChannel {
+      sendText: ReturnType<typeof vi.fn>;
+      setTurnStatus: ReturnType<typeof vi.fn>;
+    }
+
+    function fakeChannel(id: RemoteChannelId, over: Partial<RemoteChannel> = {}): FakeChannel {
+      return {
+        id,
+        label: id === "slack" ? "Slack" : "Telegram",
+        detachCommand: id === "slack" ? "/cc detach" : "/detach",
+        deliveryFailedText: `Answer could not be delivered (${id} error).`,
+        sendText: vi.fn(async () => undefined),
+        setTurnStatus: vi.fn(async () => undefined),
+        retryAfterMs: () => undefined,
+        ...over,
+      } as FakeChannel;
+    }
+
+    function twoChannels(remote: Record<string, unknown> = {}, slackOver: Partial<RemoteChannel> = {}) {
+      const tg = fakeChannel("telegram");
+      const slack = fakeChannel("slack", slackOver);
+      const bridge = createRemoteBridge({
+        config: { remote: ClaudeCodeRemoteConfigSchema.parse({ enabled: true, ...remote }), processingUpdateIntervalMs: 5000 },
+        channels: registry(tg, slack),
+        isPidAlive: () => true,
+        logger: noopLogger,
+      });
+      return { bridge, tg, slack };
+    }
+
+    const slackAttach = (bridge: RemoteBridge, target?: string, force?: boolean) =>
+      bridge.control({ action: "attach", chatId: SLACK_CHAT, target, ...(force ? { force } : {}) });
+
+    /** Attach a Slack chat, forward one message with `ref`, confirm delivery. */
+    async function slackTurn(bridge: RemoteBridge, ref = "D1:1.1", text = "hi") {
+      startPoll(bridge);
+      await slackAttach(bridge);
+      const { msgId } = bridge.forward(SLACK_CHAT, text, ref) as { msgId: number };
+      await flush();
+      await bridge.handleHook("UserPromptSubmit", 100, { prompt: framePrompt(msgId) });
+      return msgId;
+    }
+
+    it("sends notices through the channel of the chat key with the id part", async () => {
+      const { bridge, tg, slack } = twoChannels();
+      startPoll(bridge);
+      await slackAttach(bridge);
+      expect(slack.sendText).toHaveBeenCalledWith("U1", expect.stringContaining("Attached to ws"));
+      expect(slack.sendText.mock.calls[0][1]).toContain("/cc detach to stop.");
+      expect(tg.sendText).not.toHaveBeenCalled();
+      expect(bridge.isAttached(SLACK_CHAT)).toBe(true);
+      expect((await slackAttach(bridge)).message).toMatch(/Already attached/);
+      bridge.stop();
+    });
+
+    it("normalizes a bare numeric chat id to telegram:<id>", async () => {
+      const { bridge, tg } = twoChannels();
+      startPoll(bridge);
+      const res = await bridge.control({ action: "attach", chatId: "-42" });
+      expect(res.sessions[0].attachedChatId).toBe("telegram:-42");
+      expect(bridge.isAttached("telegram:-42")).toBe(true);
+      expect(tg.sendText).toHaveBeenCalledWith("-42", expect.any(String));
+      expect((await bridge.control({ action: "attach", chatId: "telegram:-42" })).message).toMatch(/Already attached/);
+      bridge.stop();
+    });
+
+    it("rejects an invalid chat key", async () => {
+      const { bridge } = twoChannels();
+      startPoll(bridge);
+      expect((await bridge.control({ action: "attach", chatId: "nope" })).ok).toBe(false);
+      bridge.stop();
+    });
+
+    it("refuses an attach by chat B when chat A of another channel holds the session, naming channel and ways out", async () => {
+      const { bridge, slack } = twoChannels();
+      startPoll(bridge);
+      await bridge.control({ action: "attach", chatId: "111" });
+      const res = await slackAttach(bridge);
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain("Telegram");
+      expect(res.message).toContain("/detach");
+      expect(res.message).toContain("force");
+      expect(bridge.isAttached(SLACK_CHAT)).toBe(false);
+      expect(slack.sendText).not.toHaveBeenCalled();
+      bridge.stop();
+    });
+
+    it("force detaches the old chat, notifies it and attaches the new chat", async () => {
+      const { bridge, tg, slack } = twoChannels();
+      startPoll(bridge);
+      await bridge.control({ action: "attach", chatId: "111" });
+      tg.sendText.mockClear();
+      const res = await slackAttach(bridge, undefined, true);
+      expect(res.ok).toBe(true);
+      expect(bridge.isAttached("111")).toBe(false);
+      expect(bridge.isAttached(SLACK_CHAT)).toBe(true);
+      expect(tg.sendText).toHaveBeenCalledWith("111", expect.stringMatching(/Detached from ws.*taken over by Slack/));
+      expect(slack.sendText).toHaveBeenCalledWith("U1", expect.stringContaining("Attached to ws"));
+      bridge.stop();
+    });
+
+    it("force also works for two chats of the same channel", async () => {
+      const { bridge, tg } = twoChannels();
+      startPoll(bridge);
+      await bridge.control({ action: "attach", chatId: "111" });
+      expect((await bridge.control({ action: "attach", chatId: "222" })).message).toMatch(/attached to another chat/);
+      const res = await bridge.control({ action: "attach", chatId: "222", force: true });
+      expect(res.ok).toBe(true);
+      expect(bridge.isAttached("111")).toBe(false);
+      expect(bridge.isAttached("222")).toBe(true);
+      expect(tg.sendText).toHaveBeenCalledWith("111", expect.stringMatching(/taken over by Telegram/));
+      bridge.stop();
+    });
+
+    it("force drops the queue of the old chat and marks its messages dropped", async () => {
+      const { bridge, tg } = twoChannels();
+      startPoll(bridge);
+      await bridge.control({ action: "attach", chatId: "111" });
+      bridge.forward("telegram:111", "queued", "ref-q");
+      await slackAttach(bridge, undefined, true);
+      expect(tg.setTurnStatus).toHaveBeenCalledWith("111", "ref-q", "dropped");
+      bridge.stop();
+    });
+
+    it("status marks a session of another channel with its label", async () => {
+      const { bridge } = twoChannels();
+      startPoll(bridge);
+      await bridge.control({ action: "attach", chatId: "111" });
+      const res = await bridge.control({ action: "status", chatId: SLACK_CHAT });
+      expect(res.message).toContain("[attached to Telegram]");
+      expect(res.sessions[0].attachedChannel).toBe("telegram");
+      bridge.stop();
+    });
+
+    it("idle notice uses the channel label", async () => {
+      const { bridge, slack } = twoChannels({ idleDetachMinutes: 5 });
+      startPoll(bridge);
+      await slackAttach(bridge);
+      slack.sendText.mockClear();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      expect(slack.sendText).toHaveBeenCalledWith("U1", expect.stringMatching(/no Slack messages for 5 min/));
+      bridge.stop();
+    });
+
+    it("uses the retryAfterMs and deliveryFailedText of the channel in sendFinal", async () => {
+      const { bridge, slack } = twoChannels({}, { retryAfterMs: () => 7000 });
+      await slackTurn(bridge);
+      slack.sendText.mockClear();
+      slack.sendText.mockRejectedValueOnce(new Error("rate")).mockResolvedValue(undefined);
+      const done = bridge.handleHook("Stop", 100, { last_assistant_message: "answer" });
+      await vi.advanceTimersByTimeAsync(6900);
+      expect(slack.sendText).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(200);
+      await done;
+      expect(slack.sendText).toHaveBeenCalledTimes(2);
+      expect(slack.sendText).toHaveBeenLastCalledWith("U1", "answer");
+
+      slack.sendText.mockReset();
+      slack.sendText.mockRejectedValue(new Error("down"));
+      await slackTurn(bridge, "D1:2.2", "again");
+      const failing = bridge.handleHook("Stop", 100, { last_assistant_message: "x" });
+      await vi.advanceTimersByTimeAsync(7000 * 3 + 1000);
+      await failing;
+      expect(slack.sendText).toHaveBeenLastCalledWith("U1", "Answer could not be delivered (slack error).");
+      bridge.stop();
+    });
+
+    it("does not retry after a RemotePartialSendError: only the deliveryFailedText is sent", async () => {
+      const { bridge, slack } = twoChannels();
+      await slackTurn(bridge);
+      slack.sendText.mockReset();
+      slack.sendText.mockRejectedValueOnce(new RemotePartialSendError("chunk 2 failed")).mockResolvedValue(undefined);
+      await bridge.handleHook("Stop", 100, { last_assistant_message: "long answer" });
+      expect(slack.sendText.mock.calls.map((c) => c[1])).toEqual(["long answer", "Answer could not be delivered (slack error)."]);
+      bridge.stop();
+    });
+
+    it("uses the progress accumulator only when the channel has progress and the flag is on", async () => {
+      const create = vi.fn(async () => "pm");
+      const update = vi.fn(async () => undefined);
+      const on = twoChannels({ progress: true }, { progress: { create, update } });
+      await slackTurn(on.bridge);
+      await on.bridge.handleHook("PreToolUse", 100, { tool_name: "Read", tool_input: { file_path: "/a" } });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(create).toHaveBeenCalledWith("U1", expect.any(String));
+      on.bridge.stop();
+
+      create.mockClear();
+      const off = twoChannels({ progress: false }, { progress: { create, update } });
+      await slackTurn(off.bridge);
+      await off.bridge.handleHook("PreToolUse", 100, { tool_name: "Read", tool_input: {} });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(create).not.toHaveBeenCalled();
+      off.bridge.stop();
+
+      const none = twoChannels({ progress: true });
+      await slackTurn(none.bridge);
+      await none.bridge.handleHook("PreToolUse", 100, { tool_name: "Read", tool_input: {} });
+      await vi.advanceTimersByTimeAsync(5000);
+      await none.bridge.handleHook("Stop", 100, { last_assistant_message: "final" });
+      expect(none.slack.sendText).toHaveBeenLastCalledWith("U1", "final");
+      none.bridge.stop();
+    });
+
+    describe("setTurnStatus", () => {
+      it("accepted at forward, done at Stop after the final send started", async () => {
+        const { bridge, slack } = twoChannels();
+        const msgId = await slackTurn(bridge, "D1:9.9");
+        expect(slack.setTurnStatus).toHaveBeenCalledWith("U1", "D1:9.9", "accepted");
+        expect(msgId).toBeGreaterThan(0);
+        slack.sendText.mockClear();
+        await bridge.handleHook("Stop", 100, { last_assistant_message: "ok" });
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:9.9", "done");
+        const sendOrder = slack.sendText.mock.invocationCallOrder[0]!;
+        const doneOrder = slack.setTurnStatus.mock.invocationCallOrder.at(-1)!;
+        expect(doneOrder).toBeGreaterThan(sendOrder);
+        bridge.stop();
+      });
+
+      it("a message without ref gets no status calls", async () => {
+        const { bridge, slack } = twoChannels();
+        startPoll(bridge);
+        await slackAttach(bridge);
+        bridge.forward(SLACK_CHAT, "no ref");
+        expect(slack.setTurnStatus).not.toHaveBeenCalled();
+        bridge.stop();
+      });
+
+      it("failed at StopFailure", async () => {
+        const { bridge, slack } = twoChannels();
+        await slackTurn(bridge, "D1:3.3");
+        await bridge.handleHook("StopFailure", 100, {});
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:3.3", "failed");
+        expect(slack.setTurnStatus.mock.calls.filter((c) => c[2] === "dropped")).toHaveLength(0);
+        bridge.stop();
+      });
+
+      it("failed when the message is not delivered in time", async () => {
+        const { bridge, slack } = twoChannels({ deliveryTimeoutMs: 1000 });
+        startPoll(bridge);
+        await slackAttach(bridge);
+        bridge.forward(SLACK_CHAT, "x", "D1:4.4");
+        await vi.advanceTimersByTimeAsync(1100); // taken by the waiting poll, never confirmed
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:4.4", "failed");
+        bridge.stop();
+      });
+
+      it("dropped for queued messages on detach", async () => {
+        const { bridge, slack } = twoChannels();
+        startPoll(bridge);
+        await slackAttach(bridge);
+        bridge.forward(SLACK_CHAT, "q", "D1:5.5");
+        await bridge.control({ action: "detach", chatId: SLACK_CHAT });
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:5.5", "dropped");
+        bridge.stop();
+      });
+
+      it("dropped for queued messages on idle detach", async () => {
+        const { bridge, slack } = twoChannels({ idleDetachMinutes: 1, deliveryTimeoutMs: 600_000 });
+        startPoll(bridge);
+        await slackAttach(bridge);
+        // No poll waiter and no delivery: the message stays queued until the idle timer fires.
+        bridge.forward(SLACK_CHAT, "q", "D1:6.6");
+        await vi.advanceTimersByTimeAsync(60_000 + 1);
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:6.6", "dropped");
+        bridge.stop();
+      });
+
+      it("dropped on session end", async () => {
+        const { bridge, slack } = twoChannels();
+        await slackTurn(bridge, "D1:7.7");
+        await bridge.handleHook("SessionEnd", 100, { reason: "logout" });
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:7.7", "dropped");
+        bridge.stop();
+      });
+
+      it("dropped for a stale turn cleared by a terminal prompt", async () => {
+        const { bridge, slack } = twoChannels();
+        await slackTurn(bridge, "D1:8.8");
+        await bridge.handleHook("UserPromptSubmit", 100, { prompt: "typed in terminal" });
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:8.8", "dropped");
+        bridge.stop();
+      });
+
+      it("dropped for a running turn at bridge stop()", async () => {
+        const { bridge, slack } = twoChannels();
+        await slackTurn(bridge, "D1:9.1");
+        bridge.stop();
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:9.1", "dropped");
+      });
+
+      it("a hanging setTurnStatus never delays the final answer", async () => {
+        const { bridge, slack } = twoChannels({}, { setTurnStatus: () => new Promise<void>(() => undefined) });
+        await slackTurn(bridge);
+        await bridge.handleHook("Stop", 100, { last_assistant_message: "still here" });
+        expect(slack.sendText).toHaveBeenLastCalledWith("U1", "still here");
+        bridge.stop();
+      });
+
+      it("a failing or throwing setTurnStatus never breaks a turn", async () => {
+        const rejecting = twoChannels({}, { setTurnStatus: async () => Promise.reject(new Error("api down")) });
+        await slackTurn(rejecting.bridge);
+        await rejecting.bridge.handleHook("Stop", 100, { last_assistant_message: "fine" });
+        expect(rejecting.slack.sendText).toHaveBeenLastCalledWith("U1", "fine");
+        rejecting.bridge.stop();
+
+        const throwing = twoChannels(
+          {},
+          {
+            setTurnStatus: () => {
+              throw new Error("sync boom");
+            },
+          },
+        );
+        await slackTurn(throwing.bridge);
+        await throwing.bridge.handleHook("Stop", 100, { last_assistant_message: "fine too" });
+        expect(throwing.slack.sendText).toHaveBeenLastCalledWith("U1", "fine too");
+        throwing.bridge.stop();
+      });
     });
   });
 });

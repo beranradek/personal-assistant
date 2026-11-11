@@ -38,6 +38,9 @@ describe("createRemoteControlClient", () => {
     const make = (fetchImpl: typeof fetch) => createRemoteControlClient({ configDir: dir, port: 1, fetchImpl });
     await expect(make(vi.fn().mockResolvedValue(new Response("", { status: 401 })))({ action: "status" })).rejects.toThrow(/rejected/);
     await expect(make(vi.fn().mockResolvedValue(new Response("", { status: 503 })))({ action: "status" })).rejects.toThrow(/not ready/);
+    await expect(
+      make(vi.fn().mockResolvedValue(Response.json({ error: "Channel slack is not enabled." }, { status: 400 })))({ action: "attach" }),
+    ).rejects.toThrow(/Channel slack is not enabled/);
     await expect(make(vi.fn().mockResolvedValue(new Response("", { status: 500 })))({ action: "status" })).rejects.toThrow(/HTTP 500/);
     await expect(make(vi.fn().mockRejectedValue(new TypeError("fetch failed")))({ action: "status" })).rejects.toThrow(/not reachable/);
   });

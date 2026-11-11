@@ -2,18 +2,23 @@
  * RemoteBridge
  * ============
  *
- * Daemon side of the remote interactive session feature. It connects one Telegram chat to one live Claude Code session:
- * - Telegram text -> per-session queue -> long poll answer (the asyncRewake hook starts a turn in the session).
- * - Hook events from the session -> one Telegram "processing" message per turn + the final answer from `Stop`.
+ * Daemon side of the remote interactive session feature. It connects one chat to one live Claude Code session. The bridge is
+ * channel independent: chats are namespaced keys (`telegram:<id>`, see chat-key.ts) and each channel (Telegram, Slack) is a
+ * `RemoteChannel` from the injected registry:
+ * - Chat text -> per-session queue -> long poll answer (the asyncRewake hook starts a turn in the session).
+ * - Hook events from the session -> optional "processing" message per turn + the final answer from `Stop`.
+ * - Turn status (`setTurnStatus`, Slack reactions) is fire and forget: it never delays or breaks a turn.
  *
- * All state is in memory. Everything is injected (config, sender, timers, clock, pid check) so tests use fake time.
- * See docs/plans/active/2026-11-08-remote-interactive-session-communication/spec.md.
+ * All state is in memory. Everything is injected (config, channels, timers, clock, pid check) so tests use fake time.
+ * See docs/plans/active/2026-11-08-remote-interactive-session-communication/spec.md and
+ * docs/plans/active/2026-11-11-slack-remote-session-communication/spec.md (sections 5.4 and 5.5).
  */
 
 import * as path from "node:path";
 import { createLogger } from "../core/logger.js";
 import type { ClaudeCodeRemoteConfig } from "../core/types.js";
 import type { StreamEvent } from "../backends/interface.js";
+import { makeChatKey, parseChatKey } from "./chat-key.js";
 import { createProcessingAccumulator, type ProcessingMessageAccumulator } from "../gateway/processing-message.js";
 import {
   REMOTE_FRAME_HEADER_PREFIX,
@@ -23,11 +28,15 @@ import {
   REMOTE_POLL_TIMEOUT_MS,
   type ForwardResult,
   type RemoteBridge,
+  type RemoteChannel,
+  type RemoteChannelRegistry,
   type RemoteControlRequest,
   type RemoteControlResponse,
+  RemotePartialSendError,
   type RemotePollResult,
   type RemoteQueuedMessage,
   type RemoteSessionInfo,
+  type RemoteTurnStatus,
   stripRemoteEcho,
 } from "./protocol.js";
 
@@ -42,21 +51,12 @@ const MAX_NOTICE_CHARS = 300;
 const KNOWN_EVENTS: ReadonlySet<string> = new Set(REMOTE_HOOK_EVENTS);
 /** Delays (ms) before the 2nd and 3rd try to send the final answer. */
 const FINAL_SEND_RETRY_DELAYS_MS = [1000, 3000];
-/** Upper limit for a `retry_after` hint of Telegram (ms). */
-const MAX_RETRY_AFTER_MS = 30_000;
 /** How long (ms) a removed session pid is refused (a late poll must not bring a ghost session back). */
 const TOMBSTONE_MS = 60_000;
 /** How long (ms) a timed-out message can still be confirmed late by its UserPromptSubmit. */
 const LATE_CONFIRM_MS = 5 * 60_000;
 /** Control characters except tab and newline. */
 const CONTROL_CHARS = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
-
-/** Telegram functions the bridge needs (the Telegram adapter fits this shape). */
-export interface RemoteTelegramSender {
-  sendMessage(chatId: string, text: string): Promise<void>;
-  createProcessingMessage(sourceId: string, text: string, metadata?: Record<string, unknown>): Promise<string>;
-  updateProcessingMessage(sourceId: string, messageId: string, text: string, metadata?: Record<string, unknown>): Promise<void>;
-}
 
 /** Timer functions. Default: the global ones (so vitest fake timers work). */
 export interface RemoteBridgeTimers {
@@ -79,7 +79,8 @@ export interface RemoteBridgeDeps {
     /** `gateway.processingUpdateIntervalMs`. */
     processingUpdateIntervalMs: number;
   };
-  sender: RemoteTelegramSender;
+  /** Channels the bridge can talk to (Telegram, Slack). A chat whose channel is missing gets no notices. */
+  channels: RemoteChannelRegistry;
   isPidAlive: (pid: number) => boolean;
   now?: () => number;
   timers?: RemoteBridgeTimers;
@@ -90,6 +91,8 @@ export interface RemoteBridgeDeps {
 interface PendingDelivery {
   msg: RemoteQueuedMessage;
   chatId: string;
+  /** Channel refs of the chat messages (turn status targets). */
+  refs: string[];
   /** Undefined while the delivery timer is paused (session busy). */
   timer: unknown;
 }
@@ -97,12 +100,14 @@ interface PendingDelivery {
 interface LateEntry {
   msg: RemoteQueuedMessage;
   chatId: string;
+  refs: string[];
   expiresAt: number;
 }
 
 interface QueuedForward {
   msg: RemoteQueuedMessage;
   chatId: string;
+  refs: string[];
 }
 
 interface Waiter {
@@ -113,8 +118,11 @@ interface Waiter {
 }
 
 interface Turn {
+  /** Chat key. */
   chatId: string;
-  /** Texts of the Telegram messages that started this turn (used to hide the echo line). */
+  /** Channel refs of the chat messages that started this turn. */
+  refs: string[];
+  /** Texts of the chat messages that started this turn (used to hide the echo line). */
   echoes: string[];
   /** True while the final answer is being sent (a second Stop must not send it again). */
   finishing?: boolean;
@@ -129,6 +137,7 @@ interface Session {
   pid: number;
   name: string;
   cwd: string;
+  /** Chat key of the attached chat. */
   attachedChatId?: string;
   queue: QueuedForward[];
   sent: Map<number, PendingDelivery>;
@@ -137,7 +146,7 @@ interface Session {
   /** True from UserPromptSubmit until Stop, StopFailure or SessionEnd. */
   busy: boolean;
   waiter?: Waiter;
-  /** Set while a Telegram-origin turn runs. Terminal turns have no turn object. */
+  /** Set while a chat-origin turn runs. Terminal turns have no turn object. */
   turn?: Turn;
   idleTimer?: unknown;
   /** Runs while queued messages wait for a poll. */
@@ -168,7 +177,7 @@ function firstString(obj: Record<string, unknown>, keys: string[]): string | und
 }
 
 export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
-  const { config, sender, isPidAlive } = deps;
+  const { config, channels, isPidAlive } = deps;
   const remote = config.remote;
   const log = deps.logger ?? defaultLog;
   const now = deps.now ?? (() => Date.now());
@@ -180,7 +189,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
   };
 
   const sessions = new Map<number, Session>();
-  /** chatId -> pid of the attached session (one per chat). */
+  /** Chat key -> pid of the attached session (one per chat). */
   const attachments = new Map<string, number>();
   /** pid -> expiry time (ms) of removed sessions. */
   const tombstones = new Map<number, number>();
@@ -191,8 +200,51 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
 
   // ---- helpers ----------------------------------------------------------
 
-  function notify(chatId: string, text: string): void {
-    sender.sendMessage(chatId, text).catch((err) => log.error({ err, chatId }, "remote bridge: telegram send failed"));
+  /** Chat key (or a bare Telegram id) -> key. Invalid keys stay unchanged and match nothing. */
+  function normalizeChat(chat: string): string {
+    const parsed = parseChatKey(chat);
+    return parsed ? makeChatKey(parsed.channel, parsed.id) : chat;
+  }
+
+  /** Channel of a chat key plus the id part the channel functions need. */
+  function channelOf(chatKey: string): { channel: RemoteChannel; id: string } | undefined {
+    const parsed = parseChatKey(chatKey);
+    const channel = parsed ? channels.get(parsed.channel) : undefined;
+    return parsed && channel ? { channel, id: parsed.id } : undefined;
+  }
+
+  /** Call `fn` without awaiting it. Sync throws and rejections are logged, never propagated to the caller. */
+  function fireAndForget(fn: () => Promise<void> | void, onError: (err: unknown) => void): void {
+    try {
+      Promise.resolve(fn()).catch(onError);
+    } catch (err) {
+      onError(err);
+    }
+  }
+
+  function notify(chatKey: string, text: string): void {
+    const target = channelOf(chatKey);
+    if (!target) {
+      log.error({ chatId: chatKey }, "remote bridge: no channel for chat");
+      return;
+    }
+    fireAndForget(
+      () => target.channel.sendText(target.id, text),
+      (err) => log.error({ err, chatId: chatKey }, "remote bridge: channel send failed"),
+    );
+  }
+
+  /** A failing or hanging `setTurnStatus` never delays or breaks a turn (never awaited). */
+  function setStatus(chatKey: string, refs: readonly string[], status: RemoteTurnStatus): void {
+    const target = channelOf(chatKey);
+    const set = target?.channel.setTurnStatus;
+    if (!target || !set) return;
+    for (const ref of refs) {
+      fireAndForget(
+        () => set.call(target.channel, target.id, ref, status),
+        (err) => log.warn({ err, chatId: chatKey, status }, "remote bridge: turn status failed"),
+      );
+    }
   }
 
   function sessionLabel(s: Session): string {
@@ -206,6 +258,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       cwd: s.cwd,
       pid: s.pid,
       ...(s.attachedChatId !== undefined ? { attachedChatId: s.attachedChatId } : {}),
+      ...(s.attachedChatId !== undefined && parseChatKey(s.attachedChatId)
+        ? { attachedChannel: parseChatKey(s.attachedChatId)!.channel }
+        : {}),
     }));
   }
 
@@ -225,7 +280,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       if (chatId === undefined) return;
       log.info({ pid: s.pid, chatId }, "remote bridge: idle detach");
       detachSession(s);
-      notify(chatId, `Detached from ${sessionLabel(s)}: no Telegram messages for ${remote.idleDetachMinutes} min.`);
+      const label = channelOf(chatId)?.channel.label ?? "chat";
+      notify(chatId, `Detached from ${sessionLabel(s)}: no ${label} messages for ${remote.idleDetachMinutes} min.`);
     }, remote.idleDetachMinutes * 60_000);
   }
 
@@ -255,7 +311,11 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
   function dropPending(s: Session): void {
     clearQueueTimer(s);
     s.queueWarned = false;
-    for (const p of s.sent.values()) if (p.timer !== undefined) timers.clearTimeout(p.timer);
+    for (const q of s.queue) setStatus(q.chatId, q.refs, "dropped");
+    for (const p of s.sent.values()) {
+      if (p.timer !== undefined) timers.clearTimeout(p.timer);
+      setStatus(p.chatId, p.refs, "dropped");
+    }
     s.sent.clear();
     s.late.clear();
     s.queue = [];
@@ -271,9 +331,18 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     return dropped;
   }
 
-  function stopTurn(s: Session): void {
-    if (s.turn?.accumulator) void s.turn.accumulator.stop().catch(() => undefined);
+  /** Stop the progress accumulator and clear the turn. Returns the turn that was running. */
+  function endTurn(s: Session): Turn | undefined {
+    const turn = s.turn;
+    if (turn?.accumulator) void turn.accumulator.stop().catch(() => undefined);
     s.turn = undefined;
+    return turn;
+  }
+
+  /** End a turn that will get no answer (stale, session end, bridge stop): its messages are dropped. */
+  function stopTurn(s: Session): void {
+    const turn = endTurn(s);
+    if (turn && !turn.finishing) setStatus(turn.chatId, turn.refs, "dropped");
   }
 
   /** Remove the session completely (SessionEnd or dead pid). */
@@ -315,7 +384,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       if (s.sent.get(p.msg.msgId) !== p) return;
       if (s.busy) return; // wait until the session is idle (see rearmPending)
       s.sent.delete(p.msg.msgId);
-      s.late.set(p.msg.msgId, { msg: p.msg, chatId: p.chatId, expiresAt: now() + LATE_CONFIRM_MS });
+      s.late.set(p.msg.msgId, { msg: p.msg, chatId: p.chatId, refs: p.refs, expiresAt: now() + LATE_CONFIRM_MS });
+      setStatus(p.chatId, p.refs, "failed");
       log.warn({ pid: s.pid, msgId: p.msg.msgId }, "remote bridge: message not delivered");
       notify(p.chatId, `Not delivered to the session (no reaction in time): "${preview(p.msg.text)}"`);
     }, remote.deliveryTimeoutMs);
@@ -333,7 +403,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     clearQueueTimer(s);
     s.queueWarned = false;
     for (const item of taken) {
-      const p: PendingDelivery = { msg: item.msg, chatId: item.chatId, timer: undefined };
+      const p: PendingDelivery = { msg: item.msg, chatId: item.chatId, refs: item.refs, timer: undefined };
       s.sent.set(item.msg.msgId, p);
       armDeliveryTimer(s, p);
     }
@@ -355,16 +425,16 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
 
   /**
    * Only a UserPromptSubmit whose prompt contains the frame header of a sent message proves delivery. Other prompts
-   * are terminal prompts: they never start a Telegram turn and they end a stale turn.
+   * are terminal prompts: they never start a chat turn and they end a stale turn.
    */
   function onUserPromptSubmit(s: Session, payload: Record<string, unknown>): void {
     s.busy = true;
     const prompt = typeof payload["prompt"] === "string" ? payload["prompt"] : "";
     const t = now();
     for (const [id, e] of s.late) if (e.expiresAt <= t) s.late.delete(id);
-    const known: Array<{ msgId: number; chatId: string; text: string }> = [];
-    for (const p of s.sent.values()) known.push({ msgId: p.msg.msgId, chatId: p.chatId, text: p.msg.text });
-    for (const e of s.late.values()) known.push({ msgId: e.msg.msgId, chatId: e.chatId, text: e.msg.text });
+    const known: Array<{ msgId: number; chatId: string; text: string; refs: string[] }> = [];
+    for (const p of s.sent.values()) known.push({ msgId: p.msg.msgId, chatId: p.chatId, text: p.msg.text, refs: p.refs });
+    for (const e of s.late.values()) known.push({ msgId: e.msg.msgId, chatId: e.chatId, text: e.msg.text, refs: e.refs });
     const hits = known.filter((c) => prompt.includes(`${REMOTE_FRAME_HEADER_PREFIX}${c.msgId}]`));
     if (hits.length === 0 && s.turn) {
       notify(s.turn.chatId, "Turn ended: a prompt was typed in the terminal.");
@@ -377,16 +447,22 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       s.sent.delete(h.msgId);
       s.late.delete(h.msgId);
     }
-    s.turn = { chatId: hits[0].chatId, echoes: hits.map((h) => h.text) };
-    log.debug({ pid: s.pid, chatId: hits[0].chatId }, "remote bridge: delivery confirmed, turn origin telegram");
+    s.turn = { chatId: hits[0].chatId, refs: hits.flatMap((h) => h.refs), echoes: hits.map((h) => h.text) };
+    log.debug({ pid: s.pid, chatId: hits[0].chatId }, "remote bridge: delivery confirmed, turn origin chat");
   }
 
   function getAccumulator(turn: Turn): ProcessingMessageAccumulator | undefined {
     if (!remote.progress) return undefined;
+    const target = channelOf(turn.chatId);
+    const progress = target?.channel.progress;
+    if (!target || !progress) return undefined; // e.g. a channel without a progress message
     if (!turn.accumulator) {
       turn.accumulator = createProcessingAccumulator(
-        sender,
-        turn.chatId,
+        {
+          createProcessingMessage: (sourceId, text) => progress.create(sourceId, text),
+          updateProcessingMessage: (sourceId, messageId, text) => progress.update(sourceId, messageId, text),
+        },
+        target.id,
         undefined,
         config.processingUpdateIntervalMs,
         deps.redact,
@@ -413,9 +489,10 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
 
   /** Claude Code fires StopFailure (not Stop) when a turn ends with an API error. */
   function onStopFailure(s: Session): void {
-    const turn = s.turn;
-    stopTurn(s);
-    if (turn) notify(turn.chatId, "Turn failed in the session (API error).");
+    const turn = endTurn(s);
+    if (!turn) return;
+    setStatus(turn.chatId, turn.refs, "failed");
+    notify(turn.chatId, "Turn failed in the session (API error).");
   }
 
   function sleep(ms: number): Promise<void> {
@@ -424,29 +501,31 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     });
   }
 
-  /** Telegram "retry after N seconds" hint (grammY GrammyError has `parameters.retry_after`). */
-  function retryAfterMs(err: unknown): number | undefined {
-    const params = (err as { parameters?: { retry_after?: unknown } } | null)?.parameters;
-    const sec = params?.retry_after;
-    return typeof sec === "number" && sec > 0 ? Math.min(sec * 1000, MAX_RETRY_AFTER_MS) : undefined;
-  }
-
-  /** Send the final answer. Up to 3 tries, then a best effort notice. */
-  async function sendFinal(s: Session, chatId: string, text: string): Promise<void> {
+  /**
+   * Send the final answer. Up to 3 tries, then a best effort notice. A `RemotePartialSendError` (some chunks already sent)
+   * is never retried: a retry would duplicate text.
+   */
+  async function sendFinal(s: Session, chatKey: string, text: string): Promise<void> {
+    const target = channelOf(chatKey);
+    if (!target) {
+      log.error({ pid: s.pid, chatId: chatKey }, "remote bridge: no channel for the final answer");
+      return;
+    }
+    const { channel, id } = target;
     const attempts = FINAL_SEND_RETRY_DELAYS_MS.length + 1;
     for (let i = 0; i < attempts; i++) {
       try {
-        await sender.sendMessage(chatId, text);
+        await channel.sendText(id, text);
         return;
       } catch (err) {
         log.error({ err, pid: s.pid, attempt: i + 1 }, "remote bridge: final answer send failed");
-        if (i === attempts - 1 || stopped) break;
-        await sleep(retryAfterMs(err) ?? FINAL_SEND_RETRY_DELAYS_MS[i]!);
+        if (err instanceof RemotePartialSendError || i === attempts - 1 || stopped) break;
+        await sleep(channel.retryAfterMs(err) ?? FINAL_SEND_RETRY_DELAYS_MS[i]!);
         if (stopped) break;
       }
     }
     try {
-      await sender.sendMessage(chatId, "Answer could not be delivered (Telegram error).");
+      await channel.sendText(id, channel.deliveryFailedText);
     } catch {
       // Best effort only.
     }
@@ -454,9 +533,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
 
   async function onStop(s: Session, payload: Record<string, unknown>): Promise<void> {
     const turn = s.turn;
-    if (!turn || turn.finishing) return; // terminal turn: nothing goes to Telegram. Or a second Stop: send once.
+    if (!turn || turn.finishing) return; // terminal turn: nothing goes to the chat. Or a second Stop: send once.
     turn.finishing = true;
-    // The echo line (first line of the reply) is for the terminal only: hide it in Telegram.
+    // The echo line (first line of the reply) is for the terminal only: hide it in the chat.
     const final = stripRemoteEcho(firstString(payload, ["last_assistant_message"])?.trim() ?? "", turn.echoes).trim();
     try {
       if (turn.accumulator) {
@@ -468,7 +547,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
         }
       }
       const text = final || "(The session finished without a text answer.)";
-      await sendFinal(s, turn.chatId, deps.redact ? deps.redact(text) : text);
+      const sending = sendFinal(s, turn.chatId, deps.redact ? deps.redact(text) : text);
+      setStatus(turn.chatId, turn.refs, "done"); // not awaited: after the send started, before it ends
+      await sending;
     } finally {
       if (s.turn === turn) s.turn = undefined;
     }
@@ -613,8 +694,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
 
   // ---- forward ----------------------------------------------------------
 
-  function forward(chatId: string, text: string): ForwardResult {
+  function forward(chat: string, text: string, ref?: string): ForwardResult {
     if (stopped) return { accepted: false, reason: "bridge stopped" };
+    const chatId = normalizeChat(chat);
     const pid = attachments.get(chatId);
     const s = pid !== undefined ? sessions.get(pid) : undefined;
     if (!s) return { accepted: false, reason: "not attached to a session" };
@@ -629,7 +711,9 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     }
 
     const msgId = nextMsgId++;
-    s.queue.push({ msg: { msgId, text: clean }, chatId });
+    const refs = ref !== undefined ? [ref] : [];
+    s.queue.push({ msg: { msgId, text: clean }, chatId, refs });
+    setStatus(chatId, refs, "accepted");
     armIdleTimer(s);
     armQueueTimer(s);
     log.info({ chatId, pid: s.pid, msgId, chars: clean.length }, "remote bridge: message forwarded to session queue");
@@ -657,21 +741,54 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     return { error: `No session named "${t}".` };
   }
 
+  /** `[attached]`, or `[attached to Slack]` when the owner chat lives in another channel than the asking chat. */
+  function attachedMark(info: RemoteSessionInfo, asking: string | undefined): string {
+    const owner = info.attachedChannel;
+    const askingChannel = asking !== undefined ? parseChatKey(asking)?.channel : undefined;
+    if (owner === undefined || owner === askingChannel) return " [attached]";
+    return ` [attached to ${channels.get(owner)?.label ?? owner}]`;
+  }
+
   function formatStatus(chatId: string | undefined): string {
     const list = listSessions();
     if (list.length === 0) return "No sessions registered.";
     return list
       .map((i) => {
-        const mark = i.attachedChatId === undefined ? "" : i.attachedChatId === chatId ? " [attached to this chat]" : " [attached]";
+        const mark = i.attachedChatId === undefined ? "" : i.attachedChatId === chatId ? " [attached to this chat]" : attachedMark(i, chatId);
         return `${i.index}. ${i.name} (${i.cwd}, pid ${i.pid})${mark}`;
       })
       .join("\n");
   }
 
+  /** Same channel: the old text. Other channel: name the owner channel and the two ways out (spec 5.4). */
+  function refusalText(s: Session, owner: string, asking: string): string {
+    const ownerChannel = channelOf(owner)?.channel;
+    if (!ownerChannel || parseChatKey(owner)?.channel === parseChatKey(asking)?.channel) {
+      return `${s.name} is attached to another chat.`;
+    }
+    return (
+      `Session ${s.id} (${s.name}) is attached to ${ownerChannel.label}. ` +
+      `Run ${ownerChannel.detachCommand} in ${ownerChannel.label}, or attach with force to take it over.`
+    );
+  }
+
   async function control(request: RemoteControlRequest): Promise<RemoteControlResponse> {
     const reply = (ok: boolean, message: string): RemoteControlResponse => ({ ok, message, sessions: listSessions() });
-    const chatId = request.chatId?.trim();
-    if (!chatId) return reply(false, "chatId is required.");
+    const rawChat = request.chatId?.trim();
+    if (!rawChat && request.action === "status") return reply(true, formatStatus(undefined));
+    let chatId: string;
+    if (rawChat) {
+      chatId = normalizeChat(rawChat);
+      if (!parseChatKey(chatId)) return reply(false, `Invalid chat id: ${preview(cleanText(rawChat), 40)}.`);
+    } else if (request.action === "detach") {
+      // No chat given: detach whichever chat (any channel) holds the target session.
+      const found = resolveTarget(request.target);
+      if ("error" in found) return reply(false, found.error);
+      if (found.session.attachedChatId === undefined) return reply(false, "Not attached to a session.");
+      chatId = found.session.attachedChatId;
+    } else {
+      return reply(false, "chatId is required.");
+    }
 
     switch (request.action) {
       case "status":
@@ -680,8 +797,13 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
         const found = resolveTarget(request.target);
         if ("error" in found) return reply(false, found.error);
         const s = found.session;
-        if (s.attachedChatId !== undefined && s.attachedChatId !== chatId) {
-          return reply(false, `${s.name} is attached to another chat.`);
+        const owner = s.attachedChatId;
+        if (owner !== undefined && owner !== chatId) {
+          if (!request.force) return reply(false, refusalText(s, owner, chatId));
+          // Takeover: the old chat loses the session (queue and unconfirmed messages dropped, a running turn finishes).
+          detachSession(s);
+          notify(owner, `Detached from ${sessionLabel(s)}: taken over by ${channelOf(chatId)?.channel.label ?? "another chat"}.`);
+          log.info({ chatId, previousChatId: owner, pid: s.pid }, "remote bridge: attach forced");
         }
         const previous = attachments.get(chatId);
         if (previous !== undefined && previous !== s.pid) {
@@ -695,7 +817,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
         armIdleTimer(s);
         const message = already
           ? `Already attached to ${sessionLabel(s)}.`
-          : `Attached to ${sessionLabel(s)}. Send messages now. /detach to stop.`;
+          : `Attached to ${sessionLabel(s)}. Send messages now. ${channelOf(chatId)?.channel.detachCommand ?? "Detach"} to stop.`;
         if (!already) notify(chatId, message);
         log.info({ chatId, pid: s.pid }, "remote bridge: attached");
         return reply(true, message);
@@ -769,7 +891,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     handleHook,
     forward,
     control,
-    isAttached: (chatId) => attachments.has(chatId),
+    isAttached: (chat) => attachments.has(normalizeChat(chat)),
     stop,
   };
 }

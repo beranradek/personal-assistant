@@ -70,17 +70,26 @@ describe("remote bridge + routes + hook (integration)", () => {
         remote: ClaudeCodeRemoteConfigSchema.parse({ enabled: true, deliveryTimeoutMs: 60_000 }),
         processingUpdateIntervalMs: 20,
       },
-      sender: {
-        sendMessage: async (chatId, text) => {
-          sent.push({ chatId, text });
-        },
-        createProcessingMessage: async (_id, text) => {
-          processing.push(text);
-          return "pm-1";
-        },
-        updateProcessingMessage: async (_id, _mid, text) => {
-          processing.push(text);
-        },
+      channels: {
+        get: () => ({
+          id: "telegram",
+          label: "Telegram",
+          detachCommand: "/detach",
+          deliveryFailedText: "Answer could not be delivered (Telegram error).",
+          sendText: async (chatId, text) => {
+            sent.push({ chatId, text });
+          },
+          progress: {
+            create: async (_id, text) => {
+              processing.push(text);
+              return "pm-1";
+            },
+            update: async (_id, _mid, text) => {
+              processing.push(text);
+            },
+          },
+          retryAfterMs: () => undefined,
+        }),
       },
       isPidAlive: () => true,
     });

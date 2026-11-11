@@ -355,6 +355,16 @@ export const TmuxAgentsConfigSchema = z.object({
 
 export type TmuxAgentsConfig = z.infer<typeof TmuxAgentsConfigSchema>;
 
+/** Slack specifics of the remote session communication. */
+export const ClaudeCodeRemoteSlackConfigSchema = z.object({
+  /** Edited progress message (tool lines) in Slack. Off: reactions only. */
+  progress: z.boolean().default(false),
+  /** Turn status reactions on the user's message. */
+  reactions: z.boolean().default(true),
+  /** `mrkdwn`: small markdown converter. `plain`: escaped text only. */
+  format: z.enum(["mrkdwn", "plain"]).default("mrkdwn"),
+});
+
 /** Remote interactive session communication (Telegram <-> live Claude Code session). */
 export const ClaudeCodeRemoteConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -368,6 +378,9 @@ export const ClaudeCodeRemoteConfigSchema = z.object({
   maxMessagesPerMinute: z.number().int().positive().default(20),
   /** Reserved: send reasoning text in progress. */
   reasoning: z.boolean().default(false),
+  /** Channel used by MCP tools and `pa remote` without `channel`. Unset: telegram when enabled, else slack. */
+  defaultChannel: z.enum(["telegram", "slack"]).optional(),
+  slack: ClaudeCodeRemoteSlackConfigSchema.default(() => ClaudeCodeRemoteSlackConfigSchema.parse({})),
 });
 
 export const ClaudeCodeConfigSchema = z.object({

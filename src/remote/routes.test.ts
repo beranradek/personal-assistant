@@ -74,7 +74,7 @@ describe("remote routes", () => {
 
   beforeEach(async () => {
     bridge = makeBridge();
-    holder = { token: TOKEN, bridge, defaultChatId: "42" };
+    holder = { token: TOKEN, bridge, defaultChatIds: { telegram: "telegram:42", slack: "slack:U1" } };
     server = http.createServer((req, res) => {
       void handleRemoteRequest(req, res, holder);
     });
@@ -239,7 +239,26 @@ describe("remote routes", () => {
       const res = await request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify({ action: "status" }) });
       expect(res.status).toBe(200);
       expect(JSON.parse(res.body)).toEqual({ ok: true, message: "did status", sessions: [] });
-      expect(bridge.control).toHaveBeenCalledWith({ action: "status", chatId: "42" });
+      expect(bridge.control).toHaveBeenCalledWith({ action: "status" });
+    });
+
+    it("attach without chatId uses channel, then defaultChannel, then telegram", async () => {
+      const post = (body: object) => request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify(body) });
+      await post({ action: "attach", channel: "slack", force: true });
+      expect(bridge.control).toHaveBeenLastCalledWith({ action: "attach", channel: "slack", force: true, chatId: "slack:U1" });
+      holder.defaultChannel = "slack";
+      await post({ action: "attach" });
+      expect(bridge.control).toHaveBeenLastCalledWith({ action: "attach", chatId: "slack:U1" });
+      holder.defaultChannel = undefined;
+      await post({ action: "attach" });
+      expect(bridge.control).toHaveBeenLastCalledWith({ action: "attach", chatId: "telegram:42" });
+    });
+
+    it("answers 400 with a text when the requested channel is not enabled", async () => {
+      holder.defaultChatIds = { telegram: "telegram:42" };
+      const res = await request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify({ action: "attach", channel: "slack" }) });
+      expect(res.status).toBe(400);
+      expect(res.body).toContain("slack is not enabled");
     });
 
     it("passes an explicit chat id and target (number becomes string)", async () => {
@@ -249,8 +268,8 @@ describe("remote routes", () => {
 
     it("answers 400 for an unknown action or when no chat id can be found", async () => {
       expect((await request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify({ action: "kill" }) })).status).toBe(400);
-      holder.defaultChatId = undefined;
-      expect((await request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify({ action: "status" }) })).status).toBe(400);
+      holder.defaultChatIds = undefined;
+      expect((await request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify({ action: "attach" }) })).status).toBe(400);
       expect(bridge.control).not.toHaveBeenCalled();
     });
 

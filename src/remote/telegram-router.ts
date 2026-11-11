@@ -3,18 +3,20 @@
  * =======================================
  *
  * Wraps the Telegram adapter `onMessage` callback. It is only created when remote mode is enabled.
- * - `/attach [n|name]`, `/detach`, `/status`: control commands (answered through `send`).
+ * - `/attach [n|name] [force]`, `/detach`, `/status`: control commands (answered through `send`).
  * - `/help`, `/start`: list of these commands and the current state (attached or not).
  * - `/pa <text>`: normal PA agent queue with `<text>` as the message text.
  * - Other text (also other slash commands): forwarded to the attached session when the chat is attached, else the normal queue.
  *   Attachment and voice messages arrive as plain text from the adapter ("Received document and saved it to <path>" or the
  *   transcript). They are forwarded as text and never parsed as commands.
  *
+ * The bridge gets the chat key `telegram:<chatId>` (see chat-key.ts); `send` keeps the RAW chat id (the Telegram adapter needs it).
  * The adapter checks the sender allowlist before it calls the router.
  */
 
 import type { AdapterMessage } from "../core/types.js";
 import { createLogger } from "../core/logger.js";
+import { makeChatKey } from "./chat-key.js";
 import type { RemoteBridge } from "./protocol.js";
 
 const log = createLogger("remote-telegram-router");
@@ -34,6 +36,19 @@ export interface TelegramRouterDeps {
 
 /** `/cmd`, `/cmd@botname`, optional arguments. */
 const COMMAND_RE = /^\/([A-Za-z]+)(?:@(\w+))?(?:\s+([\s\S]*))?$/;
+
+/** Parse the argument of `/attach`: `[n|name] [force]`. */
+function parseAttachArg(arg: string): { target?: string; force: boolean } {
+  const words = arg.split(/\s+/).filter(Boolean);
+  const force = words.length > 0 && words[words.length - 1]!.toLowerCase() === "force";
+  const target = (force ? words.slice(0, -1) : words).join(" ");
+  return { ...(target ? { target } : {}), force };
+}
+
+/** A refusal because another chat holds the session tells how to take it over. */
+function withForceHint(message: string, target: string | undefined): string {
+  return /\bis attached to\b/.test(message) ? `${message} To take it over: /attach ${target ?? "<n>"} force` : message;
+}
 
 /** Text of `/help` (and `/start`). */
 export function helpText(attached: boolean): string {
@@ -59,11 +74,22 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
     send(chatId, text).catch((err) => log.error({ err, chatId }, "router: telegram reply failed"));
   }
 
-  async function runControl(chatId: string, action: "attach" | "detach" | "status", target?: string): Promise<void> {
+  async function runControl(
+    chatId: string,
+    action: "attach" | "detach" | "status",
+    target?: string,
+    force?: boolean,
+  ): Promise<void> {
     try {
-      const res = await bridge.control({ action, chatId, ...(target ? { target } : {}) });
+      const res = await bridge.control({
+        action,
+        chatId: makeChatKey("telegram", chatId),
+        ...(target ? { target } : {}),
+        ...(force ? { force } : {}),
+      });
       // The bridge itself confirms a successful attach or detach in Telegram. Answer status and failures here.
-      if (action === "status" || !res.ok) reply(chatId, res.message);
+      if (action === "status") reply(chatId, res.message);
+      else if (!res.ok) reply(chatId, action === "attach" && !force ? withForceHint(res.message, target) : res.message);
     } catch (err) {
       log.error({ err, chatId, action }, "router: control failed");
       reply(chatId, `Command failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -76,6 +102,7 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
       return;
     }
     const chatId = msg.sourceId;
+    const chatKey = makeChatKey("telegram", chatId);
     // Voice, image and document messages are never commands.
     const inputType = msg.metadata?.["inputType"];
     const isPlainText = inputType === undefined || inputType === "text";
@@ -88,7 +115,10 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
       const arg = (match[3] ?? "").trim();
       switch (command) {
         case "attach":
-          void runControl(chatId, "attach", arg || undefined);
+          {
+            const { target, force } = parseAttachArg(arg);
+            void runControl(chatId, "attach", target, force);
+          }
           return;
         case "detach":
           void runControl(chatId, "detach");
@@ -98,7 +128,7 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
           return;
         case "help":
         case "start": // Telegram sends /start when a user opens the bot for the first time
-          reply(chatId, helpText(bridge.isAttached(chatId)));
+          reply(chatId, helpText(bridge.isAttached(chatKey)));
           return;
         case "pa":
           if (!arg) {
@@ -112,8 +142,8 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
       }
     }
 
-    if (bridge.isAttached(chatId)) {
-      const result = bridge.forward(chatId, msg.text);
+    if (bridge.isAttached(chatKey)) {
+      const result = bridge.forward(chatKey, msg.text);
       if (!result.accepted) reply(chatId, `Not sent to the session: ${result.reason}`);
       return;
     }

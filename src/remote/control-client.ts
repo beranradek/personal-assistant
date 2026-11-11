@@ -39,7 +39,12 @@ export function createRemoteControlClient(options: RemoteControlClientOptions): 
       throw new Error(`PA daemon is not reachable on 127.0.0.1:${options.port}`);
     }
     if (res.status === 401) throw new Error("Remote token was rejected. The daemon was restarted? Try again.");
-    if (res.status === 503) throw new Error("Remote bridge is not ready (Telegram adapter not started).");
+    if (res.status === 503) throw new Error("Remote bridge is not ready (no remote channel adapter started yet).");
+    if (res.status === 400) {
+      // The route answers 400 with a readable reason (for example a channel that is not enabled).
+      const body = (await res.json().catch(() => undefined)) as { error?: unknown } | undefined;
+      if (typeof body?.error === "string") throw new Error(body.error);
+    }
     if (!res.ok) throw new Error(`Remote control failed with HTTP ${res.status}`);
     return (await res.json()) as RemoteControlResponse;
   };

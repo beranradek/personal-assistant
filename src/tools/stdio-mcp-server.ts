@@ -12,7 +12,7 @@
  *   - exec — run background commands
  *   - process — check background process status
  *   - agent_session_* — tmux project agent sessions (only when tmuxAgents.enabled)
- *   - remote_session_* — attach Telegram to a live Claude Code session (only when remote mode is enabled)
+ *   - remote_session_* — attach a chat (Telegram or Slack) to a live Claude Code session (only when remote mode is enabled)
  *
  * Usage: pa mcp-server [--config <path>]
  */
@@ -39,6 +39,7 @@ import type { CalendarRequest, GmailRequest, SlackRequest } from "../integ-api/m
 import { TMUX_TOOLS, findTmuxTool, toMcpDefinition } from "../tmux-agents/tools.js";
 import type { TmuxAgentService } from "../tmux-agents/types.js";
 import type { RemoteControlFn } from "../remote/control-client.js";
+import { REMOTE_CHANNEL_IDS, type RemoteControlRequest } from "../remote/protocol.js";
 
 export interface StdioMcpServerDeps {
   search: (query: string, maxResults?: number, filters?: MemorySearchFilters) => Promise<SearchResult[]>;
@@ -255,28 +256,39 @@ const INTEG_TOOL_DEFINITIONS = [
   },
 ];
 
+const REMOTE_CHANNEL_PROPERTY = {
+  type: "string",
+  enum: [...REMOTE_CHANNEL_IDS],
+  description: "Chat channel. Optional: the configured default channel is used.",
+};
+
 const REMOTE_TOOL_DEFINITIONS = [
   {
     name: "remote_session_attach",
-    description: "Attach the user's Telegram chat to a live Claude Code session. Telegram messages then go to that session.",
+    description: "Attach the user's chat (Telegram or Slack) to a live Claude Code session. Chat messages then go to that session.",
     inputSchema: {
       type: "object" as const,
       properties: {
         target: { type: "string", description: "Session index or name from remote_session_status. Optional when only one session exists." },
+        channel: REMOTE_CHANNEL_PROPERTY,
+        force: {
+          type: "boolean",
+          description: "Take the session over when it is attached to another chat (the old chat is detached and notified).",
+        },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "remote_session_detach",
-    description: "Detach the user's Telegram chat from the attached Claude Code session.",
-    inputSchema: { type: "object" as const, properties: {} },
+    description: "Detach the chat that holds the attached Claude Code session (any channel unless channel is given).",
+    inputSchema: { type: "object" as const, properties: { channel: REMOTE_CHANNEL_PROPERTY } },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "remote_session_status",
-    description: "List live Claude Code sessions known to the PA daemon and show which one is attached to Telegram.",
-    inputSchema: { type: "object" as const, properties: {} },
+    description: "List live Claude Code sessions known to the PA daemon and show which chat each one is attached to.",
+    inputSchema: { type: "object" as const, properties: { channel: REMOTE_CHANNEL_PROPERTY } },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
 ];
@@ -472,7 +484,14 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
         if (!control) return unavailable("Remote session control");
         const action = name === "remote_session_attach" ? "attach" : name === "remote_session_detach" ? "detach" : "status";
         const target = action === "attach" && typeof args?.target === "string" && args.target !== "" ? args.target : undefined;
-        return proxyResult(() => control({ action, ...(target ? { target } : {}) }));
+        const channel = REMOTE_CHANNEL_IDS.find((id) => id === args?.channel);
+        const request: RemoteControlRequest = {
+          action,
+          ...(target ? { target } : {}),
+          ...(channel ? { channel } : {}),
+          ...(action === "attach" && args?.force === true ? { force: true } : {}),
+        };
+        return proxyResult(() => control(request));
       }
       case "episode_recent":
         return handleEpisodeRecent(args as Record<string, unknown>, deps.episodeDeps!);

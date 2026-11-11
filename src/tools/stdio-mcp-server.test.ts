@@ -153,6 +153,9 @@ describe("createStdioMcpServer", () => {
       const { tools } = await getListHandler()({});
       const byName = new Map(tools.map((t: { name: string }) => [t.name, t]));
       expect([...byName.keys()]).toEqual(expect.arrayContaining(["remote_session_attach", "remote_session_detach", "remote_session_status"]));
+      const props = (byName.get("remote_session_attach") as { inputSchema: { properties: Record<string, unknown> } }).inputSchema.properties;
+      expect(Object.keys(props)).toEqual(["target", "channel", "force"]);
+      expect(Object.keys((byName.get("remote_session_detach") as { inputSchema: { properties: object } }).inputSchema.properties)).toEqual(["channel"]);
       expect((byName.get("remote_session_status") as { annotations: { readOnlyHint: boolean } }).annotations.readOnlyHint).toBe(true);
       expect((byName.get("remote_session_attach") as { annotations: { readOnlyHint: boolean } }).annotations.readOnlyHint).toBe(false);
     });
@@ -166,12 +169,18 @@ describe("createStdioMcpServer", () => {
       await callTool("remote_session_attach", { target: "2" });
       await callTool("remote_session_attach");
       await callTool("remote_session_detach", { target: "ignored" });
+      await callTool("remote_session_attach", { target: "1", channel: "slack", force: true });
+      await callTool("remote_session_attach", { channel: "bogus", force: "yes" });
+      await callTool("remote_session_status", { channel: "slack", force: true });
       const result = await callTool("remote_session_status");
 
       expect(control.mock.calls.map((c) => c[0])).toEqual([
         { action: "attach", target: "2" },
         { action: "attach" },
         { action: "detach" },
+        { action: "attach", target: "1", channel: "slack", force: true },
+        { action: "attach" },
+        { action: "status", channel: "slack" },
         { action: "status" },
       ]);
       expect(JSON.parse(result.content[0].text)).toEqual(response);
