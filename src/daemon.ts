@@ -63,6 +63,7 @@ import type { TmuxAgentService } from "./tmux-agents/types.js";
 import { generateRemoteToken, writeRemoteToken, type RemoteTokenHandle } from "./remote/token.js";
 import type { RemoteRouteHolder } from "./remote/routes.js";
 import { createRemoteBridge } from "./remote/bridge.js";
+import { createTelegramChannel } from "./remote/channels/telegram-channel.js";
 import { createTelegramRouter } from "./remote/telegram-router.js";
 import { isPidAlive } from "./claude/process-tree.js";
 import type { RemoteBridge } from "./remote/protocol.js";
@@ -565,14 +566,10 @@ export async function startDaemon(configDir: string): Promise<void> {
     if (remote) {
       const sendSystem = (chatId: string, text: string) =>
         telegram.sendResponse({ source: "telegram", sourceId: chatId, text, metadata: { responseKind: "system" } });
+      const telegramChannel = createTelegramChannel(telegram);
       remoteBridge = createRemoteBridge({
         config: { remote: config.claudeCode.remote, processingUpdateIntervalMs: config.gateway.processingUpdateIntervalMs },
-        sender: {
-          sendMessage: sendSystem,
-          createProcessingMessage: (sourceId, text, metadata) => telegram.createProcessingMessage!(sourceId, text, metadata),
-          updateProcessingMessage: (sourceId, messageId, text, metadata) =>
-            telegram.updateProcessingMessage!(sourceId, messageId, text, metadata),
-        },
+        channels: { get: (id) => (id === "telegram" ? telegramChannel : undefined) },
         isPidAlive,
         redact,
       });

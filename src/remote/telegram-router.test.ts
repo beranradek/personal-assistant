@@ -4,6 +4,7 @@ import type { RemoteBridge, RemoteControlResponse } from "./protocol.js";
 import type { AdapterMessage } from "../core/types.js";
 
 const CHAT = "111";
+const KEY = "telegram:111";
 
 function msg(text: string, extra: Partial<AdapterMessage> = {}): AdapterMessage {
   return { source: "telegram", sourceId: CHAT, text, metadata: { user: "u" }, ...extra };
@@ -15,6 +16,7 @@ async function tick(): Promise<void> {
 
 describe("createTelegramRouter", () => {
   let attached: boolean;
+  let isAttached: ReturnType<typeof vi.fn>;
   let control: ReturnType<typeof vi.fn>;
   let forward: ReturnType<typeof vi.fn>;
   let enqueue: ReturnType<typeof vi.fn>;
@@ -23,11 +25,12 @@ describe("createTelegramRouter", () => {
 
   beforeEach(() => {
     attached = false;
+    isAttached = vi.fn(() => attached);
     control = vi.fn(async (): Promise<RemoteControlResponse> => ({ ok: true, message: "done", sessions: [] }));
     forward = vi.fn(() => ({ accepted: true, msgId: 1 }));
     enqueue = vi.fn();
     send = vi.fn(async () => undefined);
-    const bridge = { control, forward, isAttached: () => attached, poll: vi.fn(), handleHook: vi.fn(), stop: vi.fn() } as unknown as RemoteBridge;
+    const bridge = { control, forward, isAttached: isAttached, poll: vi.fn(), handleHook: vi.fn(), stop: vi.fn() } as unknown as RemoteBridge;
     route = createTelegramRouter({ bridge, enqueue, send });
   });
 
@@ -58,7 +61,7 @@ describe("createTelegramRouter", () => {
   it("forwards normal text to the bridge when attached", () => {
     attached = true;
     route(msg("hello"));
-    expect(forward).toHaveBeenCalledWith(CHAT, "hello");
+    expect(forward).toHaveBeenCalledWith(KEY, "hello");
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -74,7 +77,7 @@ describe("createTelegramRouter", () => {
   it("/attach without argument calls control attach without target; success is not echoed (bridge confirms)", async () => {
     route(msg("/attach"));
     await tick();
-    expect(control).toHaveBeenCalledWith({ action: "attach", chatId: CHAT });
+    expect(control).toHaveBeenCalledWith({ action: "attach", chatId: KEY });
     expect(send).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
   });
@@ -82,13 +85,13 @@ describe("createTelegramRouter", () => {
   it("/attach 2 passes the target", async () => {
     route(msg("/attach 2"));
     await tick();
-    expect(control).toHaveBeenCalledWith({ action: "attach", chatId: CHAT, target: "2" });
+    expect(control).toHaveBeenCalledWith({ action: "attach", chatId: KEY, target: "2" });
   });
 
   it("/attach with a name passes the name", async () => {
     route(msg("/attach my-session"));
     await tick();
-    expect(control).toHaveBeenCalledWith({ action: "attach", chatId: CHAT, target: "my-session" });
+    expect(control).toHaveBeenCalledWith({ action: "attach", chatId: KEY, target: "my-session" });
   });
 
   it("replies with the error message when attach fails", async () => {
@@ -101,7 +104,7 @@ describe("createTelegramRouter", () => {
   it("/detach calls control detach and replies only on failure", async () => {
     route(msg("/detach"));
     await tick();
-    expect(control).toHaveBeenCalledWith({ action: "detach", chatId: CHAT });
+    expect(control).toHaveBeenCalledWith({ action: "detach", chatId: KEY });
     expect(send).not.toHaveBeenCalled();
     control.mockResolvedValue({ ok: false, message: "Not attached", sessions: [] });
     route(msg("/detach"));
@@ -113,14 +116,14 @@ describe("createTelegramRouter", () => {
     control.mockResolvedValue({ ok: true, message: "1. ws", sessions: [] });
     route(msg("/status"));
     await tick();
-    expect(control).toHaveBeenCalledWith({ action: "status", chatId: CHAT });
+    expect(control).toHaveBeenCalledWith({ action: "status", chatId: KEY });
     expect(send).toHaveBeenCalledWith(CHAT, "1. ws");
   });
 
   it("commands work with a bot name suffix and any case", async () => {
     route(msg("/Status@my_bot"));
     await tick();
-    expect(control).toHaveBeenCalledWith({ action: "status", chatId: CHAT });
+    expect(control).toHaveBeenCalledWith({ action: "status", chatId: KEY });
   });
 
   it("/pa <text> goes to the normal queue with text replaced, even when attached", () => {
@@ -152,7 +155,7 @@ describe("createTelegramRouter", () => {
     expect(enqueue).toHaveBeenCalledTimes(1);
     attached = true;
     route(msg("/compact now"));
-    expect(forward).toHaveBeenCalledWith(CHAT, "/compact now");
+    expect(forward).toHaveBeenCalledWith(KEY, "/compact now");
   });
 
   it("text that merely contains a command is not a command", () => {
@@ -189,7 +192,7 @@ describe("createTelegramRouter", () => {
       attached = true;
       const text = "Received document and saved it to documents/telegram-inbox/a.pdf\n\nUser caption:\n/status please";
       route(msg(text, { metadata: { inputType: "document", attachments: ["documents/telegram-inbox/a.pdf"] } }));
-      expect(forward).toHaveBeenCalledWith(CHAT, text);
+      expect(forward).toHaveBeenCalledWith(KEY, text);
       expect(control).not.toHaveBeenCalled();
       expect(enqueue).not.toHaveBeenCalled();
     });
@@ -201,14 +204,14 @@ describe("createTelegramRouter", () => {
       expect(enqueue).toHaveBeenCalledWith(m);
       attached = true;
       route(m);
-      expect(forward).toHaveBeenCalledWith(CHAT, text);
+      expect(forward).toHaveBeenCalledWith(KEY, text);
     });
 
     it("forwards a voice transcript as text and never parses it as a command", () => {
       attached = true;
       route(msg("/detach", { metadata: { inputType: "audio" } }));
       expect(control).not.toHaveBeenCalled();
-      expect(forward).toHaveBeenCalledWith(CHAT, "/detach");
+      expect(forward).toHaveBeenCalledWith(KEY, "/detach");
     });
   });
 
@@ -234,13 +237,54 @@ describe("createTelegramRouter", () => {
       attached = true;
       r(msg("/detach@otherbot"));
       expect(control).not.toHaveBeenCalled();
-      expect(forward).toHaveBeenCalledWith(CHAT, "/detach@otherbot");
+      expect(forward).toHaveBeenCalledWith(KEY, "/detach@otherbot");
     });
 
     it("accepts any bot suffix when the bot username is unknown (current behaviour)", async () => {
       route(msg("/status@otherbot"));
       await tick();
-      expect(control).toHaveBeenCalledWith({ action: "status", chatId: CHAT });
+      expect(control).toHaveBeenCalledWith({ action: "status", chatId: KEY });
     });
+  });
+
+  it("asks the bridge about the chat key, never the raw id", async () => {
+    route(msg("hello"));
+    expect(isAttached).toHaveBeenCalledWith(KEY);
+    route(msg("/help"));
+    await tick();
+    expect(isAttached).toHaveBeenLastCalledWith(KEY);
+    expect(send).toHaveBeenCalledWith(CHAT, expect.any(String)); // replies keep the raw chat id
+  });
+
+  it("/attach 1 force and /attach force pass force", async () => {
+    route(msg("/attach 1 force"));
+    await tick();
+    expect(control).toHaveBeenLastCalledWith({ action: "attach", chatId: KEY, target: "1", force: true });
+    route(msg("/attach My Session FORCE"));
+    await tick();
+    expect(control).toHaveBeenLastCalledWith({ action: "attach", chatId: KEY, target: "My Session", force: true });
+    route(msg("/attach force"));
+    await tick();
+    expect(control).toHaveBeenLastCalledWith({ action: "attach", chatId: KEY, force: true });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("a refusal because another chat holds the session documents force", async () => {
+    control.mockResolvedValue({ ok: false, message: "ws is attached to another chat.", sessions: [] });
+    route(msg("/attach 2"));
+    await tick();
+    expect(send).toHaveBeenCalledWith(CHAT, "ws is attached to another chat. To take it over: /attach 2 force");
+    send.mockClear();
+    control.mockResolvedValue({ ok: false, message: "No session with index 9.", sessions: [] });
+    route(msg("/attach 9"));
+    await tick();
+    expect(send).toHaveBeenCalledWith(CHAT, "No session with index 9.");
+  });
+
+  it("does not add the force hint when force was already given", async () => {
+    control.mockResolvedValue({ ok: false, message: "ws is attached to another chat.", sessions: [] });
+    route(msg("/attach 2 force"));
+    await tick();
+    expect(send).toHaveBeenCalledWith(CHAT, "ws is attached to another chat.");
   });
 });
