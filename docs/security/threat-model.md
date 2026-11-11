@@ -21,3 +21,13 @@ Scope: `src/remote/channels/slack-*.ts`, `src/remote/slack-router.ts`, Slack ada
 
 ## Residual
 - Allowlist enforcement lives in the adapter; the router trusts `userId` metadata.
+
+## Daemon wiring slice (control routes, MCP, CLI)
+
+Scope: `src/daemon.ts`, `src/remote/routes.ts`, `src/remote/default-chat.ts`, `src/remote/control-client.ts`.
+
+- Control routes stay on 127.0.0.1 behind the random token in the 0600 token file; hook protocol and token file are unchanged.
+- Default chat is only the first `allowedUserIds` entry of an enabled channel; a disabled channel gives a 400, never a fallback chat.
+- `detach`/`status` without chat act on the session holder; callers already hold the token, so no new privilege.
+- Routers and bridge are set before any adapter starts, so no message is handled unrouted.
+- `settings.json` (Slack tokens) group/world readable: daemon logs a warning (mode check only, no token in log).
