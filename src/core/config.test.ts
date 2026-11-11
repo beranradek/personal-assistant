@@ -336,7 +336,28 @@ describe("config", () => {
         maxMessageChars: 4000,
         maxMessagesPerMinute: 20,
         reasoning: false,
+        slack: { progress: false, reactions: true, format: "mrkdwn" },
       });
+      expect(load({}).claudeCode.remote.defaultChannel).toBeUndefined();
+    });
+
+    it("parses an old remote section without the new keys", () => {
+      const r = load({ claudeCode: { remote: { enabled: true, progress: false } } }).claudeCode.remote;
+      expect(r.defaultChannel).toBeUndefined();
+      expect(r.slack).toEqual({ progress: false, reactions: true, format: "mrkdwn" });
+    });
+
+    it("accepts defaultChannel and slack overrides", () => {
+      const r = load({
+        claudeCode: { remote: { defaultChannel: "slack", slack: { progress: true, format: "plain" } } },
+      }).claudeCode.remote;
+      expect(r.defaultChannel).toBe("slack");
+      expect(r.slack).toEqual({ progress: true, reactions: true, format: "plain" });
+    });
+
+    it("rejects invalid slack format and defaultChannel", () => {
+      expect(() => load({ claudeCode: { remote: { slack: { format: "html" } } } })).toThrow();
+      expect(() => load({ claudeCode: { remote: { defaultChannel: "discord" } } })).toThrow();
     });
 
     it("merges user overrides over defaults", () => {

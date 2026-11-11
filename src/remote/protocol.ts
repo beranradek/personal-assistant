@@ -82,13 +82,68 @@ export interface RemotePollResponse {
   messages: RemoteQueuedMessage[];
 }
 
+/** Channels a remote session chat can live in. */
+export const REMOTE_CHANNEL_IDS = ["telegram", "slack"] as const;
+
+export type RemoteChannelId = (typeof REMOTE_CHANNEL_IDS)[number];
+
+/** Namespaced chat key: `telegram:<chatId>` or `slack:<userId>` (see `chat-key.ts`). */
+export type RemoteChatKey = `${RemoteChannelId}:${string}`;
+
+/** Status of a turn shown on the user's message (Slack reactions). */
+export type RemoteTurnStatus = "accepted" | "done" | "failed" | "dropped";
+
+/** Thrown by `RemoteChannel.sendText` when some chunks were already sent: the bridge must NOT retry (no duplicates). */
+export class RemotePartialSendError extends Error {
+  constructor(
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = "RemotePartialSendError";
+  }
+}
+
+/**
+ * One chat channel of the remote bridge. All functions get the ID PART of the chat key (`987654321`, `U123`), never the
+ * namespaced key.
+ */
+export interface RemoteChannel {
+  readonly id: RemoteChannelId;
+  /** Human label used in notices: "Telegram", "Slack". */
+  readonly label: string;
+  /** Command that detaches, for notices: Telegram `/detach`, Slack `/cc detach`. */
+  readonly detachCommand: string;
+  /** Send text (the channel chunks and formats it). Rejects on failure, with `RemotePartialSendError` after partial sends. */
+  sendText(chat: string, text: string): Promise<void>;
+  /** Adapter-like functions for the progress accumulator. Absent when the channel has no progress message. */
+  progress?: {
+    create(chat: string, text: string): Promise<string>;
+    update(chat: string, messageId: string, text: string): Promise<void>;
+  };
+  /** Turn status on the user's message. `ref` comes from the router (Slack: `<dmChannel>:<ts>`). */
+  setTurnStatus?(chat: string, ref: string, status: RemoteTurnStatus): Promise<void>;
+  /** Milliseconds to wait before a retry when `err` is a rate limit error, else undefined. */
+  retryAfterMs(err: unknown): number | undefined;
+  /** Text for "answer could not be delivered". */
+  readonly deliveryFailedText: string;
+}
+
+export interface RemoteChannelRegistry {
+  get(id: RemoteChannelId): RemoteChannel | undefined;
+}
+
 export type RemoteControlAction = "attach" | "detach" | "status";
 
 /** Body of `POST /remote/control`. */
 export interface RemoteControlRequest {
   action: RemoteControlAction;
-  /** Telegram chat id. Default: first id of `adapters.telegram.allowedUserIds`. */
+  /** Chat key (`telegram:42`, `slack:U1`) or a bare Telegram chat id. Default: first allowed user of the channel. */
   chatId?: string;
+  /** Channel used for the default chat when `chatId` is absent. Default: `claudeCode.remote.defaultChannel`. */
+  channel?: RemoteChannelId;
+  /** Attach even when the session is attached to another chat: the old chat is detached and notified. */
+  force?: boolean;
   /** Session index (from status) or name. */
   target?: string;
 }
@@ -99,7 +154,9 @@ export interface RemoteSessionInfo {
   name: string;
   cwd: string;
   pid: number;
+  /** Namespaced chat key (`telegram:42`). */
   attachedChatId?: string;
+  attachedChannel?: RemoteChannelId;
 }
 
 /** Body of the `200` answer of `POST /remote/control`. */
@@ -124,12 +181,12 @@ export interface RemoteBridge {
   poll(args: { pid: number; cwd: string; name: string; signal: AbortSignal }): Promise<RemotePollResult>;
   /** Handle one hook event. Never throws on unknown payload shapes. */
   handleHook(event: string, pid: number, payload: unknown, cwd?: string): Promise<void>;
-  /** Forward one Telegram text to the session attached to `chatId`. */
-  forward(chatId: string, text: string): ForwardResult;
+  /** Forward one chat text to the session attached to `chat` (chat key). `ref` is kept for the turn status. */
+  forward(chat: string, text: string, ref?: string): ForwardResult;
   /** Control operations (Telegram commands, MCP tools, CLI). */
   control(request: RemoteControlRequest): Promise<RemoteControlResponse>;
-  /** True when `chatId` has an attached session. */
-  isAttached(chatId: string): boolean;
+  /** True when the chat (chat key) has an attached session. */
+  isAttached(chat: string): boolean;
   /** Stop timers and pending polls. */
   stop(): void;
 }

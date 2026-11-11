@@ -176,6 +176,7 @@ export const DEFAULTS: Config = {
       maxMessageChars: 4000,
       maxMessagesPerMinute: 20,
       reasoning: false,
+      slack: { progress: false, reactions: true, format: "mrkdwn" as const },
     },
   },
   codex: {
