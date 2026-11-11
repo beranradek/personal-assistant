@@ -1,5 +1,7 @@
 # Claude Code remote session (Telegram)
 
+Slack DM version of this mode: see [claude_code_remote_slack.md](claude_code_remote_slack.md).
+
 ## What it does
 
 You run a Claude Code session on your laptop. You attach your phone to it through Telegram. A Telegram message goes
@@ -236,6 +238,9 @@ Limits:
 - `deliveryTimeoutMs`: see "Delivery" above.
 
 ## Security
+
+For the Slack channel (DM only, `allowedUserIds`, `/cc`) see the Security chapter in
+[claude_code_remote_slack.md](claude_code_remote_slack.md).
 
 - Only users in `adapters.telegram.allowedUserIds` can send messages. The adapter checks the sender before the router.
 - The daemon routes listen on `127.0.0.1` only. The server checks the Host and Origin headers.

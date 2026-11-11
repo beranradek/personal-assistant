@@ -157,6 +157,7 @@ Run `pa init` to create a default `~/.personal-assistant/settings.json`. Edit it
 - OpenAI Codex agent backend (alternative to Claude Code): [docs/settings/openai_codex_agent.md](docs/settings/openai_codex_agent.md)
 - Claude Code companion mode (installation and direct launch): [docs/settings/claude_code_companion.md](docs/settings/claude_code_companion.md)
 - Claude Code remote session (talk to a live laptop session from Telegram): [docs/settings/claude_code_remote_session.md](docs/settings/claude_code_remote_session.md)
+- Claude Code remote session over Slack DM (`/cc`): [docs/settings/claude_code_remote_slack.md](docs/settings/claude_code_remote_slack.md)
 - Google integrations (Gmail + Calendar): [docs/settings/google_integrations.md](docs/settings/google_integrations.md)
   - Gmail unreads: categorized unread email overview with multi-account support
 - Slack integration (unread messages feed): [docs/settings/slack_integration.md](docs/settings/slack_integration.md)
@@ -178,7 +179,8 @@ sessions, compaction, audit/reflection lifecycle. Cron jobs still require the da
 Remote mode (optional): you can attach a Telegram chat to a live Claude Code session on your laptop and talk to it from your
 phone. It uses a separate Telegram bot and hooks (not Claude Code Channels). It is off by default
 (`claudeCode.remote.enabled`). Setup: `npm run build` and `npm link` (this installs the `pa-remote-hook` bin), then
-`pa init --claude-code` and `pa init --claude-remote`. See [`docs/settings/claude_code_remote_session.md`](docs/settings/claude_code_remote_session.md).
+`pa init --claude-code` and `pa init --claude-remote`. See [`docs/settings/claude_code_remote_session.md`](docs/settings/claude_code_remote_session.md). The same works from a Slack DM with the `/cc` command (DM only, allowlist): see
+[`docs/settings/claude_code_remote_slack.md`](docs/settings/claude_code_remote_slack.md).
 
 ### Key Sections
 

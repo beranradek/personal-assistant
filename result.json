@@ -1,6 +1,1 @@
-{"status":"success","resolutionKind":"implementation",
-"suggestedCommitMessage":"feat: #11 Wire Slack remote mode in daemon, control routes, MCP and CLI",
-"suggestedPrTitle":"Wire Slack remote mode in daemon, control routes, MCP and CLI",
-"suggestedPrSummary":"The daemon runs remote mode with Slack, Telegram or both on one shared bridge. Control routes, MCP tools and `pa remote` accept a channel (and force for attach), with one shared default-chat helper.",
-"resolvedIssueSummary":"Daemon remote mode now supports Slack, Telegram or both on one bridge; control routes, MCP and CLI accept channel/force.",
-"changeInventory":{"apis":[{"change":"updated","name":"POST /remote/control"},{"change":"updated","name":"pa remote attach|detach|status"},{"change":"updated","name":"remote_session_attach"}]}}
+{"status":"success","suggestedCommitMessage":"docs: #12 Document Slack remote session setup and usage","suggestedPrTitle":"docs: Slack remote session guide","suggestedPrSummary":"Adds the Slack remote session guide (setup, /cc usage, security, troubleshooting, manual E2E checklist) and links it from the existing docs, README and CLAUDE.md.","resolvedIssueSummary":"Added docs/settings/claude_code_remote_slack.md and pointers in settings docs, README and CLAUDE.md.","resolutionKind":"implementation"}

@@ -71,3 +71,8 @@ Then edit ~/.personal-assistant/settings.json:
 
 In the log you'll see Slack adapter started. 
 From now on, just write in the private channel and the bot will reply in a thread.
+
+## Remote Claude Code session over Slack DM
+
+The scopes and events above are for channel mode. To talk to a live Claude Code session in a DM and to use `/cc`,
+see [claude_code_remote_slack.md](claude_code_remote_slack.md).
