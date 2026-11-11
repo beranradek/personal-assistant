@@ -1,5 +1,5 @@
 /**
- * Slack router for remote session mode (see docs/plans/active/2026-11-11-slack-remote-session-communication/spec.md 5.5).
+ * Slack router for remote session mode (see docs/plans/completed/2026-11-11-slack-remote-session-communication/spec.md 5.5).
  *
  * `onMessage` wraps the Slack adapter message callback. ONLY direct messages (`channelType === "im"`) can reach the bridge;
  * channel messages always take the old queue path. `onCommand` handles `/cc [help|status|attach [n|name] [force]|detach|pa <text>]`

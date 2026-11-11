@@ -11,7 +11,7 @@
  *
  * All state is in memory. Everything is injected (config, channels, timers, clock, pid check) so tests use fake time.
  * See docs/plans/active/2026-11-08-remote-interactive-session-communication/spec.md and
- * docs/plans/active/2026-11-11-slack-remote-session-communication/spec.md (sections 5.4 and 5.5).
+ * docs/plans/completed/2026-11-11-slack-remote-session-communication/spec.md (sections 5.4 and 5.5).
  */
 
 import * as path from "node:path";

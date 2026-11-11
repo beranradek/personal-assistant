@@ -1,5 +1,5 @@
 /**
- * Slack as a remote bridge channel (see docs/plans/active/2026-11-11-slack-remote-session-communication/spec.md 5.2, 5.5).
+ * Slack as a remote bridge channel (see docs/plans/completed/2026-11-11-slack-remote-session-communication/spec.md 5.2, 5.5).
  * Chat ids given to the functions are Slack user ids (the id part of the chat key `slack:<userId>`). Text goes to the DM
  * channel `D...` opened with `conversations.open` (never to the user id: the Slack docs disagree on that).
  * Slack docs: chat.postMessage is limited to about 1 message per second per channel; 429 carries `Retry-After` seconds

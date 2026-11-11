@@ -1,6 +1,6 @@
 /**
  * Namespaced chat keys for remote sessions: `<channel>:<id>` (see
- * docs/plans/active/2026-11-11-slack-remote-session-communication/spec.md section 5.2 and 5.3).
+ * docs/plans/completed/2026-11-11-slack-remote-session-communication/spec.md section 5.2 and 5.3).
  */
 import { REMOTE_CHANNEL_IDS, type RemoteChannelId, type RemoteChatKey } from "./protocol.js";
 

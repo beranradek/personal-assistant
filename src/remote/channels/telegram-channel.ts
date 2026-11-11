@@ -1,6 +1,6 @@
 /**
  * Telegram as a remote bridge channel: wraps the Telegram adapter (see
- * docs/plans/active/2026-11-11-slack-remote-session-communication/spec.md section 5.2).
+ * docs/plans/completed/2026-11-11-slack-remote-session-communication/spec.md section 5.2).
  * Chat ids given to the functions are raw Telegram chat ids (the id part of the chat key `telegram:<id>`).
  */
 import type { Adapter } from "../../core/types.js";
