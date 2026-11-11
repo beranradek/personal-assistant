@@ -142,3 +142,8 @@ vite.config.ts.timestamp-*
 
 # Local ad-hoc artifacts
 tmp/
+
+# Autoworker artifacts and a foreign lockfile (the repo uses npm and package-lock.json)
+result.json
+result-description.md
+pnpm-lock.yaml

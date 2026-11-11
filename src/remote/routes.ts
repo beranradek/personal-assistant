@@ -10,6 +10,7 @@
 import type http from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createLogger } from "../core/logger.js";
+import { safeErr } from "../core/log-error.js";
 import { resolveControlChat, type RemoteDefaultChats } from "./default-chat.js";
 import {
   REMOTE_CHANNEL_IDS,
@@ -130,7 +131,7 @@ async function handleHook(req: http.IncomingMessage, res: http.ServerResponse, b
   res.writeHead(204);
   res.end();
   bridge.handleHook(event, pid, body["payload"], cwd).catch((err) => {
-    log.warn({ err, event, pid }, "remote hook handler failed");
+    log.warn({ err: safeErr(err), event, pid }, "remote hook handler failed");
   });
 }
 
@@ -150,7 +151,12 @@ async function handleControl(
   const rawTarget = body["target"];
   const target = typeof rawTarget === "string" || typeof rawTarget === "number" ? String(rawTarget) : undefined;
   const chatId = typeof body["chatId"] === "string" && body["chatId"] !== "" ? body["chatId"] : undefined;
-  const channel = REMOTE_CHANNEL_IDS.find((id) => id === body["channel"]) as RemoteChannelId | undefined;
+  const rawChannel = body["channel"];
+  const channel = REMOTE_CHANNEL_IDS.find((id) => id === rawChannel) as RemoteChannelId | undefined;
+  if (!channel && rawChannel !== undefined && rawChannel !== null && rawChannel !== "") {
+    sendError(res, 400, `Unknown channel. Use one of: ${REMOTE_CHANNEL_IDS.join(", ")}.`);
+    return;
+  }
   const resolved = resolveControlChat(
     {
       action: body["action"] as RemoteControlAction,
@@ -212,7 +218,7 @@ export async function handleRemoteRequest(
     } else if (err instanceof SyntaxError) {
       sendError(res, 400, "Invalid JSON");
     } else {
-      log.error({ err }, "remote route failed");
+      log.error({ err: safeErr(err) }, "remote route failed");
       sendError(res, 500, "Internal server error");
     }
   }

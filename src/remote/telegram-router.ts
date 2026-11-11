@@ -47,7 +47,7 @@ function parseAttachArg(arg: string): { target?: string; force: boolean } {
 
 /** A refusal because another chat holds the session tells how to take it over. */
 function withForceHint(message: string, target: string | undefined): string {
-  return /\bis attached to\b/.test(message) ? `${message} To take it over: /attach ${target ?? "<n>"} force` : message;
+  return /\bis attached to another chat\.$/.test(message) ? `${message} To take it over: /attach ${target ?? "<n>"} force` : message;
 }
 
 /** Text of `/help` (and `/start`). */

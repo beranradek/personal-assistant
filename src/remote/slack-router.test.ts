@@ -49,6 +49,15 @@ describe("slack router onMessage", () => {
     expect(bridge.forward).toHaveBeenCalledWith("slack:U1", "reply", "D1:6.6");
   });
 
+  it("enqueues an im message without metadata.userId and never reaches the bridge", () => {
+    const { router, enqueue, bridge } = setup(true);
+    const msg = dm("hello", { userId: undefined });
+    router.onMessage(msg);
+    expect(enqueue).toHaveBeenCalledWith(msg);
+    expect(bridge.isAttached).not.toHaveBeenCalled();
+    expect(bridge.forward).not.toHaveBeenCalled();
+  });
+
   it("never calls the bridge for non-DM channels, even when attached", () => {
     const { router, enqueue, bridge } = setup(true);
     for (const channelType of ["channel", "group", "mpim", undefined]) {
@@ -124,19 +133,24 @@ describe("slack router onCommand", () => {
 
   it("returns failures and adds a force hint for a held session", async () => {
     const { router, bridge } = setup();
-    bridge.control.mockResolvedValue({ ok: false, message: "Session 1 (p) is attached to Telegram.", sessions: [] });
-    expect(await router.onCommand(cmd("attach 1"))).toBe(
-      "Session 1 (p) is attached to Telegram. To take it over: /cc attach 1 force",
-    );
-    expect(await router.onCommand(cmd("attach 1 force"))).toBe("Session 1 (p) is attached to Telegram.");
+    bridge.control.mockResolvedValue({ ok: false, message: "p is attached to another chat.", sessions: [] });
+    expect(await router.onCommand(cmd("attach 1"))).toBe("p is attached to another chat. To take it over: /cc attach 1 force");
+    expect(await router.onCommand(cmd("attach 1 force"))).toBe("p is attached to another chat.");
     bridge.control.mockResolvedValue({ ok: false, message: "Not attached to a session.", sessions: [] });
     expect(await router.onCommand(cmd("detach"))).toBe("Not attached to a session.");
   });
 
+  it("does not repeat the force advice of a cross-channel refusal", async () => {
+    const { router, bridge } = setup();
+    const message = "Session 1 (p) is attached to Telegram. Run /detach in Telegram, or attach with force to take it over.";
+    bridge.control.mockResolvedValue({ ok: false, message, sessions: [] });
+    expect(await router.onCommand(cmd("attach 1"))).toBe(message);
+  });
+
   it("reports a control exception without throwing", async () => {
     const { router, bridge } = setup();
-    bridge.control.mockRejectedValueOnce(new Error("boom"));
-    expect(await router.onCommand(cmd("status"))).toBe("Command failed: boom");
+    bridge.control.mockRejectedValueOnce(new Error("boom with internal detail"));
+    expect(await router.onCommand(cmd("status"))).toBe("Command failed. Please try again.");
   });
 
   it("pa <text> enqueues to the DM with an empty thread", async () => {

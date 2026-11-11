@@ -1450,11 +1450,71 @@ describe("RemoteBridge", () => {
         bridge.stop();
       });
 
+      it("dropped for a message that is only queued (no poll waiting) on detach", async () => {
+        const { bridge, slack } = twoChannels();
+        startPoll(bridge);
+        await slackAttach(bridge);
+        bridge.forward(SLACK_CHAT, "taken by the waiting poll");
+        await flush();
+        bridge.forward(SLACK_CHAT, "queued only", "D1:5.6");
+        await bridge.control({ action: "detach", chatId: SLACK_CHAT });
+        expect(slack.setTurnStatus).toHaveBeenCalledWith("U1", "D1:5.6", "dropped");
+        bridge.stop();
+      });
+
+      it("a timed-out message confirmed late: failed first, then done when the turn ends", async () => {
+        const { bridge, slack } = twoChannels({ deliveryTimeoutMs: 1000 });
+        startPoll(bridge);
+        await slackAttach(bridge);
+        const { msgId } = bridge.forward(SLACK_CHAT, "slow", "D1:4.5") as { msgId: number };
+        await vi.advanceTimersByTimeAsync(1100);
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:4.5", "failed");
+        await bridge.handleHook("UserPromptSubmit", 100, { prompt: framePrompt(msgId) });
+        await bridge.handleHook("Stop", 100, { last_assistant_message: "late answer" });
+        expect(slack.sendText).toHaveBeenLastCalledWith("U1", "late answer");
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:4.5", "done");
+        bridge.stop();
+      });
+
+      it("failed when the final answer cannot be delivered", async () => {
+        const { bridge, slack } = twoChannels({}, { sendText: vi.fn(async () => Promise.reject(new Error("down"))) });
+        await slackTurn(bridge, "D1:2.1");
+        const stop = bridge.handleHook("Stop", 100, { last_assistant_message: "lost" });
+        await vi.advanceTimersByTimeAsync(120_000);
+        await stop;
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:2.1", "failed");
+        expect(slack.setTurnStatus.mock.calls.filter((c) => c[2] === "done")).toHaveLength(0);
+        bridge.stop();
+      });
+
+      it("failed after a partial send (some chunks were already sent)", async () => {
+        const partial = new RemotePartialSendError("part 2 of 2 failed", new Error("down"));
+        const { bridge, slack } = twoChannels({}, { sendText: vi.fn(async () => Promise.reject(partial)) });
+        await slackTurn(bridge, "D1:2.2");
+        slack.sendText.mockClear();
+        await bridge.handleHook("Stop", 100, { last_assistant_message: "half" });
+        expect(slack.sendText.mock.calls.filter((c) => c[1] === "half")).toHaveLength(1); // never retried
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:2.2", "failed");
+        bridge.stop();
+      });
+
+      it("done after a successful retry of the final answer", async () => {
+        const sendText = vi.fn(async (_id: string, _text: string): Promise<void> => undefined);
+        const { bridge, slack } = twoChannels({}, { sendText });
+        await slackTurn(bridge, "D1:2.3");
+        sendText.mockRejectedValueOnce(new Error("blip"));
+        const stop = bridge.handleHook("Stop", 100, { last_assistant_message: "second try" });
+        await vi.advanceTimersByTimeAsync(120_000);
+        await stop;
+        expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:2.3", "done");
+        bridge.stop();
+      });
+
       it("dropped for queued messages on idle detach", async () => {
         const { bridge, slack } = twoChannels({ idleDetachMinutes: 1, deliveryTimeoutMs: 600_000 });
         startPoll(bridge);
         await slackAttach(bridge);
-        // No poll waiter and no delivery: the message stays queued until the idle timer fires.
+        // The waiting poll takes the message, but it is never confirmed: the idle detach drops it.
         bridge.forward(SLACK_CHAT, "q", "D1:6.6");
         await vi.advanceTimersByTimeAsync(60_000 + 1);
         expect(slack.setTurnStatus).toHaveBeenLastCalledWith("U1", "D1:6.6", "dropped");

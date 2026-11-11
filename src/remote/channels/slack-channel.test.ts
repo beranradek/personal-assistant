@@ -16,6 +16,7 @@ function makeApi() {
 }
 
 const slackError = (error: string) => Object.assign(new Error(`An API error occurred: ${error}`), { data: { error } });
+const netError = (code = "ECONNRESET") => Object.assign(new Error("down"), { code });
 const longText = () => Array.from({ length: 400 }, (_, i) => `line number ${i}`).join("\n"); // 2 chunks
 
 describe("createSlackChannel", () => {
@@ -68,7 +69,7 @@ describe("createSlackChannel", () => {
     it("retries one chunk 3 times, waiting retryAfter on a rate limit", async () => {
       const api = makeApi();
       const limited = Object.assign(new Error("rl"), { code: "slack_webapi_rate_limited_error", retryAfter: 3 });
-      api.postMessage.mockRejectedValueOnce(limited).mockRejectedValueOnce(new Error("x"));
+      api.postMessage.mockRejectedValueOnce(limited).mockRejectedValueOnce(netError());
       const p = createSlackChannel(api, CONFIG).sendText("U1", "hi");
       await vi.advanceTimersByTimeAsync(2999);
       expect(api.postMessage).toHaveBeenCalledTimes(1);
@@ -80,7 +81,7 @@ describe("createSlackChannel", () => {
 
     it("rejects with the original error when the first chunk fails 3 times", async () => {
       const api = makeApi();
-      api.postMessage.mockRejectedValue(new Error("down"));
+      api.postMessage.mockRejectedValue(netError());
       const p = createSlackChannel(api, CONFIG).sendText("U1", "hi");
       const assertion = expect(p).rejects.toThrow("down");
       await vi.advanceTimersByTimeAsync(10_000);
@@ -88,9 +89,60 @@ describe("createSlackChannel", () => {
       expect(api.postMessage).toHaveBeenCalledTimes(3);
     });
 
+    describe("retry classes", () => {
+      async function run(err: unknown) {
+        const api = makeApi();
+        api.postMessage.mockRejectedValue(err);
+        const p = createSlackChannel(api, CONFIG).sendText("U1", "hi");
+        const assertion = expect(p).rejects.toBeDefined();
+        await vi.advanceTimersByTimeAsync(50_000);
+        await assertion;
+        return api.postMessage.mock.calls.length;
+      }
+
+      const PERMANENT = [
+        "invalid_auth",
+        "channel_not_found",
+        "not_in_channel",
+        "account_inactive",
+        "token_revoked",
+        "missing_scope",
+        "is_archived",
+        "msg_too_long",
+      ];
+      it.each(PERMANENT)("never retries the permanent Slack error %s", async (name) => {
+        expect(await run(slackError(name))).toBe(1);
+      });
+
+      it("never retries an unknown error", async () => {
+        expect(await run(new Error("weird"))).toBe(1);
+      });
+
+      it.each(["platform_error", "service_unavailable", "internal_error"])("retries the transient Slack error %s", async (name) => {
+        expect(await run(slackError(name))).toBe(3);
+      });
+
+      it("retries network errors and HTTP 5xx only", async () => {
+        expect(await run(netError("ECONNRESET"))).toBe(3);
+        expect(await run(Object.assign(new Error("req"), { code: "slack_webapi_request_error" }))).toBe(3);
+        expect(await run(Object.assign(new Error("http"), { code: "slack_webapi_http_error", statusCode: 503 }))).toBe(3);
+        expect(await run(Object.assign(new Error("http"), { code: "slack_webapi_http_error", statusCode: 404 }))).toBe(1);
+      });
+
+      it("retries a rate limit with retryAfter up to 3 tries", async () => {
+        const limited = Object.assign(new Error("rl"), { code: "slack_webapi_rate_limited_error", retryAfter: 1 });
+        expect(await run(limited)).toBe(3);
+      });
+
+      it("retries a timeout only once", async () => {
+        expect(await run(netError("ECONNABORTED"))).toBe(2);
+        expect(await run(new Error("timeout of 15000ms exceeded"))).toBe(2);
+      });
+    });
+
     it("throws RemotePartialSendError when a later chunk fails after others were sent", async () => {
       const api = makeApi();
-      api.postMessage.mockResolvedValueOnce("1.1").mockRejectedValue(new Error("down"));
+      api.postMessage.mockResolvedValueOnce("1.1").mockRejectedValue(netError());
       const p = createSlackChannel(api, CONFIG).sendText("U1", longText());
       const assertion = expect(p).rejects.toBeInstanceOf(RemotePartialSendError);
       await vi.advanceTimersByTimeAsync(20_000);

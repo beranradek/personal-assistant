@@ -1,7 +1,7 @@
 # Slack remote interactive session communication - Implementation plan
 
 **Date:** 2026-11-11
-**Status:** Plan (not implemented)
+**Status:** Code merged 2026-11-11 (05391ff). Manual E2E not run, so not marked Implemented.
 **Spec:** [spec.md](spec.md)
 
 **No token needed to implement (decided 2026-11-11).** Implementation, tests and review use NO Slack token, NO Slack workspace and NO

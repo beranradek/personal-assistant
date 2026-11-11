@@ -10,10 +10,21 @@ describe("toSlackMrkdwn", () => {
     expect(toSlackMrkdwn("- one\n* two\n  - **three**")).toBe("• one\n• two\n  • *three*");
   });
 
-  it("keeps code fences and inline code untouched", () => {
-    const fence = "```ts\nconst a = 1 < 2 && **x**;\n```";
-    expect(toSlackMrkdwn(fence)).toBe(fence);
-    expect(toSlackMrkdwn("use `a<b` and **b**")).toBe("use `a<b` and *b*");
+  it("keeps formatting in code fences and inline code but escapes entities", () => {
+    expect(toSlackMrkdwn("```ts\nconst a = 1 < 2 && **x**;\n```")).toBe("```ts\nconst a = 1 &lt; 2 &amp;&amp; **x**;\n```");
+    expect(toSlackMrkdwn("use `a<b` and **b**")).toBe("use `a&lt;b` and *b*");
+  });
+
+  it("escapes text after a fence closed on the same line and keeps later lines escaped", () => {
+    expect(toSlackMrkdwn("```a``` <!channel> <@U1>\n<!here>")).toBe("```a``` &lt;!channel&gt; &lt;@U1&gt;\n&lt;!here&gt;");
+  });
+
+  it("opens a fence on a line with text before the marker and toggles on an odd count only", () => {
+    expect(toSlackMrkdwn("x <b> ```y <i>\n<c>\n``` <d>\n<e>")).toBe("x &lt;b&gt; ```y &lt;i&gt;\n&lt;c&gt;\n``` &lt;d&gt;\n&lt;e&gt;");
+  });
+
+  it("closes an unbalanced fence and keeps <!channel> inside a fence inert", () => {
+    expect(toSlackMrkdwn("```\n<!channel>")).toBe("```\n&lt;!channel&gt;\n```");
   });
 
   it("escapes & < > outside code and makes mentions inert", () => {
@@ -63,6 +74,20 @@ describe("chunkSlackText", () => {
     const chunks = chunkSlackText(text);
     expect(chunks.every((c) => c.length <= SLACK_CHUNK_LIMIT)).toBe(true);
     expect(chunks.join("")).toBe(text);
+  });
+
+  it("does not cut inside an entity", () => {
+    const text = "a".repeat(5) + "&amp;" + "b".repeat(20);
+    const chunks = chunkSlackText(text, 12);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((c) => !/&[a-z]{0,3}$/.test(c))).toBe(true);
+  });
+
+  it("does not cut inside a link", () => {
+    const text = "aaaa bbbb c <https://x.io/a|my label> dddd eeee";
+    const chunks = chunkSlackText(text, 36);
+    expect(chunks.join("")).toBe(text);
+    for (const c of chunks) expect((c.match(/</g) ?? []).length).toBe((c.match(/>/g) ?? []).length);
   });
 
   it("closes a fence at the cut and reopens it in the next chunk", () => {

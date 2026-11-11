@@ -1,7 +1,7 @@
 # Slack remote interactive session communication - Specification
 
 **Date:** 2026-11-11
-**Status:** Plan (not implemented). Docs only. Nothing in `src/` is changed by this document.
+**Status:** Code merged 2026-11-11 (05391ff). Manual E2E not run, so not marked Implemented.
 **Related:** [Telegram remote session spec](../2026-11-08-remote-interactive-session-communication/spec.md),
 [Telegram remote session plan](../2026-11-08-remote-interactive-session-communication/implementation-plan.md),
 [Claude Code remote session guide](../../../settings/claude_code_remote_session.md),

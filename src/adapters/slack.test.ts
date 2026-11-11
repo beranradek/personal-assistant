@@ -630,6 +630,32 @@ describe("Slack Adapter", () => {
       expect(logged).not.toContain("xoxb-test");
       expect(logged).not.toContain("xapp-test");
     });
+
+    it("logs only a safe projection of errors that carry a token", async () => {
+      const token = "xoxb-FAKE-LEAK-0123456789";
+      const leaky = () =>
+        Object.assign(new Error(`failed with ${token}`), {
+          code: "slack_webapi_platform_error",
+          data: { error: "invalid_auth" },
+          original: { config: { headers: { Authorization: `Bearer ${token}` } } },
+        });
+      const onMessage = vi.fn(() => {
+        throw leaky();
+      });
+      await send(makeSlackMessageEvent(), onMessage);
+      const adapter = createSlackAdapter(makeConfig(), vi.fn());
+      mocks.chatPostMessage.mockRejectedValueOnce(leaky());
+      mocks.chatPostMessage.mockRejectedValueOnce(leaky());
+      mocks.chatUpdate.mockRejectedValueOnce(leaky());
+      await expect(adapter.sendResponse({ sourceId: "C1--1.1", text: "x" } as never)).rejects.toBeDefined();
+      await expect(adapter.createProcessingMessage("C1--1.1", "x")).rejects.toBeDefined();
+      await expect(adapter.updateProcessingMessage("C1--1.1", "1.1", "x")).rejects.toBeDefined();
+      const calls = Object.values(mockLog).flatMap((f) => f.mock.calls);
+      expect(calls.length).toBeGreaterThanOrEqual(4);
+      const logged = JSON.stringify(calls);
+      expect(logged).not.toContain("FAKE-LEAK");
+      expect(logged).toContain("invalid_auth");
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -673,6 +699,45 @@ describe("Slack Adapter", () => {
       await handler({ command: cmd(), ack });
       expect(ack).toHaveBeenCalledTimes(1);
       expect(ack).toHaveBeenCalledWith();
+    });
+
+    it("acks within the deadline for a slow handler and sends the late reply with respond", async () => {
+      vi.useFakeTimers();
+      try {
+        let finish!: (v: string) => void;
+        const onCommand = vi.fn(() => new Promise<string>((resolve) => (finish = resolve)));
+        const { handler } = setup(onCommand);
+        const ack = vi.fn();
+        const respond = vi.fn().mockResolvedValue(undefined);
+        const done = handler({ command: cmd(), ack, respond });
+        await vi.advanceTimersByTimeAsync(2400);
+        expect(ack).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(200);
+        expect(ack).toHaveBeenCalledTimes(1);
+        expect(ack).toHaveBeenCalledWith({ response_type: "ephemeral", text: "Working on it. The answer follows in your DM." });
+        finish("Attached.");
+        await done;
+        expect(ack).toHaveBeenCalledTimes(1);
+        expect(respond).toHaveBeenCalledWith({ response_type: "ephemeral", text: "Attached." });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("acks once when a slow handler fails late", async () => {
+      vi.useFakeTimers();
+      try {
+        let fail!: (e: Error) => void;
+        const { handler } = setup(vi.fn(() => new Promise<string>((_r, reject) => (fail = reject))));
+        const ack = vi.fn();
+        const done = handler({ command: cmd(), ack });
+        await vi.advanceTimersByTimeAsync(2600);
+        fail(new Error("late"));
+        await done;
+        expect(ack).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("acks a short ephemeral error when the handler throws", async () => {

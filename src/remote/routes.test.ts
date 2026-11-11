@@ -254,6 +254,16 @@ describe("remote routes", () => {
       expect(bridge.control).toHaveBeenLastCalledWith({ action: "attach", chatId: "telegram:42" });
     });
 
+    it("answers 400 for an unknown channel and does not reach the bridge", async () => {
+      for (const channel of ["slak", "bogus", 5]) {
+        const body = JSON.stringify({ action: "attach", channel });
+        const res = await request(port, "POST", "/remote/control", { headers: AUTH, body });
+        expect(res.status).toBe(400);
+        expect(res.body).toMatch(/Unknown channel/);
+      }
+      expect(bridge.control).not.toHaveBeenCalled();
+    });
+
     it("answers 400 with a text when the requested channel is not enabled", async () => {
       holder.defaultChatIds = { telegram: "telegram:42" };
       const res = await request(port, "POST", "/remote/control", { headers: AUTH, body: JSON.stringify({ action: "attach", channel: "slack" }) });

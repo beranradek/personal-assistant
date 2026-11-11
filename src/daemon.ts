@@ -443,12 +443,6 @@ export async function runDegradedDaemonStartupProbe(args: {
 // Exported startDaemon (testable without auto-running)
 // ---------------------------------------------------------------------------
 
-/**
- * Start the daemon. Initializes all subsystems, starts adapters, and begins
- * processing the message queue.
- *
- * @param configDir - Path to the directory containing settings.json
- */
 /** Warn when `settings.json` (holds the Slack tokens) is readable by group or world. Checks the file mode only. */
 async function warnIfSettingsReadable(configDir: string): Promise<void> {
   const file = path.join(configDir, "settings.json");
@@ -462,6 +456,12 @@ async function warnIfSettingsReadable(configDir: string): Promise<void> {
   }
 }
 
+/**
+ * Start the daemon. Initializes all subsystems, starts adapters, and begins
+ * processing the message queue.
+ *
+ * @param configDir - Path to the directory containing settings.json
+ */
 export async function startDaemon(configDir: string): Promise<void> {
   // 1. Load config & ensure workspace
   const config = loadConfig(configDir);

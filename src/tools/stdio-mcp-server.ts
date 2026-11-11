@@ -484,7 +484,12 @@ export function createStdioMcpServer(deps: StdioMcpServerDeps): Server {
         if (!control) return unavailable("Remote session control");
         const action = name === "remote_session_attach" ? "attach" : name === "remote_session_detach" ? "detach" : "status";
         const target = action === "attach" && typeof args?.target === "string" && args.target !== "" ? args.target : undefined;
-        const channel = REMOTE_CHANNEL_IDS.find((id) => id === args?.channel);
+        const rawChannel = args?.channel;
+        const channel = REMOTE_CHANNEL_IDS.find((id) => id === rawChannel);
+        if (!channel && rawChannel !== undefined && rawChannel !== null && rawChannel !== "") {
+          const error = `Unknown channel. Use one of: ${REMOTE_CHANNEL_IDS.join(", ")}.`;
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error }) }], isError: true };
+        }
         const request: RemoteControlRequest = {
           action,
           ...(target ? { target } : {}),

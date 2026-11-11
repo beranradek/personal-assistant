@@ -30,7 +30,14 @@ describe("createTelegramRouter", () => {
     forward = vi.fn(() => ({ accepted: true, msgId: 1 }));
     enqueue = vi.fn();
     send = vi.fn(async () => undefined);
-    const bridge = { control, forward, isAttached: isAttached, poll: vi.fn(), handleHook: vi.fn(), stop: vi.fn() } as unknown as RemoteBridge;
+    const bridge = {
+      control,
+      forward,
+      isAttached,
+      poll: vi.fn(),
+      handleHook: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as RemoteBridge;
     route = createTelegramRouter({ bridge, enqueue, send });
   });
 
@@ -279,6 +286,14 @@ describe("createTelegramRouter", () => {
     route(msg("/attach 9"));
     await tick();
     expect(send).toHaveBeenCalledWith(CHAT, "No session with index 9.");
+  });
+
+  it("does not repeat the force advice of a cross-channel refusal", async () => {
+    const message = "Session 2 (ws) is attached to Slack. Run /cc detach in Slack, or attach with force to take it over.";
+    control.mockResolvedValue({ ok: false, message, sessions: [] });
+    route(msg("/attach 2"));
+    await tick();
+    expect(send).toHaveBeenCalledWith(CHAT, message);
   });
 
   it("does not add the force hint when force was already given", async () => {

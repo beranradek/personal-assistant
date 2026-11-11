@@ -16,6 +16,7 @@
 
 import * as path from "node:path";
 import { createLogger } from "../core/logger.js";
+import { safeErr } from "../core/log-error.js";
 import type { ClaudeCodeRemoteConfig } from "../core/types.js";
 import type { StreamEvent } from "../backends/interface.js";
 import { makeChatKey, parseChatKey } from "./chat-key.js";
@@ -230,7 +231,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     }
     fireAndForget(
       () => target.channel.sendText(target.id, text),
-      (err) => log.error({ err, chatId: chatKey }, "remote bridge: channel send failed"),
+      (err) => log.error({ err: safeErr(err), chatId: chatKey }, "remote bridge: channel send failed"),
     );
   }
 
@@ -242,7 +243,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     for (const ref of refs) {
       fireAndForget(
         () => set.call(target.channel, target.id, ref, status),
-        (err) => log.warn({ err, chatId: chatKey, status }, "remote bridge: turn status failed"),
+        (err) => log.warn({ err: safeErr(err), chatId: chatKey, status }, "remote bridge: turn status failed"),
       );
     }
   }
@@ -503,22 +504,22 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
 
   /**
    * Send the final answer. Up to 3 tries, then a best effort notice. A `RemotePartialSendError` (some chunks already sent)
-   * is never retried: a retry would duplicate text.
+   * is never retried: a retry would duplicate text. Resolves to true only when the full answer was delivered.
    */
-  async function sendFinal(s: Session, chatKey: string, text: string): Promise<void> {
+  async function sendFinal(s: Session, chatKey: string, text: string): Promise<boolean> {
     const target = channelOf(chatKey);
     if (!target) {
       log.error({ pid: s.pid, chatId: chatKey }, "remote bridge: no channel for the final answer");
-      return;
+      return false;
     }
     const { channel, id } = target;
     const attempts = FINAL_SEND_RETRY_DELAYS_MS.length + 1;
     for (let i = 0; i < attempts; i++) {
       try {
         await channel.sendText(id, text);
-        return;
+        return true;
       } catch (err) {
-        log.error({ err, pid: s.pid, attempt: i + 1 }, "remote bridge: final answer send failed");
+        log.error({ err: safeErr(err), pid: s.pid, attempt: i + 1 }, "remote bridge: final answer send failed");
         if (err instanceof RemotePartialSendError || i === attempts - 1 || stopped) break;
         await sleep(channel.retryAfterMs(err) ?? FINAL_SEND_RETRY_DELAYS_MS[i]!);
         if (stopped) break;
@@ -529,6 +530,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     } catch {
       // Best effort only.
     }
+    return false;
   }
 
   async function onStop(s: Session, payload: Record<string, unknown>): Promise<void> {
@@ -543,13 +545,13 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
           await turn.accumulator.stop();
           if (final) await turn.accumulator.trimSuffixFromProcessingMessage(final);
         } catch (err) {
-          log.error({ err, pid: s.pid }, "remote bridge: progress finalize failed");
+          log.error({ err: safeErr(err), pid: s.pid }, "remote bridge: progress finalize failed");
         }
       }
       const text = final || "(The session finished without a text answer.)";
-      const sending = sendFinal(s, turn.chatId, deps.redact ? deps.redact(text) : text);
-      setStatus(turn.chatId, turn.refs, "done"); // not awaited: after the send started, before it ends
-      await sending;
+      const delivered = await sendFinal(s, turn.chatId, deps.redact ? deps.redact(text) : text);
+      // Not awaited (never delays the turn): the status shows whether the answer was delivered.
+      setStatus(turn.chatId, turn.refs, delivered ? "done" : "failed");
     } finally {
       if (s.turn === turn) s.turn = undefined;
     }
@@ -619,7 +621,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
           return;
       }
     } catch (err) {
-      log.error({ err, event, pid }, "remote bridge: hook handling failed");
+      log.error({ err: safeErr(err), event, pid }, "remote bridge: hook handling failed");
     }
   }
 
@@ -754,7 +756,8 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
     if (list.length === 0) return "No sessions registered.";
     return list
       .map((i) => {
-        const mark = i.attachedChatId === undefined ? "" : i.attachedChatId === chatId ? " [attached to this chat]" : attachedMark(i, chatId);
+        const mark =
+          i.attachedChatId === undefined ? "" : i.attachedChatId === chatId ? " [attached to this chat]" : attachedMark(i, chatId);
         return `${i.index}. ${i.name} (${i.cwd}, pid ${i.pid})${mark}`;
       })
       .join("\n");
@@ -849,7 +852,7 @@ export function createRemoteBridge(deps: RemoteBridgeDeps): RemoteBridge {
       try {
         alive = isPidAlive(s.pid);
       } catch (err) {
-        log.warn({ err, pid: s.pid }, "remote bridge: pid check failed");
+        log.warn({ err: safeErr(err), pid: s.pid }, "remote bridge: pid check failed");
       }
       if (!alive) removeSession(s, "process is gone");
     }

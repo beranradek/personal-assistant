@@ -45,6 +45,46 @@ function retryAfterMs(err: unknown): number | undefined {
   return typeof e.retryAfter === "number" && e.retryAfter > 0 ? Math.min(e.retryAfter * 1000, MAX_RETRY_AFTER_MS) : undefined;
 }
 
+/** Slack API error names that mean "try again later" (all other `err.data.error` names are permanent: auth, scope, channel...). */
+const TRANSIENT_SLACK_ERRORS = new Set([
+  "platform_error",
+  "service_unavailable",
+  "internal_error",
+  "fatal_error",
+  "request_timeout",
+  "ratelimited",
+  "rate_limited",
+]);
+/** Node/axios network error codes: the request did not complete, so a retry is safe. */
+const NETWORK_ERROR_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "EPIPE", "EAI_AGAIN", "ENOTFOUND", "ENETUNREACH"]);
+const TIMEOUT_ERROR_CODES = new Set(["ECONNABORTED", "ETIMEDOUT", "ESOCKETTIMEDOUT"]);
+
+type ErrorClass = "rate_limit" | "timeout" | "transient" | "permanent";
+
+/**
+ * Classify a Slack Web API error for the per-chunk retry. Permanent: any Slack error name that is not in the transient list
+ * (`invalid_auth`, `channel_not_found`, `not_in_channel`, `token_revoked`, `missing_scope`, `is_archived`, `msg_too_long`...)
+ * and every unknown error. A timeout may have delivered the message already, so the caller retries it only once.
+ */
+function classifyError(err: unknown): ErrorClass {
+  if (retryAfterMs(err) !== undefined) return "rate_limit";
+  const e = err as {
+    code?: unknown;
+    statusCode?: unknown;
+    data?: { error?: unknown };
+    original?: { code?: unknown; response?: { status?: unknown } };
+    message?: unknown;
+  } | null;
+  const named = e?.data?.error;
+  if (typeof named === "string") return TRANSIENT_SLACK_ERRORS.has(named) ? "transient" : "permanent";
+  const codes = [e?.code, e?.original?.code].filter((c): c is string => typeof c === "string");
+  if (codes.some((c) => TIMEOUT_ERROR_CODES.has(c)) || /timeout|timed out/i.test(String(e?.message ?? ""))) return "timeout";
+  if (codes.some((c) => NETWORK_ERROR_CODES.has(c) || c === "slack_webapi_request_error")) return "transient";
+  const status = e?.statusCode ?? e?.original?.response?.status;
+  if (typeof status === "number" && status >= 500) return "transient";
+  return "permanent";
+}
+
 /** Slack error name (`err.data.error`) or a redacted message, safe to log (no token). */
 function errorName(err: unknown): string {
   const named = (err as { data?: { error?: unknown } } | null)?.data?.error;
@@ -71,12 +111,16 @@ export function createSlackChannel(
   }
 
   async function postChunk(dm: string, chunk: string): Promise<void> {
+    let timeouts = 0;
     for (let attempt = 1; ; attempt++) {
       try {
         await api.postMessage(dm, chunk, config.format === "plain" ? { mrkdwn: false } : undefined);
         return;
       } catch (err) {
-        if (attempt >= CHUNK_TRIES) throw err;
+        const kind = classifyError(err);
+        if (kind === "timeout") timeouts++;
+        // A timed-out post may be delivered already: retry it once only.
+        if (attempt >= CHUNK_TRIES || kind === "permanent" || timeouts > 1) throw err;
         await sleep(retryAfterMs(err) ?? CHUNK_PACING_MS);
       }
     }

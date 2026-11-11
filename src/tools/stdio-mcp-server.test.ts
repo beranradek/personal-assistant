@@ -170,7 +170,7 @@ describe("createStdioMcpServer", () => {
       await callTool("remote_session_attach");
       await callTool("remote_session_detach", { target: "ignored" });
       await callTool("remote_session_attach", { target: "1", channel: "slack", force: true });
-      await callTool("remote_session_attach", { channel: "bogus", force: "yes" });
+      await callTool("remote_session_attach", { force: "yes" });
       await callTool("remote_session_status", { channel: "slack", force: true });
       const result = await callTool("remote_session_status");
 
@@ -184,6 +184,19 @@ describe("createStdioMcpServer", () => {
         { action: "status" },
       ]);
       expect(JSON.parse(result.content[0].text)).toEqual(response);
+    });
+
+    it("rejects an unknown channel with a tool error and never calls the control", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      deps = makeDeps({ handleRemoteControl: control });
+      handlers.clear();
+      createStdioMcpServer(deps);
+      for (const name of ["remote_session_attach", "remote_session_detach", "remote_session_status"]) {
+        const result = await callTool(name, { channel: "slak" });
+        expect(result.isError).toBe(true);
+        expect(JSON.parse(result.content[0].text).error).toMatch(/Unknown channel/);
+      }
+      expect(control).not.toHaveBeenCalled();
     });
 
     it("turns a control failure into an MCP error", async () => {

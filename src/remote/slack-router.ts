@@ -8,6 +8,7 @@
  */
 import type { AdapterMessage } from "../core/types.js";
 import { createLogger } from "../core/logger.js";
+import { safeErr } from "../core/log-error.js";
 import { createAdapterMessage } from "../adapters/types.js";
 import { makeChatKey } from "./chat-key.js";
 import { decodeSlackInbound } from "./channels/slack-format.js";
@@ -63,7 +64,7 @@ export function createSlackRouter(deps: SlackRouterDeps): SlackRouter {
       log.warn({ userId }, "router: no send function, notice dropped");
       return;
     }
-    deps.send(userId, text).catch((err) => log.error({ err: String(err), userId }, "router: slack notice failed"));
+    deps.send(userId, text).catch((err) => log.error({ err: safeErr(err), userId }, "router: slack notice failed"));
   }
 
   async function runControl(
@@ -81,11 +82,11 @@ export function createSlackRouter(deps: SlackRouterDeps): SlackRouter {
       });
       if (action === "status") return res.message;
       if (res.ok) return undefined; // the bridge confirms in the DM
-      const hint = action === "attach" && !force && /\bis attached to\b/.test(res.message);
+      const hint = action === "attach" && !force && /\bis attached to another chat\.$/.test(res.message);
       return hint ? `${res.message} To take it over: /cc attach ${target ?? "<n>"} force` : res.message;
     } catch (err) {
-      log.error({ err: String(err), action }, "router: control failed");
-      return `Command failed: ${err instanceof Error ? err.message : String(err)}`;
+      log.error({ err: safeErr(err), action }, "router: control failed");
+      return "Command failed. Please try again.";
     }
   }
 

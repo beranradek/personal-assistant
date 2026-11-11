@@ -11,6 +11,7 @@
 
 import { App } from "@slack/bolt";
 import { createLogger } from "../core/logger.js";
+import { safeErr } from "../core/log-error.js";
 import { createAdapterMessage } from "./types.js";
 import type { Adapter, AdapterMessage } from "./types.js";
 
@@ -29,6 +30,10 @@ const DEDUPE_MAX_ENTRIES = 1000;
 
 /** Short ephemeral text when the /cc handler throws (no internals leaked). */
 const COMMAND_ERROR_TEXT = "Command failed. Please try again.";
+
+/** Slack needs the ack within 3 s: after this deadline the command is acked as slow. */
+const COMMAND_ACK_DEADLINE_MS = 2500;
+const COMMAND_SLOW_TEXT = "Working on it. The answer follows in your DM.";
 
 // ---------------------------------------------------------------------------
 // Config type (matches SlackConfigSchema fields we need)
@@ -206,31 +211,47 @@ export function createSlackAdapter(
     try {
       onMessage(adapterMessage);
     } catch (err) {
-      log.error({ err }, "onMessage callback failed");
+      log.error({ err: safeErr(err) }, "onMessage callback failed");
     }
   });
 
   // /cc slash command: allowlist first, ack exactly once within the handler (Slack requires ack within 3 s)
-  app.command("/cc", async ({ command, ack }) => {
+  app.command("/cc", async ({ command, ack, respond }) => {
     if (!isAllowed(command.user_id)) {
       log.warn({ userId: command.user_id }, "unauthorized user, ignoring command");
       await ack();
       return;
     }
-    let reply: string | void | undefined;
-    try {
-      reply = await options.onCommand?.({
-        userId: command.user_id,
-        text: command.text ?? "",
-        channelId: command.channel_id,
-      });
-    } catch (err) {
-      log.error({ err }, "command handler failed");
-      await ack({ response_type: "ephemeral", text: COMMAND_ERROR_TEXT });
+    const ephemeral = (text: string) => ({ response_type: "ephemeral" as const, text });
+    const handled: Promise<{ reply?: string | void } | { failed: true }> = Promise.resolve()
+      .then(() => options.onCommand?.({ userId: command.user_id, text: command.text ?? "", channelId: command.channel_id }))
+      .then(
+        (reply) => ({ reply }),
+        (err) => {
+          log.error({ err: safeErr(err) }, "command handler failed");
+          return { failed: true as const };
+        },
+      );
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"slow">((resolve) => {
+      timer = setTimeout(() => resolve("slow"), COMMAND_ACK_DEADLINE_MS);
+    });
+    const first = await Promise.race([handled, deadline]);
+    clearTimeout(timer);
+    if (first === "slow") {
+      // Slack needs the ack within 3 s: ack now, send the late result (if any) with `respond`.
+      await ack(ephemeral(COMMAND_SLOW_TEXT));
+      const late = await handled;
+      const text = "failed" in late ? COMMAND_ERROR_TEXT : late.reply;
+      if (text && respond) {
+        await respond(ephemeral(text)).catch((err) => log.warn({ err: safeErr(err) }, "late command reply failed"));
+      }
       return;
     }
-    if (reply) {
-      await ack({ response_type: "ephemeral", text: reply });
+    if ("failed" in first) {
+      await ack(ephemeral(COMMAND_ERROR_TEXT));
+    } else if (first.reply) {
+      await ack(ephemeral(first.reply));
     } else {
       await ack();
     }
@@ -333,7 +354,7 @@ export function createSlackAdapter(
           ...(threadTs ? { thread_ts: threadTs } : {}),
         });
       } catch (err) {
-        log.error({ channelId, threadTs, err }, "failed to send message");
+        log.error({ channelId, threadTs, err: safeErr(err) }, "failed to send message");
         throw err;
       }
     },
@@ -353,7 +374,7 @@ export function createSlackAdapter(
         });
         return result.ts as string;
       } catch (err) {
-        log.error({ channelId, threadTs, err }, "failed to create processing message");
+        log.error({ channelId, threadTs, err: safeErr(err) }, "failed to create processing message");
         throw err;
       }
     },
@@ -373,7 +394,7 @@ export function createSlackAdapter(
           text,
         });
       } catch (err) {
-        log.error({ channelId, messageId, err }, "failed to update processing message");
+        log.error({ channelId, messageId, err: safeErr(err) }, "failed to update processing message");
         throw err;
       }
     },

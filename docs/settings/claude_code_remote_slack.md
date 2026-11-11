@@ -139,6 +139,16 @@ Notes:
 Answers to `/cc` are ephemeral: only you see them. Exceptions: a successful `attach` and `detach` post their notice in the DM.
 Plain DM text goes to the session when attached, and to the PA agent (in a thread, as before) when not attached.
 
+### CLI and MCP
+
+The same control is available from the terminal and from the agent tools. A `channel` that is not `telegram` or `slack` is refused
+(CLI error, HTTP 400, MCP tool error).
+
+- CLI: `pa remote attach [target] [--channel slack] [--force]`, `pa remote status`, `pa remote detach`. `--channel` takes `slack` or
+  `telegram`. Without it, the default channel of `claudeCode.remote` is used.
+- MCP tools: `remote_session_attach` (`target`, `channel`, `force`), `remote_session_detach` (`channel`), `remote_session_status`
+  (`channel`). `force` takes over a session that another chat holds.
+
 ## What you see
 
 - `eyes` on your DM: the message is accepted.
@@ -192,7 +202,7 @@ Tested (automated tests, FAKE tokens such as `xoxb-test`, mocked `@slack/bolt` a
 
 - Chat keys, bridge, Slack router and channel, mrkdwn conversion and chunking, DM-only and allowlist checks.
 - Daemon wiring, control routes, MCP tools and CLI with the channel and `force`.
-- Token redaction. Telegram tests stay green and unchanged.
+- Token redaction. The Telegram tests were adapted to chat keys (`telegram:<id>`) and pass.
 
 NOT tested (needs a real app, the owner does it):
 
@@ -207,7 +217,8 @@ Setup: the app (way A or B), tokens in `settings.json`, `pa init --claude-remote
 
 0. App check (replaces the removed spike): Slack accepts the `/cc` command (with a placeholder Request URL if it asks for one);
    an empty `/cc` reply does not show an error; Socket Mode stays on; another app owning `/cc` is not installed. If `/cc` is refused
-   or clashes, set the fallback name in the app and in the adapter config (`/cmp` or `/companion`).
+   or clashes, a rename needs a code change in `src/adapters/slack.ts` (the name `/cc` is hard-coded, there is no config key) plus
+   the app manifest. The fallback names `/cmp` and `/companion` are not implemented.
 1. Daemon log shows "Slack adapter started" and "Remote session bridge ready". Token file `remote-token` exists.
 2. In Slack DM with the app: `/cc status` lists the session (ephemeral, only you see it). `/cc help` shows help.
 3. `/cc attach`: the DM gets "Attached to ...". No duplicate ephemeral text.

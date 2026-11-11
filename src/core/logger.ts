@@ -15,6 +15,11 @@ export const REDACT_PATHS = [
   "*.api_key",
   "*.authorization",
   "*.Authorization",
+  // Slack/axios errors carry the request config deeper than one level (`err.original.config.headers.Authorization`).
+  "err.config.headers.*",
+  "err.original.config.headers.*",
+  "err.original.config.data",
+  "err.request.headers.*",
 ];
 
 export const logger = pino({
