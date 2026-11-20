@@ -85,7 +85,7 @@ All `claudeCode.remote` keys:
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `enabled` | `false` | Turns remote mode on. The daemon then writes the token file and enables the `/remote/*` routes. |
-| `idleDetachMinutes` | `60` | Detach the session after this many minutes without Telegram messages. |
+| `idleDetachMinutes` | `480` | Detach the session after this many minutes without Telegram messages. |
 | `deliveryTimeoutMs` | `20000` | Time to wait for a poll and for a reaction of the session. See "Delivery" below. |
 | `progress` | `true` | Show progress (tool calls and text) in one edited Telegram message. |
 | `maxMessageChars` | `4000` | Longest Telegram message sent to the session. Longer text is cut. |
@@ -266,7 +266,7 @@ For the Slack channel (DM only, `allowedUserIds`, `/cc`) see the Security chapte
 | `/status` shows no sessions | `pa-remote-hook` is not on `PATH` of the session. Run `command -v pa-remote-hook`. |
 | `409 Conflict` in the daemon log | Another daemon uses the same bot token. Use a separate bot for the laptop. |
 | "Not delivered to the session" | The session did not react in time. Check that the session runs and uses the hooks. Try again. |
-| "The session is not listening right now" | No listener polls. Send a prompt in the terminal. The message stays queued. |
+| "The session is not listening right now" | No listener polls. Send a prompt in the terminal. The message stays queued. Old hook files have no `timeout`: Claude Code kills an `asyncRewake` hook after 600 s. Run `pa init --claude-remote` (adds `timeout: 86400`) and restart `claude`. |
 | Hooks do nothing | `claudeCode.remote.enabled` is false, or the daemon is not running. |
 | Hooks do nothing, or `pa-remote-hook: command not found` | The new bin is missing. Run `npm run build` and `npm link`. |
 | After a daemon restart nothing arrives | The attach state is in memory only. Send `/status`, then `/attach` again. |

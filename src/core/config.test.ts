@@ -330,7 +330,7 @@ describe("config", () => {
     it("is disabled with defaults when the section is absent", () => {
       expect(load({}).claudeCode.remote).toEqual({
         enabled: false,
-        idleDetachMinutes: 60,
+        idleDetachMinutes: 480,
         deliveryTimeoutMs: 20000,
         progress: true,
         maxMessageChars: 4000,

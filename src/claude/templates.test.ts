@@ -225,14 +225,18 @@ describe("installClaudeRemoteConfig", () => {
     const all = (event: string) => merged.hooks[event].flatMap((g: { hooks: unknown[] }) => g.hooks);
     // Edited command kept, flag added in place, no second hook.
     expect(all("SessionStart")).toEqual([
-      { type: "command", command: "/opt/bin/pa-remote-hook listen-start --x", async: true, asyncRewake: true },
+      { type: "command", command: "/opt/bin/pa-remote-hook listen-start --x", async: true, asyncRewake: true, timeout: 86400 },
     ]);
     // Identical old command is rewritten to the new bin.
-    expect(all("Stop")).toEqual([{ type: "command", command: "pa-remote-hook listen-stop", async: true, asyncRewake: true }]);
+    expect(all("Stop")).toEqual([
+      { type: "command", command: "pa-remote-hook listen-stop", async: true, asyncRewake: true, timeout: 86400 },
+    ]);
     // Edited old command is kept as it is.
     expect(all("PreToolUse")).toEqual([{ type: "command", command: "pa claude-remote-hook PreToolUse --edited", async: true }]);
     // The old plain StopFailure hook becomes listen-fail (no duplicate post).
-    expect(all("StopFailure")).toEqual([{ type: "command", command: "pa-remote-hook listen-fail", async: true, asyncRewake: true }]);
+    expect(all("StopFailure")).toEqual([
+      { type: "command", command: "pa-remote-hook listen-fail", async: true, asyncRewake: true, timeout: 86400 },
+    ]);
     // An edited old plain hook is kept and no listen-prompt is added next to it.
     expect(all("UserPromptSubmit")).toEqual([{ type: "command", command: "my-wrapper pa-remote-hook UserPromptSubmit --keep" }]);
     const again = await installClaudeRemoteConfig(workspace);

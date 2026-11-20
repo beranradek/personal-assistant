@@ -157,7 +157,7 @@ The same control is available from the terminal and from the agent tools. A `cha
 - A long answer is split into chunks of at most 3,500 characters. The chunks arrive in order. A code fence is closed and
   reopened at a cut.
 - A prompt typed in the terminal while attached is a terminal turn. Nothing goes to Slack.
-- Idle detach (`idleDetachMinutes`, default 60) and session end send a notice. Queued messages are dropped.
+- Idle detach (`idleDetachMinutes`, default 480) and session end send a notice. Queued messages are dropped.
 
 ## One chat per session
 

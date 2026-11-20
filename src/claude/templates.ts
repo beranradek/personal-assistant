@@ -140,7 +140,7 @@ function hookObjectsOf(groups: unknown[]): JsonRecord[] {
   return result;
 }
 
-/** Set `async` and `asyncRewake` where the template has them and the existing hook does not. Returns true on a change. */
+/** Set `async`, `asyncRewake` and a longer `timeout` where the template has them and the existing hook does not. Returns true on a change. */
 function upgradeFlags(existing: JsonRecord, template: JsonRecord): boolean {
   let changed = false;
   for (const flag of ["async", "asyncRewake"]) {
@@ -148,6 +148,12 @@ function upgradeFlags(existing: JsonRecord, template: JsonRecord): boolean {
       existing[flag] = true;
       changed = true;
     }
+  }
+  // asyncRewake hooks are killed by Claude Code after `timeout` (default 600 s). The listener must live much longer.
+  const wanted = template["timeout"];
+  if (typeof wanted === "number" && (typeof existing["timeout"] !== "number" || existing["timeout"] < wanted)) {
+    existing["timeout"] = wanted;
+    changed = true;
   }
   return changed;
 }

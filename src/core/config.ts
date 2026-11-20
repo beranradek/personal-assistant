@@ -170,7 +170,7 @@ export const DEFAULTS: Config = {
   claudeCode: {
     remote: {
       enabled: false,
-      idleDetachMinutes: 60,
+      idleDetachMinutes: 480,
       deliveryTimeoutMs: 20_000,
       progress: true,
       maxMessageChars: 4000,

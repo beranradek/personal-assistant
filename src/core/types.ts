@@ -369,7 +369,7 @@ export const ClaudeCodeRemoteSlackConfigSchema = z.object({
 export const ClaudeCodeRemoteConfigSchema = z.object({
   enabled: z.boolean().default(false),
   /** Detach the session after this many minutes without Telegram traffic. */
-  idleDetachMinutes: z.number().int().positive().default(60),
+  idleDetachMinutes: z.number().int().positive().default(480),
   /** A forwarded message not taken by the session within this time gets a "not delivered" notice. */
   deliveryTimeoutMs: z.number().int().positive().default(20_000),
   /** Show progress (tool calls, assistant text) in one edited Telegram message. */
