@@ -172,3 +172,28 @@ describe("slack router onCommand", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 });
+
+describe("slack router new and exit", () => {
+  it("sends new with the name and returns the answer as the reply", async () => {
+    const { router, bridge } = setup();
+    bridge.control.mockResolvedValueOnce({ ok: true, message: "Started pa-cc-1", sessions: [] });
+    expect(await router.onCommand({ userId: "U1", text: "new fix bug" })).toBe("Started pa-cc-1");
+    expect(bridge.control).toHaveBeenCalledWith({ action: "new", chatId: "slack:U1", label: "fix bug" });
+  });
+
+  it("sends exit with the target and shows a refusal", async () => {
+    const { router, bridge } = setup();
+    bridge.control.mockResolvedValueOnce({ ok: false, message: "No session was started by new.", sessions: [] });
+    expect(await router.onCommand({ userId: "U1", text: "exit 2" })).toBe("No session was started by new.");
+    expect(bridge.control).toHaveBeenCalledWith({ action: "exit", chatId: "slack:U1", target: "2" });
+    await router.onCommand({ userId: "U1", text: "exit" });
+    expect(bridge.control).toHaveBeenLastCalledWith({ action: "exit", chatId: "slack:U1" });
+  });
+
+  it("lists the commands in help", async () => {
+    const { router } = setup();
+    const help = await router.onCommand({ userId: "U1", text: "help" });
+    expect(help).toContain("/cc new");
+    expect(help).toContain("/cc exit");
+  });
+});

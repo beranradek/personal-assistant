@@ -81,7 +81,7 @@ Commands:
   claude-context        Print safe SessionStart context for Claude Code
   claude-security-hook  Apply PA's PreToolUse security policy for Claude Code
   claude-remote-hook    Hook command for remote sessions (used by Claude Code hooks)
-  remote <sub>          Remote session control: attach [target] [--channel slack|telegram] [--force] | detach | status
+  remote <sub>          Remote session control: attach [target] [--channel slack|telegram] [--force] | detach | status | new [name] | exit [target]
   claude                Start Claude Code in workspace-restricted companion mode
   agents-view           tmux view: assistant left, agent sessions right (writable)
                           [--assistant <cmd>] [--assistant-cwd <dir>] [-i|--interactive-shell] [--read-only]
@@ -169,7 +169,9 @@ export function formatRemoteControlResponse(response: RemoteControlResponse): st
   return lines.join("\n");
 }
 
-const REMOTE_USAGE = "Usage: pa remote attach [target] [--channel slack|telegram] [--force] | detach [--channel ...] | status [--channel ...]";
+const REMOTE_USAGE =
+  "Usage: pa remote attach [target] [--channel slack|telegram] [--force] | detach [--channel ...] | status [--channel ...] | " +
+  "new [name] [--channel ...] | exit [target]";
 
 /** Parse `[target] [--channel <id>] [--force]` (flags in any position). Returns undefined for invalid input. */
 function parseRemoteArgs(args: string[]): { target?: string; channel?: RemoteChannelId; force: boolean } | undefined {
@@ -198,17 +200,24 @@ export async function runRemoteCommand(
   args: string[],
   control: RemoteControlFn,
   out: { log: (text: string) => void; error: (text: string) => void } = console,
+  isTty: boolean = Boolean(process.stdin.isTTY),
 ): Promise<number> {
   const action = args[0];
   const parsed = parseRemoteArgs(args.slice(1));
-  if ((action !== "attach" && action !== "detach" && action !== "status") || !parsed) {
+  if ((action !== "attach" && action !== "detach" && action !== "status" && action !== "new" && action !== "exit") || !parsed) {
     out.error(REMOTE_USAGE);
+    return 1;
+  }
+  // Starting and ending sessions is for a person at a terminal: the assistant's Bash tool has no TTY (same rule as agents-view).
+  if ((action === "new" || action === "exit") && !isTty) {
+    out.error(`remote ${action}: needs an interactive terminal`);
     return 1;
   }
   const request: RemoteControlRequest = {
     action,
     // The target is for attach; detach and status ignore it (and `--force` only applies to attach).
-    ...(action === "attach" && parsed.target ? { target: parsed.target } : {}),
+    ...((action === "attach" || action === "exit") && parsed.target ? { target: parsed.target } : {}),
+    ...(action === "new" && parsed.target ? { label: parsed.target } : {}),
     ...(parsed.channel ? { channel: parsed.channel } : {}),
     ...(action === "attach" && parsed.force ? { force: true } : {}),
   };

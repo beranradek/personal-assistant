@@ -135,7 +135,7 @@ async function handleHook(req: http.IncomingMessage, res: http.ServerResponse, b
   });
 }
 
-const CONTROL_ACTIONS: readonly string[] = ["attach", "detach", "status"] satisfies RemoteControlAction[];
+const CONTROL_ACTIONS: readonly string[] = ["attach", "detach", "status", "new", "exit"] satisfies RemoteControlAction[];
 
 async function handleControl(
   req: http.IncomingMessage,
@@ -150,6 +150,7 @@ async function handleControl(
   }
   const rawTarget = body["target"];
   const target = typeof rawTarget === "string" || typeof rawTarget === "number" ? String(rawTarget) : undefined;
+  const label = typeof body["label"] === "string" ? body["label"].slice(0, 200) : undefined;
   const chatId = typeof body["chatId"] === "string" && body["chatId"] !== "" ? body["chatId"] : undefined;
   const rawChannel = body["channel"];
   const channel = REMOTE_CHANNEL_IDS.find((id) => id === rawChannel) as RemoteChannelId | undefined;
@@ -164,6 +165,7 @@ async function handleControl(
       ...(channel ? { channel } : {}),
       ...(body["force"] === true ? { force: true } : {}),
       ...(target ? { target } : {}),
+      ...(label ? { label } : {}),
     },
     holder,
   );

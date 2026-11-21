@@ -2,7 +2,7 @@
  * Slack router for remote session mode (see docs/plans/completed/2026-11-11-slack-remote-session-communication/spec.md 5.5).
  *
  * `onMessage` wraps the Slack adapter message callback. ONLY direct messages (`channelType === "im"`) can reach the bridge;
- * channel messages always take the old queue path. `onCommand` handles `/cc [help|status|attach [n|name] [force]|detach|pa <text>]`
+ * channel messages always take the old queue path. `onCommand` handles `/cc [help|status|attach [n|name] [force]|detach|new [name]|exit [n|name]|pa <text>]`
  * and returns the ephemeral answer text (empty on success: the bridge confirms attach and detach in the DM itself).
  * The bridge gets the chat key `slack:<userId>`. The adapter checks the sender allowlist before it calls the router.
  */
@@ -37,6 +37,8 @@ export function slackHelpText(attached: boolean): string {
     "/cc status - list live sessions",
     "/cc attach [n|name] [force] - attach this chat to a session",
     "/cc detach - detach from the session",
+    "/cc new [name] - start a new Claude Code session and attach to it",
+    "/cc exit [n|name] - end a session that /cc new started",
     "/cc pa <text> - send text to the PA assistant",
     "/cc help - this help",
     "",
@@ -69,9 +71,10 @@ export function createSlackRouter(deps: SlackRouterDeps): SlackRouter {
 
   async function runControl(
     userId: string,
-    action: "attach" | "detach" | "status",
+    action: "attach" | "detach" | "status" | "new" | "exit",
     target?: string,
     force?: boolean,
+    label?: string,
   ): Promise<string | undefined> {
     try {
       const res = await bridge.control({
@@ -79,8 +82,9 @@ export function createSlackRouter(deps: SlackRouterDeps): SlackRouter {
         chatId: makeChatKey("slack", userId),
         ...(target ? { target } : {}),
         ...(force ? { force } : {}),
+        ...(label ? { label } : {}),
       });
-      if (action === "status") return res.message;
+      if (action === "status" || action === "new" || action === "exit") return res.message;
       if (res.ok) return undefined; // the bridge confirms in the DM
       const hint = action === "attach" && !force && /\bis attached to another chat\.$/.test(res.message);
       return hint ? `${res.message} To take it over: /cc attach ${target ?? "<n>"} force` : res.message;
@@ -105,6 +109,10 @@ export function createSlackRouter(deps: SlackRouterDeps): SlackRouter {
       }
       case "detach":
         return runControl(userId, "detach");
+      case "new":
+        return runControl(userId, "new", undefined, false, arg);
+      case "exit":
+        return runControl(userId, "exit", arg || undefined);
       case "pa": {
         if (!arg) return "Usage: /cc pa <text> - send text to the PA agent.";
         // An answer goes to the DM only. A command has no message ts, so the answer is a top level DM message.

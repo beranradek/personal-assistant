@@ -575,6 +575,20 @@ describe("runEpisodeEval", () => {
       expect(out.log.mock.calls[0][0]).toContain("1. dev (/w, pid 12) [attached: telegram:42]");
     });
 
+    it("new sends the name as label, exit sends the target, both need a terminal", async () => {
+      const control = vi.fn().mockResolvedValue(response);
+      await runRemoteCommand(["new", "fixbug", "--channel", "slack"], control, makeOut(), true);
+      await runRemoteCommand(["exit", "2"], control, makeOut(), true);
+      expect(control.mock.calls.map((c) => c[0])).toEqual([
+        { action: "new", label: "fixbug", channel: "slack" },
+        { action: "exit", target: "2" },
+      ]);
+      const out = makeOut();
+      expect(await runRemoteCommand(["new"], control, out, false)).toBe(1);
+      expect(out.error).toHaveBeenCalledWith("remote new: needs an interactive terminal");
+      expect(control).toHaveBeenCalledTimes(2);
+    });
+
     it("passes --channel and --force (attach only) in any position", async () => {
       const control = vi.fn().mockResolvedValue(response);
       await runRemoteCommand(["attach", "--channel", "slack", "2", "--force"], control, makeOut());

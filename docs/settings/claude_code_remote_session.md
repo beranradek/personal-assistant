@@ -1,6 +1,7 @@
 # Claude Code remote session (Telegram)
 
 Slack DM version of this mode: see [claude_code_remote_slack.md](claude_code_remote_slack.md).
+Start a new session from chat (`/new`, `/exit`): see the section "Start a session from chat" there.
 
 ## What it does
 

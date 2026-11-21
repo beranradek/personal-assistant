@@ -83,6 +83,9 @@ vi.mock("./remote/bridge.js", () => ({
   createRemoteBridge: vi.fn(),
 }));
 
+vi.mock("./remote/spawn-control.js", () => ({
+  withSpawnControl: vi.fn(),
+}));
 vi.mock("./remote/telegram-router.js", () => ({
   createTelegramRouter: vi.fn(),
 }));
@@ -173,6 +176,7 @@ vi.mock("./core/logger.js", () => ({
 // Imports -- after mocks are registered
 // ---------------------------------------------------------------------------
 
+import { ClaudeCodeRemoteNewSessionConfigSchema } from "./core/types.js";
 import { runDegradedDaemonStartupProbe, startDaemon } from "./daemon.js";
 import { loadConfig } from "./core/config.js";
 import { ensureWorkspace } from "./core/workspace.js";
@@ -193,6 +197,7 @@ import { createRouter } from "./gateway/router.js";
 import { createTelegramAdapter } from "./adapters/telegram.js";
 import { createSlackAdapter } from "./adapters/slack.js";
 import { createRemoteBridge } from "./remote/bridge.js";
+import { withSpawnControl } from "./remote/spawn-control.js";
 import { createTelegramRouter } from "./remote/telegram-router.js";
 import { createSlackRouter } from "./remote/slack-router.js";
 import * as fsPromises from "node:fs/promises";
@@ -824,6 +829,27 @@ describe("daemon", () => {
       const routerDeps = vi.mocked(createTelegramRouter).mock.calls[0]![0];
       routerDeps.enqueue(msg);
       expect(mockQueue.enqueue).toHaveBeenCalledWith(msg);
+    });
+
+    it("wraps the bridge with spawn control only when newSession is enabled", async () => {
+      const config = remoteConfig(true);
+      setupMocks(config);
+      vi.mocked(createTelegramAdapter).mockReturnValue({ ...makeMockAdapter("telegram"), createProcessingMessage: vi.fn(), updateProcessingMessage: vi.fn() } as any);
+      const bridge = { stop: vi.fn() };
+      vi.mocked(createRemoteBridge).mockReturnValue(bridge as any);
+      vi.mocked(createTelegramRouter).mockReturnValue(vi.fn());
+      vi.mocked(withSpawnControl).mockReset();
+      await startDaemon(configDir);
+      expect(withSpawnControl).not.toHaveBeenCalled();
+
+      const enabled = remoteConfig(true);
+      (enabled.claudeCode.remote as any).newSession = { ...ClaudeCodeRemoteNewSessionConfigSchema.parse({}), enabled: true };
+      setupMocks(enabled);
+      const wrapped = { stop: vi.fn(), wrapped: true };
+      vi.mocked(withSpawnControl).mockReturnValue(wrapped as any);
+      await startDaemon(configDir);
+      expect(withSpawnControl).toHaveBeenCalledWith(expect.objectContaining({ bridge, config: enabled.claudeCode.remote.newSession }));
+      expect(createTelegramRouter).toHaveBeenLastCalledWith(expect.objectContaining({ bridge: wrapped }));
     });
 
     it.each(["telegram", "slack"] as const)(

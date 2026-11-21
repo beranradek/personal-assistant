@@ -68,6 +68,9 @@ import { createTelegramChannel } from "./remote/channels/telegram-channel.js";
 import { createSlackChannel } from "./remote/channels/slack-channel.js";
 import { createTelegramRouter } from "./remote/telegram-router.js";
 import { createSlackRouter } from "./remote/slack-router.js";
+import { createSessionSpawner } from "./remote/spawner.js";
+import { createTerminalOpener } from "./remote/terminal-opener.js";
+import { withSpawnControl } from "./remote/spawn-control.js";
 import { buildDefaultChatIds, resolveControlChat } from "./remote/default-chat.js";
 import { isPidAlive } from "./claude/process-tree.js";
 import type { RemoteBridge, RemoteChannel } from "./remote/protocol.js";
@@ -614,10 +617,27 @@ export async function startDaemon(configDir: string): Promise<void> {
       isPidAlive,
       redact,
     });
+    const newSession = config.claudeCode.remote.newSession;
+    if (newSession?.enabled === true) {
+      // `/cc new` and `/cc exit`: sessions in tmux on an own socket, shown in a terminal window (when a display exists).
+      remoteBridge = withSpawnControl({
+        config: newSession,
+        bridge: remoteBridge,
+        spawner: createSessionSpawner({
+          config: newSession,
+          cwd: newSession.cwd || config.security.workspace,
+          socketPath: path.join(config.security.dataDir, "remote-tmux", "tmux.sock"),
+          configDir,
+        }),
+        terminal: createTerminalOpener({ config: newSession.terminal }),
+      });
+      log.info({ cwd: newSession.cwd || config.security.workspace }, "Remote new-session control enabled");
+    }
     if (telegram) {
       const tg = telegram;
       onTelegramMessage = createTelegramRouter({
         bridge: remoteBridge,
+        newSessionEnabled: newSession?.enabled === true,
         enqueue: enqueueTelegram,
         send: (chatId, text) => tg.sendResponse({ source: "telegram", sourceId: chatId, text, metadata: { responseKind: "system" } }),
       });

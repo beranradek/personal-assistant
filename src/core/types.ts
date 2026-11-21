@@ -365,6 +365,32 @@ export const ClaudeCodeRemoteSlackConfigSchema = z.object({
   format: z.enum(["mrkdwn", "plain"]).default("mrkdwn"),
 });
 
+/** Terminal window that shows a session started by `/cc new` (needs a display on the daemon host). */
+export const ClaudeCodeRemoteTerminalConfigSchema = z.object({
+  /** `auto`: first known terminal when a display exists. `none`: headless only. `custom`: `command`. */
+  mode: z.enum(["auto", "none", "custom"]).default("auto"),
+  /** Argv for `custom`. The element `{attach}` is replaced by the tmux attach command (several elements). */
+  command: z.array(z.string().min(1)).optional(),
+});
+
+/** `/cc new` and `/cc exit`: sessions started by the daemon in tmux (own socket), shown in a terminal window. */
+export const ClaudeCodeRemoteNewSessionConfigSchema = z.object({
+  /** Separate opt-in: a chat message starts a session that may skip permission prompts. */
+  enabled: z.boolean().default(false),
+  /** Program and arguments (argv, no shell). `--name <label>` is added for the `claude` program when a label is given. */
+  command: z.array(z.string().min(1)).min(1).default(["claude", "--dangerously-skip-permissions"]),
+  /** Working directory. "" = `security.workspace` (of the host the daemon runs on). Chat text never sets it. */
+  cwd: z.string().default(""),
+  tmuxBinary: z.string().min(1).default("tmux"),
+  maxSessions: z.number().int().min(1).max(10).default(3),
+  minStartIntervalMs: z.number().int().min(0).default(10_000),
+  /** How long `new` waits for the session to register (first hook poll). */
+  registerTimeoutMs: z.number().int().min(1_000).default(45_000),
+  /** How long `exit` waits after `/exit` before the tmux session is killed. */
+  stopGraceMs: z.number().int().min(500).default(8_000),
+  terminal: ClaudeCodeRemoteTerminalConfigSchema.default(() => ClaudeCodeRemoteTerminalConfigSchema.parse({})),
+});
+
 /** Remote interactive session communication (Telegram <-> live Claude Code session). */
 export const ClaudeCodeRemoteConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -381,7 +407,10 @@ export const ClaudeCodeRemoteConfigSchema = z.object({
   /** Channel used by MCP tools and `pa remote` without `channel`. Unset: telegram when enabled, else slack. */
   defaultChannel: z.enum(["telegram", "slack"]).optional(),
   slack: ClaudeCodeRemoteSlackConfigSchema.default(() => ClaudeCodeRemoteSlackConfigSchema.parse({})),
+  newSession: ClaudeCodeRemoteNewSessionConfigSchema.default(() => ClaudeCodeRemoteNewSessionConfigSchema.parse({})),
 });
+
+export type ClaudeCodeRemoteNewSessionConfig = z.infer<typeof ClaudeCodeRemoteNewSessionConfigSchema>;
 
 export const ClaudeCodeConfigSchema = z.object({
   remote: ClaudeCodeRemoteConfigSchema.default(() => ClaudeCodeRemoteConfigSchema.parse({})),

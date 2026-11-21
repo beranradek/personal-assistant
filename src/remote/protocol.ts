@@ -133,7 +133,7 @@ export interface RemoteChannelRegistry {
   get(id: RemoteChannelId): RemoteChannel | undefined;
 }
 
-export type RemoteControlAction = "attach" | "detach" | "status";
+export type RemoteControlAction = "attach" | "detach" | "status" | "new" | "exit";
 
 /** Body of `POST /remote/control`. */
 export interface RemoteControlRequest {
@@ -144,8 +144,10 @@ export interface RemoteControlRequest {
   channel?: RemoteChannelId;
   /** Attach even when the session is attached to another chat: the old chat is detached and notified. */
   force?: boolean;
-  /** Session index (from status) or name. */
+  /** Session index (from status) or name. For `exit` the target must be a session that `new` started. */
   target?: string;
+  /** `new`: display name of the session (`claude --name`). Cleaned by the daemon. */
+  label?: string;
 }
 
 export interface RemoteSessionInfo {

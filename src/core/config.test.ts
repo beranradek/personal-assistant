@@ -337,8 +337,25 @@ describe("config", () => {
         maxMessagesPerMinute: 20,
         reasoning: false,
         slack: { progress: false, reactions: true, format: "mrkdwn" },
+        newSession: {
+          enabled: false,
+          command: ["claude", "--dangerously-skip-permissions"],
+          cwd: "",
+          tmuxBinary: "tmux",
+          maxSessions: 3,
+          minStartIntervalMs: 10000,
+          registerTimeoutMs: 45000,
+          stopGraceMs: 8000,
+          terminal: { mode: "auto" },
+        },
       });
       expect(load({}).claudeCode.remote.defaultChannel).toBeUndefined();
+    });
+
+    it("accepts newSession overrides and rejects an empty command", () => {
+      const r = load({ claudeCode: { remote: { newSession: { enabled: true, maxSessions: 2, terminal: { mode: "none" } } } } });
+      expect(r.claudeCode.remote.newSession).toMatchObject({ enabled: true, maxSessions: 2, terminal: { mode: "none" } });
+      expect(() => load({ claudeCode: { remote: { newSession: { command: [] } } } })).toThrow();
     });
 
     it("parses an old remote section without the new keys", () => {

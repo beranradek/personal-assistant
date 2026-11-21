@@ -177,6 +177,17 @@ export const DEFAULTS: Config = {
       maxMessagesPerMinute: 20,
       reasoning: false,
       slack: { progress: false, reactions: true, format: "mrkdwn" as const },
+      newSession: {
+        enabled: false,
+        command: ["claude", "--dangerously-skip-permissions"],
+        cwd: "",
+        tmuxBinary: "tmux",
+        maxSessions: 3,
+        minStartIntervalMs: 10_000,
+        registerTimeoutMs: 45_000,
+        stopGraceMs: 8_000,
+        terminal: { mode: "auto" as const },
+      },
     },
   },
   codex: {

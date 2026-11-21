@@ -22,6 +22,7 @@ describe("createTelegramRouter", () => {
   let enqueue: ReturnType<typeof vi.fn>;
   let send: ReturnType<typeof vi.fn>;
   let route: (m: AdapterMessage) => void;
+  let bridge: RemoteBridge;
 
   beforeEach(() => {
     attached = false;
@@ -30,7 +31,7 @@ describe("createTelegramRouter", () => {
     forward = vi.fn(() => ({ accepted: true, msgId: 1 }));
     enqueue = vi.fn();
     send = vi.fn(async () => undefined);
-    const bridge = {
+    bridge = {
       control,
       forward,
       isAttached,
@@ -301,5 +302,27 @@ describe("createTelegramRouter", () => {
     route(msg("/attach 2 force"));
     await tick();
     expect(send).toHaveBeenCalledWith(CHAT, "ws is attached to another chat.");
+  });
+
+  it("/exit is forwarded to an attached session when new sessions are disabled", async () => {
+    attached = true;
+    route(msg("/exit"));
+    await tick();
+    expect(forward).toHaveBeenCalledWith(KEY, "/exit");
+    expect(control).not.toHaveBeenCalled();
+  });
+
+  it("/new and /exit call the bridge and show the answer", async () => {
+    route = createTelegramRouter({ bridge, enqueue, send, newSessionEnabled: true });
+    control.mockResolvedValueOnce({ ok: true, message: "Started pa-cc-1", sessions: [] });
+    route(msg("/new fix bug"));
+    await tick();
+    expect(control).toHaveBeenCalledWith({ action: "new", chatId: KEY, label: "fix bug" });
+    expect(send).toHaveBeenCalledWith(CHAT, "Started pa-cc-1");
+    control.mockResolvedValueOnce({ ok: false, message: "No session was started by new.", sessions: [] });
+    route(msg("/exit 3"));
+    await tick();
+    expect(control).toHaveBeenLastCalledWith({ action: "exit", chatId: KEY, target: "3" });
+    expect(send).toHaveBeenLastCalledWith(CHAT, "No session was started by new.");
   });
 });

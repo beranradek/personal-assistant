@@ -25,7 +25,7 @@ export function buildDefaultChatIds(first: Partial<Record<RemoteChannelId, strin
 /**
  * Fill `chatId` of a control request.
  * - `chatId` given (key or bare Telegram id): unchanged.
- * - `attach`: channel = `request.channel`, else `defaultChannel` (when it has a default chat), else telegram, else slack.
+ * - `attach` and `new`: channel = `request.channel`, else `defaultChannel` (when it has a default chat), else telegram, else slack.
  * - `detach`/`status`: without `chatId` and `channel` the bridge acts on whichever chat holds the target session.
  */
 export function resolveControlChat(
@@ -34,7 +34,7 @@ export function resolveControlChat(
 ): { request: RemoteControlRequest } | { error: string } {
   if (request.chatId) return { request };
   const ids = defaults.defaultChatIds ?? {};
-  if (request.action !== "attach" && !request.channel) return { request };
+  if (request.action !== "attach" && request.action !== "new" && !request.channel) return { request };
   const channel =
     request.channel ??
     (defaults.defaultChannel && ids[defaults.defaultChannel] ? defaults.defaultChannel : undefined) ??

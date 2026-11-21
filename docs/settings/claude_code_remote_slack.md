@@ -38,7 +38,7 @@ features:
   slash_commands:
     - command: /cc
       description: Control the remote Claude Code session
-      usage_hint: "status | attach [n|name] [force] | detach | pa <text> | help"
+      usage_hint: "status | attach [n|name] [force] | detach | new [name] | exit [n|name] | pa <text> | help"
       should_escape: false
 oauth_config:
   scopes:
@@ -133,11 +133,53 @@ Notes:
 | `/cc status` | Lists live sessions. Marks `[attached to this chat]`, `[attached to Telegram]`, `[attached to Slack]` |
 | `/cc attach [n\|name] [force]` | Attaches this chat to a session |
 | `/cc detach` | Detaches |
+| `/cc new [name]` | Starts a NEW Claude Code session on the daemon host and attaches this chat (see "Start a session from chat") |
+| `/cc exit [n\|name]` | Ends a session that `/cc new` started (default: the attached one) |
 | `/cc pa <text>` | Sends the text to the PA agent (not to the session). The answer is a top level DM message |
 | `/cc help` | Shows help |
 
 Answers to `/cc` are ephemeral: only you see them. Exceptions: a successful `attach` and `detach` post their notice in the DM.
 Plain DM text goes to the session when attached, and to the PA agent (in a thread, as before) when not attached.
+
+## Start a session from chat (`/cc new`, `/cc exit`)
+
+`/cc new [name]` starts `claude --dangerously-skip-permissions` (configurable) in the PA workspace of the host that runs the daemon,
+registers it like any other remote session and attaches your chat. `/cc exit` ends it. Telegram: `/new [name]`, `/exit [n|name]`.
+CLI (terminal only, refused without a TTY): `pa remote new [name] [--channel slack]`, `pa remote exit [target]`.
+
+How it works: the daemon starts the session in tmux on its OWN socket (`<dataDir>/remote-tmux/tmux.sock`, session names `pa-cc-<n>`)
+and opens a terminal window that attaches to it (`gnome-terminal`, `ghostty`, `kitty`, `konsole`, `xterm`, `x-terminal-emulator`;
+macOS Terminal.app). Closing the window only detaches: the session and the chat keep working. `/exit` in the window ends everything.
+Without a display (VPS) the session runs headless and the reply shows `tmux -S <socket> attach -t pa-cc-1`.
+Under systemd the tmux server and the window start in their own transient scope, so a daemon restart does not end the sessions.
+
+It is OFF by default (it starts a session without permission prompts from a chat message). Enable it in `settings.json`:
+
+```json
+{ "claudeCode": { "remote": { "newSession": { "enabled": true } } } }
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `enabled` | `false` | Allows `new` and `exit` |
+| `command` | `["claude", "--dangerously-skip-permissions"]` | Argv, no shell. `--name <name>` is added for `claude` |
+| `cwd` | `""` | Working directory. Empty: `security.workspace` of this host. Chat text never sets it |
+| `tmuxBinary` | `"tmux"` | tmux program |
+| `maxSessions` | `3` | Limit of live started sessions |
+| `minStartIntervalMs` | `10000` | Minimum time between two starts |
+| `registerTimeoutMs` | `45000` | Wait for the session to register (first hook poll) |
+| `stopGraceMs` | `8000` | Wait after `/exit` typed into the session, then the tmux session is killed |
+| `terminal.mode` | `auto` | `auto`, `none` (headless), or `custom` |
+| `terminal.command` | unset | `custom`: argv, the element `{attach}` becomes the tmux attach command |
+
+Notes:
+
+- Run `claude --dangerously-skip-permissions` by hand once on each host: the one-time warning dialog is accepted in
+  `~/.claude/settings.json` (`skipDangerousModePermissionPrompt`). Also run `pa init --claude-remote` there.
+- `exit` only ends sessions that `new` started. Other sessions: exit them in their own terminal.
+- There is no MCP tool for `new` and `exit`: the PA agent cannot start sessions. Anyone who holds the local `remote-token` can,
+  as with `attach`.
+- If the session does not register in time (for example a dialog waits for input) the reply says so and the session stays.
 
 ### CLI and MCP
 
@@ -250,6 +292,12 @@ Setup: the app (way A or B), tokens in `settings.json`, `pa init --claude-remote
 16c. Telegram and Slack both enabled: same-channel second chat refused with the old text; `pa remote detach` on the laptop
     detaches a Slack chat; `pa remote status` shows `[attached: slack:U...]`.
 16d. Another app owns `/cc` (if you have one installed): the manual result (item 0) decides the final command name.
+16e. `/cc new` (needs `newSession.enabled`): ephemeral "Working on it", then a window opens with the session, the DM gets
+    "Attached to ...", a DM text gets an answer. `/cc new my task`: the window title shows the name. Close the window: DM
+    still works. `/cc status` lists the session. `/cc exit`: the window closes, "ended. Detached." in the DM.
+    Check also: `/cc exit` on a hand-started session is refused, a 4th `/cc new` hits the limit, `/exit` typed in the window ends
+    the session, `systemctl --user restart pa-daemon` keeps the session (`/cc status` after re-attach), no display: no window and
+    the reply shows the tmux attach command.
 17. Rate limit: a very long answer in many chunks while another chat is busy: no hang, a final notice if sending fails.
 18. Telegram regression: run the old Telegram checklist (attach, progress message, final answer, detach).
 19. Token hygiene: `rg` for token patterns in the repo and in `docs/`: no matches. `git status` shows no config file.

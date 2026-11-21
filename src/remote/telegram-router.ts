@@ -32,6 +32,8 @@ export interface TelegramRouterDeps {
    * When unset, any `@name` suffix is accepted (the daemon does not pass it yet).
    */
   botUsername?: string;
+  /** `claudeCode.remote.newSession.enabled`. When false, `/new` and `/exit` are normal text (`/exit` is a Claude Code command). */
+  newSessionEnabled?: boolean;
 }
 
 /** `/cmd`, `/cmd@botname`, optional arguments. */
@@ -57,6 +59,8 @@ export function helpText(attached: boolean): string {
     "/status - list live sessions",
     "/attach [n|name] - attach this chat to a session",
     "/detach - detach from the session",
+    "/new [name] - start a new Claude Code session and attach to it",
+    "/exit [n|name] - end a session that /new started",
     "/pa <text> - send text to the PA assistant",
     "/help - this help",
     "",
@@ -76,9 +80,10 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
 
   async function runControl(
     chatId: string,
-    action: "attach" | "detach" | "status",
+    action: "attach" | "detach" | "status" | "new" | "exit",
     target?: string,
     force?: boolean,
+    label?: string,
   ): Promise<void> {
     try {
       const res = await bridge.control({
@@ -86,9 +91,10 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
         chatId: makeChatKey("telegram", chatId),
         ...(target ? { target } : {}),
         ...(force ? { force } : {}),
+        ...(label ? { label } : {}),
       });
       // The bridge itself confirms a successful attach or detach in Telegram. Answer status and failures here.
-      if (action === "status") reply(chatId, res.message);
+      if (action === "status" || action === "new" || action === "exit") reply(chatId, res.message);
       else if (!res.ok) reply(chatId, action === "attach" && !force ? withForceHint(res.message, target) : res.message);
     } catch (err) {
       log.error({ err, chatId, action }, "router: control failed");
@@ -125,6 +131,14 @@ export function createTelegramRouter(deps: TelegramRouterDeps): (msg: AdapterMes
           return;
         case "status":
           void runControl(chatId, "status");
+          return;
+        case "new":
+          if (!deps.newSessionEnabled) break;
+          void runControl(chatId, "new", undefined, false, arg);
+          return;
+        case "exit":
+          if (!deps.newSessionEnabled) break;
+          void runControl(chatId, "exit", arg || undefined);
           return;
         case "help":
         case "start": // Telegram sends /start when a user opens the bot for the first time

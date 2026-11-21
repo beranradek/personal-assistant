@@ -33,7 +33,7 @@ export function createRemoteControlClient(options: RemoteControlClientOptions): 
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(request),
-        signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
+        signal: AbortSignal.timeout(options.timeoutMs ?? (request.action === "new" || request.action === "exit" ? 90_000 : 10_000)),
       });
     } catch {
       throw new Error(`PA daemon is not reachable on 127.0.0.1:${options.port}`);

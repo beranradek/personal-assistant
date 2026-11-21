@@ -1,6 +1,6 @@
 # Remote `/cc new` and `/cc exit` - spawn a Claude Code session from chat
 
-Status: DRAFT, answers 1-5 recorded (section 9). Waits for your approval. No product code yet.
+Status: IMPLEMENTED (see section 10 for the spike results and the changes against this plan).
 
 ## 1. Goal
 
@@ -144,3 +144,26 @@ Resolved after the answers:
    covers a stuck dialog. Hooks of a never-trusted folder: docs only cover `-p`/parent-trusted cases, so the
    spike must check the interactive first launch in the workspace.
 6. VPS: `new` uses that host's `security.workspace` as cwd (user confirmed).
+
+## 10. Spike results and changes against the plan (2026-11-21, claude 2.1.330, tmux 3.6, GNOME Wayland)
+
+Spike (real `claude --dangerously-skip-permissions -n x` in tmux on an own socket):
+
+- Pane pid == `claude` pid (tmux runs the argv directly). The session registered in the bridge within 12 s. No dialog (key already
+  set in `~/.claude/settings.json`, workspace already trusted). So the bridge needs NO `adoptSpawned` and no hook change: the
+  controller matches `status` sessions by `pid == panePid`.
+- `send-keys -l /exit` + `Enter` ended claude, the tmux session and the registration (SessionEnd) within 4 s.
+- `gnome-terminal -- tmux -S <sock> attach -t <name>` opened a window attached to the session (display variables of the systemd
+  user manager were present).
+- The bridge shows the session as `workspace-<pid>` (name comes from the hook poll). `--name` only sets the terminal title and the
+  `/resume` name. `status` does not show the label.
+
+Changes against sections 4 and 5:
+
+- No bridge change. `withSpawnControl` (spawn-control.ts) wraps the bridge: `new` and `exit` go to it, the rest to the bridge.
+- `new`/`exit` ARE actions of `POST /remote/control` (the CLI needs a route). Guards: no MCP tool, the CLI refuses without a TTY,
+  the opt-in. Anyone with the local `remote-token` could already attach and inject text into a bypass session, so the token is the
+  trust boundary.
+- A tmux server started inside a systemd service dies with `systemctl --user restart` (control-group kill). The server and the
+  terminal window start in a transient scope (`systemd-run --user --scope`) when `INVOCATION_ID` is set.
+- `exit` accepts a number, a name, the label or the tmux name.
